@@ -1,0 +1,17 @@
+## Interface: 120001, 120005
+## Title: Interrupt Glow
+## Notes: Glows your interrupt button when your target or focus is casting (respects not-interruptible and your interrupt cooldown).
+## Author: Neomorph
+## Version: 1.0.24
+## SavedVariables: InterruptGlowDB
+
+Core.lua
+core/Shared.lua
+core/Debug.lua
+core/Buttons.lua
+core/Cooldown.lua
+core/CastTracking.lua
+core/Glow.lua
+core/Events.lua
+core/Slash.lua
+Options.lua
