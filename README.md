@@ -2,6 +2,12 @@
 
 Current version: `1.0.24`
 
+## Preview
+
+![Interrupt Glow on an action button](https://media.forgecdn.net/attachments/1511/429/9468-png.png)
+
+Screenshot from the [CurseForge gallery](https://www.curseforge.com/wow/addons/interrupt-glow).
+
 Notes (1.0.x):
 - 12.x secret/restricted values hardened paths for cooldown + interruptible detection.
 
@@ -45,3 +51,7 @@ New in v0.6.45:
 - Development status: modular refactor complete; a live dungeon/raid test remains. See [todo.md](todo.md).
 - [CurseForge project](https://www.curseforge.com/wow/addons/interrupt-glow)
 - [Architecture](ARCHITECTURE.md) · [Code index](CODE_INDEX.md) · [Code graph](CODE_GRAPH.md)
+
+## License
+
+Licensed under the [MIT License](LICENSE). Bundled third-party components remain under their own notices.
