@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "fix/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1
+
+      - name: Static architecture checks
+        run: python tests/static_checks.py
+
+      - name: Blizzard interrupt snapshot check
+        run: python tools/sync_interrupts.py --source tests/fixtures/TrackedCooldowns_interrupts.lua --data-file core/Data.lua --check
+
+      - name: Lua 5.1 syntax
+        run: lua5.1 tests/check_syntax.lua .
+
+      - name: Mock WoW regression suite
+        run: lua5.1 tests/mock_wow.lua .
+
+      - name: Cooldown Viewer toggle regression
+        run: lua5.1 tests/cdm_toggle.lua .
