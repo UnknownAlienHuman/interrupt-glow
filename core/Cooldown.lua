@@ -174,8 +174,8 @@ local function GetSpellLossOfControlState(spellID)
 end
 
 -- Returns ready, remaining, readinessRestricted, timingRestricted, needsPoll,
--- hardRestricted. hardRestricted is reserved for a restricted Loss of Control
--- state and can never be overridden by optimistic cooldown compatibility.
+-- hardRestricted. Base cooldown code uses hardRestricted for inaccessible LoC;
+-- policy wrappers may also use it for inaccessible usability or pet state.
 local function GetActionReadiness(slot, gcdOnlyHint)
     if not C_ActionBar or type(slot) ~= "number" then
         return nil, nil, true, true, true, false
@@ -420,7 +420,9 @@ function Cooldown:RefreshAbility(ability)
         deadlineChanged = ability.deadline ~= newDeadline
     end
 
-    local changed = ability.ready ~= ready
+    local wasReadinessPending = ability.readinessPending == true
+    local changed = wasReadinessPending
+        or ability.ready ~= ready
         or ability.restricted ~= restricted
         or ability.readinessRestricted ~= (readinessRestricted == true)
         or ability.timingRestricted ~= (timingRestricted == true)
@@ -433,6 +435,7 @@ function Cooldown:RefreshAbility(ability)
     ability.hasEvaluation = true
     ability.evaluatedGeneration = self.generation
     ability.sourceChanged = false
+    ability.readinessPending = false
     ability.readinessRestricted = readinessRestricted == true
     ability.timingRestricted = timingRestricted == true
     ability.hardRestricted = hardRestricted
@@ -448,7 +451,7 @@ function Cooldown:RefreshAbility(ability)
 
     if readinessRestricted then IG:BumpStat("cooldown.readinessRestricted") end
     if timingRestricted then IG:BumpStat("cooldown.timingRestricted") end
-    if hardRestricted then IG:BumpStat("cooldown.lossOfControlRestricted") end
+    if hardRestricted then IG:BumpStat("cooldown.hardRestricted") end
     return changed
 end
 
