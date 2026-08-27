@@ -27,10 +27,11 @@ local function PrintState()
     local target = IG.CastState.target
     local focus = IG.CastState.focus
 
-    IG:Print(format("version=%s enabled=%s spec=%s observed=%d interrupts=%d overlays=%d combat=%s",
+    IG:Print(format("version=%s enabled=%s spec=%s counters=%s observed=%d interrupts=%d overlays=%d combat=%s",
         tostring(IG.version),
         tostring(IG.DB.enabled),
         tostring(IG.Data and IG.Data.activeSpecID),
+        tostring(IG.profileCountersEnabled == true or IG.DB.debug == true),
         observed,
         interrupts,
         overlays,
@@ -47,9 +48,9 @@ local function PrintStats()
     sort(keys)
 
     if #keys == 0 then
-        IG:Print("No counters recorded.")
+        IG:Print("No internal counters recorded. Use /iglow stats start for a profiling window.")
     else
-        IG:Print("Counters:")
+        IG:Print("Internal counters:")
         for index = 1, #keys do
             local key = keys[index]
             IG:Print(format("  %-38s %s", key, tostring(IG.Stats[key])))
@@ -92,6 +93,8 @@ local function PrintHelp()
     IG:Print("  /iglow test          - toggle visual test mode")
     IG:Print("  /iglow state         - show normalized runtime state")
     IG:Print("  /iglow stats         - show counters and Blizzard profiler metrics")
+    IG:Print("  /iglow stats start   - reset and enable session-only internal counters")
+    IG:Print("  /iglow stats stop    - disable internal counters")
     IG:Print("  /iglow stats reset   - reset counters")
     IG:Print("  /iglow rescan        - targeted OOC discovery; no global frame scan")
     IG:Print("  /iglow log show      - open copyable debug log")
@@ -110,7 +113,17 @@ function Slash:Handle(message)
     elseif command == "state" then
         PrintState()
     elseif command == "stats" then
-        if rest == "reset" then ResetStats() else PrintStats() end
+        if rest == "start" then
+            IG:StartProfileCounters()
+            IG:Print("Session-only internal counters enabled.")
+        elseif rest == "stop" then
+            IG:StopProfileCounters()
+            IG:Print("Internal counters disabled.")
+        elseif rest == "reset" then
+            ResetStats()
+        else
+            PrintStats()
+        end
     elseif command == "rescan" then
         Rescan()
     elseif command == "log" then
@@ -122,8 +135,7 @@ function Slash:Handle(message)
         end
     elseif command == "enable" then
         IG.DB.enabled = true
-        -- Idle restricted polling sleeps while disabled. Take one fresh snapshot
-        -- before a currently active cast is allowed to glow again.
+        IG:MarkCastDirty()
         IG:MarkCooldownDirty(false)
         IG:MarkVisualDirty()
         IG:Print("Enabled.")
