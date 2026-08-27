@@ -57,8 +57,8 @@ function Options:Build()
         function() return DB.enabled end,
         function(value)
             DB.enabled = value
-            -- Restricted timing polling sleeps while disabled. Re-enabling must
-            -- take one fresh readiness snapshot before a visible cast can glow.
+            -- Readiness work sleeps while disabled. Re-enabling during an
+            -- existing relevant cast must take one fresh snapshot before glow.
             if value then IG:MarkCooldownDirty(false) end
             IG:MarkVisualDirty()
         end
@@ -72,7 +72,12 @@ function Options:Build()
         function() return DB.cdText end,
         function(value)
             DB.cdText = value
-            if value and IG.Glow then IG.Glow:EnsureCooldownTexts() end
+            if value then
+                if IG.Glow then IG.Glow:EnsureCooldownTexts() end
+                -- Countdown can be enabled with no active cast. The on-demand
+                -- readiness cache therefore needs one explicit initial sample.
+                IG:MarkCooldownDirty(false)
+            end
             IG:MarkVisualDirty()
         end
     )
@@ -110,7 +115,7 @@ function Options:Build()
         strictNI,
         -10,
         "Allow glow when cooldown readiness is fully restricted",
-        "Compatibility mode. It may allow a cooldown-readiness false positive, but never overrides a blocked or restricted Loss of Control state.",
+        "Compatibility mode. It may allow a cooldown-readiness false positive, but never overrides blocked or inaccessible usability, pet state, or Loss of Control.",
         function() return DB.optimisticRestrictedCooldown end,
         function(value)
             DB.optimisticRestrictedCooldown = value
@@ -142,7 +147,7 @@ function Options:Build()
     rescan:SetText("Discover Buttons")
     rescan:SetScript("OnClick", function()
         if IG:IsInCombat() then
-            IG:Print("Discovery is deferred until combat ends.")
+            IG:Print("Discovery is unavailable during combat.")
             return
         end
         if IG.Buttons then IG.Buttons:DiscoverAll(true) end
