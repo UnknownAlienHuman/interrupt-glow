@@ -11,6 +11,7 @@ local type = type
 local tostring = tostring
 local tonumber = tonumber
 local pairs = pairs
+local next = next
 
 if type(InterruptGlowDB) ~= "table" then InterruptGlowDB = {} end
 local DB = InterruptGlowDB
@@ -121,6 +122,14 @@ function IG:NeedsReadinessRuntime()
         and glow:HasRelevantCast() == true
 end
 
+local function MarkActiveAbilitiesReadinessPending()
+    for _, ability in pairs(IG.AbilityStates) do
+        if next(ability.records) ~= nil then
+            ability.readinessPending = true
+        end
+    end
+end
+
 IG._dirty = IG._dirty or {
     spec = false,
     allButtons = false,
@@ -165,14 +174,16 @@ function IG:MarkCooldownDirty(fromSpellCooldownEvent)
     if not self:NeedsReadinessRuntime() then
         self._dirty.cooldown = false
         if self.Cooldown and self.Cooldown.ClearGCDHints then self.Cooldown:ClearGCDHints() end
-        return
+        return false
     end
 
     self._dirty.cooldown = true
+    MarkActiveAbilitiesReadinessPending()
     if not fromSpellCooldownEvent and self.Cooldown and self.Cooldown.ClearGCDHints then
         self.Cooldown:ClearGCDHints()
     end
     self:RequestFlush()
+    return true
 end
 
 function IG:MarkVisualDirty()
@@ -202,6 +213,7 @@ function IG:Flush()
         if self.Data then self.Data:RefreshActiveSpec() end
         dirty.allButtons = true
         dirty.cooldown = self:NeedsReadinessRuntime()
+        if dirty.cooldown then MarkActiveAbilitiesReadinessPending() end
     end
 
     if dirty.allButtons then
