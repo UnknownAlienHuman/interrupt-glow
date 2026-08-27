@@ -16,6 +16,7 @@ core/LABAdapter.lua
 core/ActionResolver.lua
 core/Cooldown.lua
 core/ReadinessPolicy.lua
+core/Usability.lua
 core/CastTracking.lua
 core/CDM.lua
 core/Events.lua
