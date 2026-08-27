@@ -12,12 +12,9 @@ local tostring = tostring
 local tonumber = tonumber
 local pairs = pairs
 
-if type(InterruptGlowDB) ~= "table" then
-    InterruptGlowDB = {}
-end
+if type(InterruptGlowDB) ~= "table" then InterruptGlowDB = {} end
 local DB = InterruptGlowDB
 
--- Schema 2 deliberately discards cached slots and transient cooldown data from 1.0.x.
 if DB.schema ~= 2 then
     DB.slots = nil
     DB.localCD = nil
@@ -35,7 +32,6 @@ if DB.debugKeep == nil then DB.debugKeep = 400 end
 if DB.debugAutoShow == nil then DB.debugAutoShow = false end
 
 IG.DB = DB
-
 IG.ObservedButtons = IG.ObservedButtons or setmetatable({}, { __mode = "k" })
 IG.PendingButtons = IG.PendingButtons or setmetatable({}, { __mode = "k" })
 IG.InterruptRecords = IG.InterruptRecords or setmetatable({}, { __mode = "k" })
@@ -51,10 +47,7 @@ IG.playerLoginSeen = false
 
 local canaccessvalue = _G.canaccessvalue
 local function CanAccess(value)
-    if type(canaccessvalue) ~= "function" then
-        return true
-    end
-
+    if type(canaccessvalue) ~= "function" then return true end
     local ok, accessible = pcall(canaccessvalue, value)
     return ok and accessible == true
 end
@@ -65,60 +58,37 @@ local function ReadIndex(container, key)
 end
 
 function IG:ReadMember(container, key)
-    if not CanAccess(container) then
-        return nil, false
-    end
-    if container == nil then
-        return nil, false
-    end
+    if not CanAccess(container) or container == nil then return nil, false end
 
     local ok, value = pcall(ReadIndex, container, key)
-    if not ok or not CanAccess(value) then
-        return nil, false
-    end
-
+    if not ok or not CanAccess(value) then return nil, false end
     return value, true
 end
 
 function IG:AsNumber(value)
-    if not CanAccess(value) then
-        return nil
-    end
-
+    if not CanAccess(value) then return nil end
     local valueType = type(value)
-    if valueType == "number" then
-        return value
-    end
-    if valueType == "string" then
-        return tonumber(value)
-    end
+    if valueType == "number" then return value end
+    if valueType == "string" then return tonumber(value) end
     return nil
 end
 
 function IG:AsBoolean(value)
-    if not CanAccess(value) then
-        return nil
-    end
+    if not CanAccess(value) then return nil end
     if value == true then return true end
     if value == false then return false end
     return nil
 end
 
 function IG:Now()
-    if type(GetTime) ~= "function" then
-        return 0
-    end
+    if type(GetTime) ~= "function" then return 0 end
     local ok, value = pcall(GetTime)
-    if ok and CanAccess(value) and type(value) == "number" then
-        return value
-    end
+    if ok and CanAccess(value) and type(value) == "number" then return value end
     return 0
 end
 
 function IG:IsInCombat()
-    if type(InCombatLockdown) ~= "function" then
-        return false
-    end
+    if type(InCombatLockdown) ~= "function" then return false end
     local ok, value = pcall(InCombatLockdown)
     return ok and value == true
 end
@@ -126,10 +96,7 @@ end
 -- C_AddOns.IsAddOnLoaded returns (loadedOrLoading, loaded). The first result
 -- must not be used as an attach gate because the add-on may still be executing.
 function IG:IsAddOnFullyLoaded(addOnName)
-    if not C_AddOns or type(C_AddOns.IsAddOnLoaded) ~= "function" then
-        return false
-    end
-
+    if not C_AddOns or type(C_AddOns.IsAddOnLoaded) ~= "function" then return false end
     local ok, _loadedOrLoading, loaded = pcall(C_AddOns.IsAddOnLoaded, addOnName)
     return ok and loaded == true
 end
@@ -146,9 +113,7 @@ function IG:BumpStat(key, amount)
 end
 
 function IG:WipeMap(map)
-    for key in pairs(map) do
-        map[key] = nil
-    end
+    for key in pairs(map) do map[key] = nil end
 end
 
 IG._dirty = IG._dirty or {
@@ -192,6 +157,12 @@ function IG:MarkCastDirty()
 end
 
 function IG:MarkCooldownDirty(fromSpellCooldownEvent)
+    if DB.enabled ~= true then
+        self._dirty.cooldown = false
+        if self.Cooldown and self.Cooldown.ClearGCDHints then self.Cooldown:ClearGCDHints() end
+        return
+    end
+
     self._dirty.cooldown = true
     if not fromSpellCooldownEvent and self.Cooldown and self.Cooldown.ClearGCDHints then
         -- A different invalidation in the same frame makes an earlier
@@ -226,10 +197,8 @@ function IG:Flush()
     if dirty.spec then
         dirty.spec = false
         if self.Data then self.Data:RefreshActiveSpec() end
-        -- Spec/spellbook signals can arrive in the same frame. Rebuild button
-        -- classification and cooldown state once after the final signal.
         dirty.allButtons = true
-        dirty.cooldown = true
+        dirty.cooldown = DB.enabled == true
     end
 
     if dirty.allButtons then
@@ -247,7 +216,11 @@ function IG:Flush()
 
     if dirty.cooldown then
         dirty.cooldown = false
-        if Cooldown then Cooldown:RefreshAll() end
+        if DB.enabled == true and Cooldown then
+            Cooldown:RefreshAll()
+        elseif Cooldown and Cooldown.ClearGCDHints then
+            Cooldown:ClearGCDHints()
+        end
     end
 
     if dirty.visual then
@@ -255,9 +228,7 @@ function IG:Flush()
         if Glow then Glow:RefreshAll() end
     end
 
-    if self:HasDirtyWork() then
-        self:RequestFlush()
-    end
+    if self:HasDirtyWork() then self:RequestFlush() end
 end
 
 flushFrame:SetScript("OnUpdate", function(self)
