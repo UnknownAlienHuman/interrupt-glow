@@ -8,17 +8,18 @@ Interrupt Glow highlights the button that currently performs an interrupt when a
 
 The 1.0 scan-driven runtime has been removed:
 
-- native buttons use `ActionButton.OnActionChanged`;
-- slot-backed buttons use `C_ActionBar.IsInterruptAction(slot)` and current Blizzard action feedback;
+- native buttons use `ActionButton.OnActionChanged` with resolved-action snapshot deduplication;
+- slot-backed buttons use `C_ActionBar.IsInterruptAction(slot)` and current `GetActionInfo(slot)` feedback;
+- LibActionButton macro feedback is routed by the changed action slot, never by a slot/frame scan;
 - conditional macro bodies are not parsed;
 - target and focus use fixed-unit `UNIT_SPELLCAST_*` watchers;
 - casts are detected through NeverSecret fields from `UnitCastingInfo` / `UnitChannelInfo`;
-- potentially secret `notInterruptible` is passed directly to addon-owned `SetAlphaFromBoolean(..., 0, 255)` and is never stored or logged;
+- potentially secret `notInterruptible` is passed directly to addon-owned `SetAlphaFromBoolean(..., 0, 255)` and is never stored, logged or routed through `pcall`;
 - cooldown readiness is shared per canonical ability rather than recalculated for every button copy;
 - `isOnGCD` is normalized during the actual `SPELL_UPDATE_COOLDOWN` event, not read later;
-- charge, Loss of Control, pet cooldown and restricted-timing states are handled separately;
+- charge, Loss of Control, pet usability, pet cooldown and restricted-timing states are handled separately;
 - Blizzard Cooldown Viewer follows pooled-item acquire/set/reset lifecycle hooks;
-- there is no automatic frame enumeration, 540-slot scan, nameplate traversal or CDM tree scan.
+- there is no automatic frame enumeration, 540-slot scan, nameplate traversal, macro-body read or CDM tree scan.
 
 ## Startup and update speed
 
@@ -37,15 +38,16 @@ Runtime latency targets:
 - cast/interruptibility change: synchronous;
 - action or conditional-macro feedback: next frame;
 - relevant cooldown signal: next frame;
-- accessible cooldown expiry: at most 50 ms plus one frame;
-- restricted timing: 250 ms background, with an immediate refresh when a relevant cast starts;
-- custom integer countdown: 200 ms.
+- accessible cooldown expiry: at most 50 ms plus one frame, only while a relevant cast or enabled countdown needs it;
+- restricted timing: 250 ms only while a relevant cast exists, with an immediate refresh when that cast becomes relevant;
+- custom integer countdown: 200 ms when enabled;
+- disabled addon: no cooldown/charge/LoC evaluation.
 
 See [Performance model](docs/PERFORMANCE_MODEL.md).
 
 ## Interrupt data
 
-The per-spec snapshot is generated from Blizzard UI build `12.1.0.69497`. Slot-backed buttons remain runtime-authoritative, so a new hotfix interrupt can be learned for the current session even before the vendored table is updated.
+The ordinary per-spec snapshot is generated from Blizzard UI build `12.1.0.69497`. Verified PvP-talent and direct pet-action exceptions are stored separately so an upstream sync cannot delete them. Slot-backed buttons remain runtime-authoritative, so a new hotfix interrupt can be learned for the current session before the vendored table is updated.
 
 See [Interrupt IDs](docs/INTERRUPT_IDS.md).
 
@@ -74,21 +76,22 @@ Single Button Assistant next-action highlighting is intentionally excluded from 
 /iglow disable
 ```
 
-`/iglow rescan` performs bounded discovery of known registries only.
+`/iglow rescan` performs bounded discovery of known registries only and is unavailable during combat.
 
-## Validation
+## Validation boundary
 
-Automated checks cover Lua 5.1 syntax, architecture invariants, the Blizzard interrupt snapshot, startup/LOD behavior, 2,000 conditional-macro transitions, SecretValue alpha routing, charge/LoC/restricted cooldowns, provider adapters and CDM pool reuse.
+The repository contains optional local scripts for Lua syntax, source-snapshot comparison and mock state-machine regressions. They are development aids only. GitHub Actions workflows are intentionally absent because GitHub cannot run World of Warcraft, secure execution, restricted SecretValue contexts, taint logging or real FPS measurements.
 
-Stable release still requires live WoW 12.1.0 checks for:
+Stable release requires live WoW 12.1.0 checks for:
 
 - the reported Quick Heal `@mouseover` reproduction;
 - Mythic+, raid and PvP restrictions;
 - taint and blocked-action logs;
 - form/page/vehicle/override switching in combat;
 - current installed Bartender, ElvUI, Dominos and ButtonForge releases;
-- Warlock pet/sacrifice/Command Demon variants;
+- Warlock pet/sacrifice/Command Demon/Call Felhunter variants;
 - Protection Warrior dual interrupts;
+- Cooldown Viewer pool reuse;
 - `C_AddOnProfiler` mouseover and dense-nameplate stress.
 
 ## Metadata
