@@ -17,6 +17,7 @@ local UnitCanAttack = _G.UnitCanAttack
 local UnitIsDeadOrGhost = _G.UnitIsDeadOrGhost
 local pcall = pcall
 local type = type
+local pairs = pairs
 
 local UNITS = { "target", "focus" }
 
@@ -121,7 +122,7 @@ function CastTracking:ApplyInterruptibility(unit, rawNotInterruptible, active, f
     end
 end
 
-function CastTracking:RefreshUnit(unit, forcedNotInterruptible)
+function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRefresh)
     local state = IG.CastState[unit]
     if not state then return end
 
@@ -134,6 +135,8 @@ function CastTracking:RefreshUnit(unit, forcedNotInterruptible)
     end
 
     local oldActive = state.active
+    local oldCastBarID = state.castBarID
+    local oldIsChannel = state.isChannel
     local oldNIState = state.niState
     local changed = state.active ~= active
         or state.hostile ~= hostile
@@ -152,10 +155,16 @@ function CastTracking:RefreshUnit(unit, forcedNotInterruptible)
     -- number of currently bound interrupt buttons, so update it synchronously.
     if IG.Glow then IG.Glow:RefreshUnit(unit) end
 
-    -- A restricted cooldown may have expired since the last low-frequency poll.
-    -- On a newly relevant cast, force one frame-batched readiness read instead
-    -- of waiting up to the background poll interval.
-    if active and not oldActive and IG.Cooldown and IG.Cooldown:HasPendingPoll() then
+    -- The background cooldown driver deliberately sleeps while no relevant cast
+    -- exists. Re-read readiness once when a new cast becomes relevant, when the
+    -- cast identity changes, or when target/focus itself changed. This preserves
+    -- immediate glow without permanent idle polling.
+    local castIdentityChanged = active and (
+        not oldActive
+        or oldCastBarID ~= safeCastBarID
+        or oldIsChannel ~= isChannel
+    )
+    if active and (forceReadinessRefresh == true or castIdentityChanged) then
         IG:MarkCooldownDirty(false)
     end
 
