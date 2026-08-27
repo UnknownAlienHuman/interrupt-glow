@@ -13,6 +13,19 @@ IG:RegisterModule("Debug", Debug)
 local format = string.format
 local concat = table.concat
 local math_max = math.max
+local type = type
+local tostring = tostring
+
+local function SafeText(value, fallback)
+    if not IG.CanAccess(value) then return "<inaccessible>" end
+    if value == nil then return fallback or "" end
+
+    local valueType = type(value)
+    if valueType == "string" or valueType == "number" or valueType == "boolean" then
+        return tostring(value)
+    end
+    return "<" .. valueType .. ">"
+end
 
 function Debug:Log(category, message)
     if not IG.DB.debug then return end
@@ -20,15 +33,20 @@ function Debug:Log(category, message)
     local keep = tonumber(IG.DB.debugKeep) or 400
     if keep < 20 then keep = 20 end
 
-    local line = format("%9.3f  %-10s  %s", IG:Now(), tostring(category or "debug"), tostring(message or ""))
+    -- Logger is a final defensive boundary: even if a future caller passes a
+    -- restricted payload by mistake, it is neither formatted nor retained.
+    local line = format(
+        "%9.3f  %-10s  %s",
+        IG:Now(),
+        SafeText(category, "debug"),
+        SafeText(message, "")
+    )
     self.entries[self.nextIndex] = line
     self.nextIndex = self.nextIndex + 1
     if self.nextIndex > keep then self.nextIndex = 1 end
     self.count = math.min((self.count or 0) + 1, keep)
 
-    if IG.DB.debugChat then
-        IG:Print(line)
-    end
+    if IG.DB.debugChat then IG:Print(line) end
 end
 
 function Debug:Clear()
@@ -72,9 +90,7 @@ local function CreateDebugWindow()
     frame:SetFrameStrata("DIALOG")
     frame:Hide()
 
-    if frame.TitleText then
-        frame.TitleText:SetText("Interrupt Glow Debug Log")
-    end
+    if frame.TitleText then frame.TitleText:SetText("Interrupt Glow Debug Log") end
 
     local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", 12, -32)
@@ -101,6 +117,10 @@ end
 
 function Debug:Show(limit)
     if not self.window then
+        if IG:IsInCombat() then
+            IG:Print("The debug window can be created after combat.")
+            return
+        end
         self.window = CreateDebugWindow()
     end
 
@@ -138,12 +158,10 @@ function Debug:ProfilerReport()
         local ok, value = pcall(profiler.GetAddOnMetric, IG.name, entry[2])
         if ok and IG.CanAccess(value) then
             count = count + 1
-            output[count] = format("%-24s %s", entry[1], tostring(value))
+            output[count] = format("%-24s %s", entry[1], SafeText(value, "0"))
         end
     end
 
-    if count == 0 then
-        return "No profiler metrics returned for " .. IG.name .. "."
-    end
+    if count == 0 then return "No profiler metrics returned for " .. IG.name .. "." end
     return concat(output, "\n")
 end
