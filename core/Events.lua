@@ -26,6 +26,8 @@ local EVENTS = {
     "UPDATE_VEHICLE_ACTIONBAR",
     "SPELL_UPDATE_COOLDOWN",
     "SPELL_UPDATE_CHARGES",
+    "SPELL_UPDATE_USABLE",
+    "ACTION_USABLE_CHANGED",
     "PET_BAR_UPDATE",
     "PET_BAR_UPDATE_COOLDOWN",
     "PET_BAR_UPDATE_USABLE",
@@ -33,8 +35,8 @@ local EVENTS = {
     "ADDON_RESTRICTION_STATE_CHANGED",
 }
 
-local function ReadinessEnabled()
-    return IG.DB and IG.DB.enabled == true
+local function RuntimeNeedsReadiness()
+    return IG.NeedsReadinessRuntime and IG:NeedsReadinessRuntime() == true
 end
 
 local function RegisterRuntimeEvents()
@@ -60,7 +62,7 @@ local function InitializeRuntime()
     if IG.CDM then IG.CDM:Attach(true) end
     if IG.Glow then IG.Glow:CreatePendingOverlays() end
 
-    if ReadinessEnabled() then IG:MarkCooldownDirty(false) end
+    IG:MarkCooldownDirty(false)
     if IG.DB.debug and IG.Debug then IG.Debug:Log("init", "version=" .. tostring(IG.version)) end
 end
 
@@ -93,7 +95,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_ENTERING_WORLD" then
         if IG.Buttons then IG.Buttons:RefreshPetButtons() end
         IG:MarkCastDirty()
-        if ReadinessEnabled() then IG:MarkCooldownDirty(false) end
+        IG:MarkCooldownDirty(false)
         return
     end
 
@@ -130,12 +132,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "UPDATE_VEHICLE_ACTIONBAR" then
         IG:MarkAllButtonsDirty()
-        if ReadinessEnabled() then IG:MarkCooldownDirty(false) end
+        IG:MarkCooldownDirty(false)
         return
     end
 
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
-        if not ReadinessEnabled() then return end
+        if not RuntimeNeedsReadiness() then return end
 
         local unit, _castGUID, spellID = ...
         if IG.CanAccess(spellID) and type(spellID) == "number" and IG.Data then
@@ -149,7 +151,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "SPELL_UPDATE_COOLDOWN" then
-        if not ReadinessEnabled() then
+        if not RuntimeNeedsReadiness() then
             if IG.Cooldown then IG.Cooldown:ClearGCDHints() end
             return
         end
@@ -170,11 +172,25 @@ frame:SetScript("OnEvent", function(_, event, ...)
         return
     end
 
+    if event == "ACTION_USABLE_CHANGED" then
+        if RuntimeNeedsReadiness() and IG.Usability then
+            IG.Usability:OnActionUsableChanged(...)
+        end
+        return
+    end
+
+    if event == "SPELL_UPDATE_USABLE" then
+        if RuntimeNeedsReadiness() and IG.Usability and IG.Usability:HasTrackedSpellSource() then
+            IG:MarkCooldownDirty(false)
+        end
+        return
+    end
+
     if event == "SPELL_UPDATE_CHARGES"
         or event == "LOSS_OF_CONTROL_ADDED"
         or event == "LOSS_OF_CONTROL_UPDATE"
     then
-        if ReadinessEnabled() then
+        if RuntimeNeedsReadiness() then
             IG:BumpStat("events.otherCooldown")
             IG:MarkCooldownDirty(false)
         end
@@ -183,12 +199,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "PET_BAR_UPDATE" or event == "PET_UI_UPDATE" or event == "UNIT_PET" then
         if IG.Buttons then IG.Buttons:RefreshPetButtons() end
-        if ReadinessEnabled() then IG:MarkCooldownDirty(false) end
+        IG:MarkCooldownDirty(false)
         return
     end
 
     if event == "PET_BAR_UPDATE_COOLDOWN" or event == "PET_BAR_UPDATE_USABLE" then
-        if ReadinessEnabled() then IG:MarkCooldownDirty(false) end
+        IG:MarkCooldownDirty(false)
         return
     end
 
@@ -196,7 +212,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local _restrictionType, _state = ...
         IG:BumpStat("events.restrictionChanged")
         IG:MarkCastDirty()
-        if ReadinessEnabled() then IG:MarkCooldownDirty(false) end
+        IG:MarkCooldownDirty(false)
     end
 end)
 
