@@ -48,8 +48,7 @@ IG.playerLoginSeen = false
 local canaccessvalue = _G.canaccessvalue
 local function CanAccess(value)
     if type(canaccessvalue) ~= "function" then return true end
-    local ok, accessible = pcall(canaccessvalue, value)
-    return ok and accessible == true
+    return canaccessvalue(value) == true
 end
 IG.CanAccess = CanAccess
 
@@ -82,15 +81,14 @@ end
 
 function IG:Now()
     if type(GetTime) ~= "function" then return 0 end
-    local ok, value = pcall(GetTime)
-    if ok and CanAccess(value) and type(value) == "number" then return value end
+    local value = GetTime()
+    if CanAccess(value) and type(value) == "number" then return value end
     return 0
 end
 
 function IG:IsInCombat()
     if type(InCombatLockdown) ~= "function" then return false end
-    local ok, value = pcall(InCombatLockdown)
-    return ok and value == true
+    return InCombatLockdown() == true
 end
 
 -- C_AddOns.IsAddOnLoaded returns (loadedOrLoading, loaded). The first result
