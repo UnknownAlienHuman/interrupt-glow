@@ -41,6 +41,13 @@ local function CanHarm(unit)
     return canAttack == true
 end
 
+local function IsRelevantCast(active, hostile, niState)
+    if active ~= true or hostile ~= true then return false end
+    if niState == "not-interruptible" then return false end
+    if niState == "unknown" and IG.DB.strictNI == true then return false end
+    return true
+end
+
 -- Presence is determined only through NeverSecret fields. All other return
 -- values remain local to this call. notInterruptible is consumed directly by
 -- the visual sink and is never inserted into addon state.
@@ -135,9 +142,12 @@ function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRe
     end
 
     local oldActive = state.active
+    local oldHostile = state.hostile
     local oldCastBarID = state.castBarID
     local oldIsChannel = state.isChannel
     local oldNIState = state.niState
+    local oldRelevant = IsRelevantCast(oldActive, oldHostile, oldNIState)
+
     local changed = state.active ~= active
         or state.hostile ~= hostile
         or state.castBarID ~= safeCastBarID
@@ -157,14 +167,19 @@ function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRe
 
     -- The background cooldown driver deliberately sleeps while no relevant cast
     -- exists. Re-read readiness once when a new cast becomes relevant, when the
-    -- cast identity changes, or when target/focus itself changed. This preserves
-    -- immediate glow without permanent idle polling.
+    -- cast identity changes, when hostility/interruptibility makes an existing
+    -- cast newly relevant, or when target/focus itself changed.
     local castIdentityChanged = active and (
         not oldActive
         or oldCastBarID ~= safeCastBarID
         or oldIsChannel ~= isChannel
     )
-    if active and (forceReadinessRefresh == true or castIdentityChanged) then
+    local newRelevant = IsRelevantCast(active, hostile, state.niState)
+    if newRelevant and (
+        forceReadinessRefresh == true
+        or castIdentityChanged
+        or not oldRelevant
+    ) then
         IG:MarkCooldownDirty(false)
     end
 
