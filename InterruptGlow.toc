@@ -11,6 +11,7 @@ core/Data.lua
 core/Debug.lua
 core/Glow.lua
 core/Buttons.lua
+core/LABAdapter.lua
 core/Cooldown.lua
 core/CastTracking.lua
 core/CDM.lua
