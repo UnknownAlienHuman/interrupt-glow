@@ -3,30 +3,85 @@ if not IG or not IG.Buttons then return end
 
 local Buttons = IG.Buttons
 local _G = _G
+local CreateFrame = _G.CreateFrame
 local hooksecurefunc = _G.hooksecurefunc
 local type = type
 local pairs = pairs
 local pcall = pcall
+local tonumber = tonumber
 
 -- LibActionButton fires OnButtonUpdate after every full visual Update(), which
--- includes cooldown, usability, target and other high-frequency refreshes. The
--- action identity itself changes through button:UpdateAction(). Hook that exact
--- method and remove the broad callback when the provider supports it.
+-- includes cooldown, usability, target and other high-frequency refreshes. LAB
+-- separately receives ACTIONBAR_SLOT_CHANGED for slot-backed action buttons.
+-- Use exact UpdateAction hooks plus a targeted slot index instead of waking on
+-- every visual update.
 local hookedButtons = setmetatable({}, { __mode = "k" })
+local buttonSlots = setmetatable({}, { __mode = "k" })
+local buttonsBySlot = {}
+
+local slotEventFrame = CreateFrame("Frame")
+slotEventFrame:Hide()
+
+local function GetIdentity(button)
+    if not button then return nil, nil, nil end
+
+    local stateType, typeKnown = IG:ReadMember(button, "_state_type")
+    local stateAction, actionKnown = IG:ReadMember(button, "_state_action")
+    if not typeKnown or not actionKnown then return nil, nil, nil end
+
+    local slot = nil
+    if stateType == "action" and IG.CanAccess(stateAction) then
+        if type(stateAction) == "number" then
+            slot = stateAction
+        elseif type(stateAction) == "string" then
+            slot = tonumber(stateAction)
+        end
+    end
+    return stateType, stateAction, slot
+end
+
+local function RemoveFromSlot(button)
+    local oldSlot = buttonSlots[button]
+    if oldSlot == nil then return end
+
+    buttonSlots[button] = nil
+    local set = buttonsBySlot[oldSlot]
+    if set then
+        set[button] = nil
+        if next(set) == nil then buttonsBySlot[oldSlot] = nil end
+    end
+end
+
+local function SetButtonSlot(button, slot)
+    local oldSlot = buttonSlots[button]
+    if oldSlot == slot then return end
+
+    RemoveFromSlot(button)
+    if type(slot) ~= "number" or slot <= 0 then return end
+
+    local set = buttonsBySlot[slot]
+    if not set then
+        set = setmetatable({}, { __mode = "k" })
+        buttonsBySlot[slot] = set
+    end
+    set[button] = true
+    buttonSlots[button] = slot
+end
 
 local function CacheIdentity(record, button)
     if not record or not button then return false end
 
-    -- LAB stores these as ordinary addon-owned fields on its frame object. Use
-    -- the shared protected-index helper because WoW frame objects are not
-    -- guaranteed to be plain Lua tables on every client build.
-    local stateType, typeKnown = IG:ReadMember(button, "_state_type")
-    local stateAction, actionKnown = IG:ReadMember(button, "_state_action")
-    if not typeKnown or not actionKnown then return false end
+    local stateType, stateAction, slot = GetIdentity(button)
+    if stateType == nil and stateAction == nil and slot == nil then return false end
 
-    local changed = record.labStateType ~= stateType or record.labStateAction ~= stateAction
+    local changed = record.labStateType ~= stateType
+        or record.labStateAction ~= stateAction
+        or record.labSlot ~= slot
+
     record.labStateType = stateType
     record.labStateAction = stateAction
+    record.labSlot = slot
+    SetButtonSlot(button, slot)
     return changed
 end
 
@@ -128,8 +183,9 @@ function Buttons:OnLABButtonContentsChanged(_, button)
 end
 
 -- Fallback for an empty-at-attach or nonstandard LAB provider. Even if LAB calls
--- this for every visual update, two identity reads prevent any button discovery,
--- cooldown query, allocation or UI work unless the secure action actually changed.
+-- this for every visual update, identity reads prevent any discovery, cooldown
+-- query, allocation or UI work unless the secure state itself changed. Macro
+-- feedback within a stable action slot is handled by the targeted slot event.
 function Buttons:OnLABButtonUpdate(_, button)
     if not self.attached then return end
 
@@ -139,4 +195,38 @@ function Buttons:OnLABButtonUpdate(_, button)
         IG:MarkButtonDirty(button)
         IG:BumpStat("events.labFallbackIdentityChanged")
     end
+end
+
+slotEventFrame:SetScript("OnEvent", function(_, _event, slot)
+    if not Buttons.attached or not IG.CanAccess(slot) then return end
+
+    if type(slot) == "string" then slot = tonumber(slot) end
+    if type(slot) ~= "number" then return end
+
+    if slot > 0 then
+        local set = buttonsBySlot[slot]
+        if set then
+            for button in pairs(set) do IG:MarkButtonDirty(button) end
+        end
+        return
+    end
+
+    -- slot == 0 is Blizzard's explicit global invalidation. It is rare and still
+    -- bounded to the already-indexed LAB button set; no action-slot or frame scan.
+    for button in pairs(buttonSlots) do IG:MarkButtonDirty(button) end
+end)
+
+local originalAttach = Buttons.Attach
+function Buttons:Attach(discoverExisting)
+    local wasAttached = self.attached
+    originalAttach(self, discoverExisting)
+    if not wasAttached and self.attached then
+        slotEventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+    end
+end
+
+local originalDetach = Buttons.Detach
+function Buttons:Detach()
+    if self.attached then slotEventFrame:UnregisterEvent("ACTIONBAR_SLOT_CHANGED") end
+    originalDetach(self)
 end
