@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — KB/runtime probe hardening
+
+- Adopt `wow-addon-engineering-kb@bb13f191903ca4ff63a4c93535edb9eacab9630d` as the shared project workflow and add repository-local `AGENTS.md`.
+- Add an explicit in-client runtime probe for build/interface, instance context, observed restriction transitions, active spell/action cooldown secrecy, normalized cast/readiness state, session counters, and `C_AddOnProfiler` metrics.
+- Add `/iglow probe` and `/iglow capture start|mark|stop|show` commands.
+- Keep runtime probe counters completely dormant until a capture is started.
+- Add a reusable copyable report surface to the debug window without allowing raw secret payloads into logs or reports.
+- Move the native `ActionButton.OnActionChanged` registration to `EventUtil.CreateCallbackHandleContainer()` when the current EventRegistry supports handles; retain the existing fallback for compatibility.
+- Record restriction-state transition payloads in active captures without querying restriction state during event dispatch.
+- Document that `SPELL_SECRECY_CHANGED` is not confirmed in the pinned 12.1.0.69497 source and must not be registered until current source/client evidence exists.
+- Keep GitHub Actions workflows absent; live-client evidence remains the release gate.
+
 ## 1.1.0-beta.2
 
 - Defer gameplay event registration and provider discovery until `PLAYER_LOGIN`.
