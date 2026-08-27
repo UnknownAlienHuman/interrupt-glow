@@ -9,7 +9,6 @@ local lower = string.lower
 local match = string.match
 local format = string.format
 local sort = table.sort
-local concat = table.concat
 
 local function CountButtons()
     local observed = 0
@@ -59,9 +58,7 @@ local function PrintStats()
 
     if IG.Debug then
         local report = IG.Debug:ProfilerReport()
-        for line in report:gmatch("[^\n]+") do
-            IG:Print(line)
-        end
+        for line in report:gmatch("[^\n]+") do IG:Print(line) end
     end
 end
 
@@ -78,7 +75,7 @@ end
 
 local function Rescan()
     if IG:IsInCombat() then
-        IG:Print("Manual discovery is deferred until combat ends.")
+        IG:Print("Manual discovery is unavailable during combat.")
         return
     end
 
@@ -125,6 +122,9 @@ function Slash:Handle(message)
         end
     elseif command == "enable" then
         IG.DB.enabled = true
+        -- Idle restricted polling sleeps while disabled. Take one fresh snapshot
+        -- before a currently active cast is allowed to glow again.
+        IG:MarkCooldownDirty(false)
         IG:MarkVisualDirty()
         IG:Print("Enabled.")
     elseif command == "disable" then
