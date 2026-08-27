@@ -4,21 +4,31 @@
 
 - Defer gameplay event registration and provider discovery until `PLAYER_LOGIN`.
 - Use the second `C_AddOns.IsAddOnLoaded` return for fully-loaded lifecycle gates.
-- Add exact 12.1.0 per-specialization interrupt data and current Warlock pet aliases.
-- Add a pinned-source mapping generator and CI snapshot check.
-- Use `C_ActionBar.IsInterruptAction` as runtime authority for slot-backed buttons.
-- Share readiness across copies of the same canonical interrupt.
-- Preserve same-spec runtime discoveries across clustered `SPELLS_CHANGED` events.
-- Coalesce specialization/spellbook signals into one frame-batched rebuild.
-- Normalize `isOnGCD` inside the actual `SPELL_UPDATE_COOLDOWN` handler.
-- Treat inaccessible Loss of Control as restricted instead of clear.
+- Use `C_ActionBar.IsInterruptAction` plus current resolved action feedback as the runtime authority for slot-backed buttons.
+- Deduplicate native action feedback before frame-batched reconciliation.
+- Replace broad LibActionButton visual-update work with exact `UpdateAction` post-hooks and changed-slot routing to already-indexed buttons.
+- Add targeted Blizzard, LibActionButton, Dominos, ButtonForge, pet-action and Cooldown Viewer integrations without global frame, slot, nameplate or macro-body scans.
+- Add the pinned WoW `12.1.0.69497` ordinary specialization interrupt snapshot.
+- Keep verified exceptions outside the generated snapshot: Warlock `212619` Call Felhunter and current direct pet-action aliases.
+- Match Blizzard's specialization, combat-config, talent, trait and PvP-talent invalidation surfaces.
+- Preserve same-spec runtime discoveries across clustered spell/talent signals; clear them on specialization change.
+- Share readiness across copies of the same canonical interrupt and preserve dormant ability state through rapid conditional-macro transitions.
+- Make readiness fully on-demand: cooldown, charge, usability, pet and Loss-of-Control evaluation sleeps while no cast or enabled countdown can display it.
+- Mark readiness pending before a newly relevant cast or countdown refresh, preventing a one-frame stale glow or stale number.
+- Normalize `isOnGCD` only inside the actual `SPELL_UPDATE_COOLDOWN` dispatch.
+- Learn only non-global interrupt cooldown/recovery categories and discard unrelated global-recovery events.
+- Add `C_ActionBar.IsUsableAction`, `C_Spell.IsSpellUsable` and intrinsic pet-action usability gates.
+- Treat inaccessible usability, pet state and Loss of Control as hard fail-closed restrictions that optimistic cooldown mode cannot bypass.
+- Stop periodic polling for hard restrictions; keep restricted timing polling active only while a relevant cast exists.
 - Add immediate readiness invalidation after successful player/pet interrupt casts.
-- Add current `19647 -> 119910` and `89766 -> 119914` pet mappings; remove obsolete Retail IDs.
-- Use full secret alpha `255`; never animate or read back the secret-carrying region.
-- Prewarm lightweight physical-button shells incrementally; create animations/text only for interrupt buttons.
+- Route potentially secret cast interruptibility directly to `SetAlphaFromBoolean(..., 0, 255)` without storage, logging, readback or a `pcall` result lane.
+- Keep animation on an ordinary parent gate, never on the region carrying the Alpha secret aspect.
+- Prewarm lightweight physical-button shells incrementally outside combat; create animations and text only when required.
 - Deduplicate ButtonForge conditional refreshes and handle `ClearCommand`.
-- Deduplicate Cooldown Viewer acquire/ID lifecycle notifications.
-- Add CI, Lua 5.1 syntax checks, static invariants and expanded mock regressions.
+- Deduplicate Cooldown Viewer acquire/ID lifecycle notifications and preserve off/on rebinding for active pooled items.
+- Keep production counters dormant unless debug or an explicit session profiling window is enabled.
+- Make debug output inaccessible-safe and create the debug window only outside combat.
+- Remove GitHub Actions workflows. Local syntax, source and mock scripts remain development checks; live WoW acceptance is authoritative.
 
 ## 1.1.0-beta.1
 
