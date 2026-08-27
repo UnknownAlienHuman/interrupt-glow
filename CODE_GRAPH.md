@@ -10,11 +10,15 @@ InterruptGlow.toc
   -> core/Data.lua
        generated ordinary spec map + reviewed PvP/pet extras + category cache
   -> core/Debug.lua
-       optional normalized log and on-demand profiler output
+       optional normalized log, copyable report window and profiler output
+  -> core/RuntimeProbe.lua
+       session-only build/context/secrecy/state/profiler evidence
   -> core/Glow.lua
        precreated target/focus alpha gates and relevant-cast-only time driver
   -> core/Buttons.lua
        provider registries, canonical ability records and custom/pet/CDM adapters
+  -> core/NativeCallbackPolicy.lua
+       EventRegistry handle-container lifecycle for native action feedback
   -> core/LABAdapter.lua
        exact LAB UpdateAction hooks + changed-slot diff index
   -> core/ActionResolver.lua
@@ -23,13 +27,16 @@ InterruptGlow.toc
        per-source readiness, event-time GCD hints, charges and LoC
   -> core/ReadinessPolicy.lua
        hard pet/LoC gates and one visual pass per frame
+  -> core/Usability.lua
+       action/spell usability policy and targeted invalidation
   -> core/CastTracking.lua
        fixed target/focus watchers and raw secret visual bridge
   -> core/CDM.lua
        Cooldown Viewer pooled-item lifecycle
   -> core/Events.lua
-       PLAYER_LOGIN gating, optional-provider lifecycle and bounded invalidation
+       PLAYER_LOGIN gating, optional-provider lifecycle, restriction evidence and bounded invalidation
   -> core/Slash.lua
+       user controls and runtime capture commands
   -> Options.lua
        bare Settings canvas; controls built on first show
 ```
@@ -47,10 +54,6 @@ LAB conditional macro
   -> LABAdapter buttonsBySlot[slot]
   -> only existing buttons for that slot become dirty
 
-Dominos/ButtonForge/provider callback
-  -> provider-owned registry/normalized resolved state
-  -> one dirty button
-
 Dirty button
   -> Buttons:ReconcileRecord
   -> shared dormant-capable AbilityState
@@ -64,46 +67,28 @@ Target/focus UNIT_SPELLCAST event
   -> childTexture:SetAlphaFromBoolean(raw, 0, 255)
   -> ordinary parent receives candidate alpha/animation
 
-SPELL_UPDATE_COOLDOWN
-  -> Data exact spell/category filter
-  -> event-time GCD hint
-  -> one-frame dirty queue
-  -> one evaluation per distinct active ability source
+Explicit runtime capture
+  -> session counters enabled
+  -> build/context/restriction/secrecy/normalized-state/profiler snapshot
+  -> copyable addon-owned report window
+  -> no raw SecretValue retained
 ```
 
-## Sleep states
+## Lifecycle
 
 ```text
-no relevant cast + countdown off
-  -> expiry/restricted driver hidden
+Buttons:AttachNative
+  -> NativeCallbackPolicy
+  -> EventUtil.CreateCallbackHandleContainer when supported
+  -> exact unregister on Detach
+  -> legacy owner-based callback fallback otherwise
 
-addon disabled
-  -> cooldown/charge/LoC/pet-readiness evaluation skipped
-  -> internal counters dormant
-
-no optional provider loaded
-  -> no polling; ContinueOnAddOnLoaded callback only
+Permanent hooksecurefunc integrations
+  -> attach-once
+  -> cheap attached flag in post-hook
+  -> no attempt to unhook unsupported permanent hooks
 ```
 
-## Dependency rules
+## Validation boundary
 
-```text
-Shared / Data / DiagnosticsPolicy
-    ↓
-Integration (Buttons adapters, CastTracking, CDM, Events)
-    ↓
-Normalized ability/cast state
-    ↓
-Readiness policy
-    ↓
-Addon-owned Glow UI
-```
-
-Forbidden reverse edges:
-
-- `Glow` must not discover Blizzard frames or read cast/cooldown APIs.
-- `Cooldown` must not create regions or register provider hooks.
-- `Data` must not load `Blizzard_CooldownBroadcaster` at runtime.
-- provider callbacks must not start global scans.
-- raw SecretValue must not leave the direct cast API → alpha-sink call chain.
-- local scripts and GitHub infrastructure must not be represented as WoW acceptance tests.
+Local scripts may catch syntax, source drift and state-machine errors. GitHub Actions workflows remain absent. WoW FPS, taint, protected execution and contextual SecretValue behavior require `/iglow capture ...` plus live-client smoke tests.
