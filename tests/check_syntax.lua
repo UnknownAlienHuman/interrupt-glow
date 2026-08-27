@@ -20,6 +20,8 @@ toc:close()
 -- local development suite.
 files[#files + 1] = "tests/mock_wow.lua"
 files[#files + 1] = "tests/cdm_toggle.lua"
+files[#files + 1] = "tests/runtime_probe.lua"
+files[#files + 1] = "tests/native_callback_handles.lua"
 
 for index = 1, #files do
     local path = root .. "/" .. files[index]
