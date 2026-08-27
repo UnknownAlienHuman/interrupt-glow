@@ -15,7 +15,6 @@ local UnitChannelInfo = _G.UnitChannelInfo
 local UnitExists = _G.UnitExists
 local UnitCanAttack = _G.UnitCanAttack
 local UnitIsDeadOrGhost = _G.UnitIsDeadOrGhost
-local pcall = pcall
 local type = type
 local pairs = pairs
 
@@ -23,8 +22,12 @@ local UNITS = { "target", "focus" }
 
 local function SafeUnitBoolean(fn, ...)
     if type(fn) ~= "function" then return nil end
-    local ok, value = pcall(fn, ...)
-    if not ok or not IG.CanAccess(value) then return nil end
+
+    -- Fixed, valid unit tokens are used throughout this module. Calling the API
+    -- directly avoids routing potentially secret returns through pcall. The
+    -- access predicate is the first operation on the returned value.
+    local value = fn(...)
+    if not IG.CanAccess(value) then return nil end
     if value == true then return true end
     if value == false then return false end
     return nil
@@ -49,12 +52,12 @@ local function IsRelevantCast(active, hostile, niState)
 end
 
 -- Presence is determined only through NeverSecret fields. All other return
--- values remain local to this call. notInterruptible is consumed directly by
--- the visual sink and is never inserted into addon state.
+-- values remain local to this call. notInterruptible travels directly from the
+-- Blizzard API to the visual sink and is never inserted into addon state or a
+-- pcall result table/lane.
 local function SnapshotCast(unit)
     if type(UnitCastingInfo) == "function" then
-        local ok,
-            _name,
+        local _name,
             _displayName,
             _textureID,
             _startTimeMs,
@@ -64,17 +67,16 @@ local function SnapshotCast(unit)
             notInterruptible,
             _castingSpellID,
             castBarID,
-            _delayTimeMs = pcall(UnitCastingInfo, unit)
+            _delayTimeMs = UnitCastingInfo(unit)
 
-        if ok and IG.CanAccess(isTradeskill) and isTradeskill ~= nil then
+        if IG.CanAccess(isTradeskill) and isTradeskill ~= nil then
             if not IG.CanAccess(castBarID) then castBarID = nil end
             return true, notInterruptible, castBarID, false
         end
     end
 
     if type(UnitChannelInfo) == "function" then
-        local ok,
-            _name,
+        local _name,
             _displayName,
             _textureID,
             _startTimeMs,
@@ -84,9 +86,9 @@ local function SnapshotCast(unit)
             _spellID,
             _isEmpowered,
             _numEmpowerStages,
-            castBarID = pcall(UnitChannelInfo, unit)
+            castBarID = UnitChannelInfo(unit)
 
-        if ok and IG.CanAccess(isTradeskill) and isTradeskill ~= nil then
+        if IG.CanAccess(isTradeskill) and isTradeskill ~= nil then
             if not IG.CanAccess(castBarID) then castBarID = nil end
             return true, notInterruptible, castBarID, true
         end
