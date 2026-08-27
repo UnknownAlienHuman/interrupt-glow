@@ -105,7 +105,7 @@ function Options:Build()
         strictNI,
         -10,
         "Allow glow when cooldown readiness is fully restricted",
-        "Compatibility mode. It can show a false positive only when readiness itself—not merely remaining time—is inaccessible.",
+        "Compatibility mode. It may allow a cooldown-readiness false positive, but never overrides a blocked or restricted Loss of Control state.",
         function() return DB.optimisticRestrictedCooldown end,
         function(value)
             DB.optimisticRestrictedCooldown = value
