@@ -7,6 +7,7 @@
 
 Core.lua
 core/Shared.lua
+core/DiagnosticsPolicy.lua
 core/Data.lua
 core/Debug.lua
 core/Glow.lua
