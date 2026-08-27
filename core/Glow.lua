@@ -22,6 +22,7 @@ local math_ceil = math.ceil
 local pairs = pairs
 local type = type
 local pcall = pcall
+local next = next
 
 local UNITS = { "target", "focus" }
 local ALPHA_HIDDEN = 0
@@ -368,6 +369,24 @@ function Glow:RefreshUnitRelation()
     end
 end
 
+function Glow:HasRelevantCast()
+    if IG.DB.enabled ~= true then return false end
+
+    for index = 1, #UNITS do
+        local unit = UNITS[index]
+        local state = IG.CastState[unit]
+        if state
+            and state.active == true
+            and state.hostile == true
+            and state.niState ~= "not-interruptible"
+            and not (state.niState == "unknown" and IG.DB.strictNI == true)
+        then
+            return true
+        end
+    end
+    return false
+end
+
 local function CandidateFor(record, unit)
     if IG.testMode then return record.isInterrupt == true end
 
@@ -405,6 +424,7 @@ function Glow:RefreshUnit(unit)
             SetCandidate(record.overlay[unit], CandidateFor(record, unit))
         end
     end
+    self:UpdateRuntimeDriver()
 end
 
 function Glow:RefreshAll()
@@ -417,10 +437,15 @@ end
 function Glow:RefreshCooldownText(record, now)
     if not record then return false end
     local text = record.overlay and record.overlay.cooldownText
-    if IG.DB.cdText and not text then text = self:EnsureCooldownText(record) end
+    if IG.DB.enabled and IG.DB.cdText and not text then text = self:EnsureCooldownText(record) end
     if not text then return false end
 
-    if not IG.DB.cdText or not record.isInterrupt or record.ready or record.restrictedCooldown then
+    if IG.DB.enabled ~= true
+        or not IG.DB.cdText
+        or not record.isInterrupt
+        or record.ready
+        or record.restrictedCooldown
+    then
         if record.lastCooldownText ~= "" then
             record.lastCooldownText = ""
             text:SetText("")
@@ -465,6 +490,13 @@ local runtimeFrame = CreateFrame("Frame")
 runtimeFrame:Hide()
 Glow.runtimeFrame = runtimeFrame
 runtimeFrame:SetScript("OnUpdate", function(self, elapsed)
+    local relevantCast = Glow:HasRelevantCast()
+    local allowCountdown = IG.DB.enabled == true and IG.DB.cdText == true
+    if not relevantCast and not allowCountdown then
+        self:Hide()
+        return
+    end
+
     Glow.driverElapsed = Glow.driverElapsed + elapsed
     Glow.restrictedPollElapsed = Glow.restrictedPollElapsed + elapsed
     Glow.countdownTextElapsed = Glow.countdownTextElapsed + elapsed
@@ -484,23 +516,23 @@ runtimeFrame:SetScript("OnUpdate", function(self, elapsed)
 
     for _, ability in pairs(IG.AbilityStates) do
         if next(ability.records) ~= nil then
-        local deadline = ability.deadline
-        if type(deadline) == "number" then
-            keepRunning = true
-            if runFast and deadline <= now then
-                ability.deadline = nil
-                for record in pairs(ability.records) do record.deadline = nil end
-                expired = true
+            local deadline = ability.deadline
+            if type(deadline) == "number" and (relevantCast or allowCountdown) then
+                keepRunning = true
+                if runFast and deadline <= now then
+                    ability.deadline = nil
+                    for record in pairs(ability.records) do record.deadline = nil end
+                    expired = true
+                end
             end
-        end
-        if ability.needsPoll then
-            keepRunning = true
-            needsPoll = true
-        end
+            if relevantCast and ability.needsPoll then
+                keepRunning = true
+                needsPoll = true
+            end
         end
     end
 
-    if runCountdownText and IG.DB.cdText then
+    if runCountdownText and allowCountdown then
         for record in pairs(IG.InterruptRecords) do
             Glow:RefreshCooldownText(record, now)
         end
@@ -514,12 +546,23 @@ runtimeFrame:SetScript("OnUpdate", function(self, elapsed)
 end)
 
 function Glow:UpdateRuntimeDriver()
+    local relevantCast = self:HasRelevantCast()
+    local allowCountdown = IG.DB.enabled == true and IG.DB.cdText == true
+    if not relevantCast and not allowCountdown then
+        runtimeFrame:Hide()
+        return
+    end
+
     for _, ability in pairs(IG.AbilityStates) do
-        if next(ability.records) ~= nil
-            and (type(ability.deadline) == "number" or ability.needsPoll)
-        then
-            runtimeFrame:Show()
-            return
+        if next(ability.records) ~= nil then
+            if type(ability.deadline) == "number" and (relevantCast or allowCountdown) then
+                runtimeFrame:Show()
+                return
+            end
+            if relevantCast and ability.needsPoll then
+                runtimeFrame:Show()
+                return
+            end
         end
     end
     runtimeFrame:Hide()
