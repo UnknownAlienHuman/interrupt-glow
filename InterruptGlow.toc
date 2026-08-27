@@ -12,6 +12,7 @@ core/Debug.lua
 core/Glow.lua
 core/Buttons.lua
 core/LABAdapter.lua
+core/ActionResolver.lua
 core/Cooldown.lua
 core/ReadinessPolicy.lua
 core/CastTracking.lua
