@@ -19,7 +19,6 @@ FORBIDDEN_RUNTIME_PATTERNS = {
     "540-slot scan": re.compile(r"\b540\b"),
     "GetMacroInfo": re.compile(r"\bGetMacroInfo\b"),
     "GetMacroSpell": re.compile(r"\bGetMacroSpell\b"),
-    "ACTIONBAR_SLOT_CHANGED subscription": re.compile(r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_SLOT_CHANGED"),
     "ACTIONBAR_UPDATE_COOLDOWN subscription": re.compile(r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_UPDATE_COOLDOWN"),
     "generic ADDON_LOADED subscription": re.compile(r"RegisterEvent\s*\(\s*[\"']ADDON_LOADED"),
     "Blizzard spell-alert manager mutation": re.compile(r"\bActionButtonSpellAlertManager\b"),
@@ -104,6 +103,7 @@ def check_startup_and_hot_paths() -> list[str]:
     events = read(ROOT / "core" / "Events.lua")
     shared = read(ROOT / "core" / "Shared.lua")
     buttons = read(ROOT / "core" / "Buttons.lua")
+    lab = read(ROOT / "core" / "LABAdapter.lua")
     options = read(ROOT / "Options.lua")
 
     if events.count("Buttons:Attach(true)") != 1:
@@ -127,7 +127,26 @@ def check_startup_and_hot_paths() -> list[str]:
     if 'hooksecurefunc(BFButton, "ClearCommand"' not in buttons:
         errors.append("ButtonForge ClearCommand lifecycle hook is missing")
 
+    # ACTIONBAR_SLOT_CHANGED is allowed only as the LAB action-slot diff surface.
+    # The handler must index already-known buttons by the event's slot and must not
+    # scan action slots, frames or macro bodies.
+    slot_subscription = re.compile(r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_SLOT_CHANGED")
+    for runtime_path in RUNTIME_FILES:
+        if runtime_path.name == "LABAdapter.lua":
+            continue
+        if slot_subscription.search(read(runtime_path)):
+            errors.append(f"{runtime_path.relative_to(ROOT)} has a non-targeted ACTIONBAR_SLOT_CHANGED subscription")
+    if lab.count('RegisterEvent("ACTIONBAR_SLOT_CHANGED")') != 1:
+        errors.append("LAB targeted action-slot invalidation is missing or duplicated")
+    if "buttonsBySlot" not in lab or "for button in pairs(set)" not in lab:
+        errors.append("LAB slot event is not bounded to pre-indexed buttons")
+    if 'UnregisterCallback(self, "OnButtonUpdate")' not in lab:
+        errors.append("Broad LibActionButton visual-update callback is not removed for hookable providers")
+    if 'hooksecurefunc, button, "UpdateAction"' not in lab:
+        errors.append("Exact LibActionButton UpdateAction hook is missing")
+
     cooldown = read(ROOT / "core" / "Cooldown.lua")
+    readiness_policy = read(ROOT / "core" / "ReadinessPolicy.lua")
     if "CaptureGCDHints" not in cooldown or "isOnGCD" not in cooldown:
         errors.append("SPELL_UPDATE_COOLDOWN GCD normalization is missing")
     if events.count("CaptureGCDHints()") != 1 or events.count("MarkCooldownDirty(true)") != 1:
@@ -141,8 +160,12 @@ def check_startup_and_hot_paths() -> list[str]:
     status_end = cooldown.find("local function ReadLossOfControlState")
     if status_start >= 0 and status_end > status_start and 'ReadMember(info, "isOnGCD")' in cooldown[status_start:status_end]:
         errors.append("isOnGCD is read outside the event-time normalization path")
-    if "locRestricted" not in cooldown or "return nil, nil, true, true, true" not in cooldown:
-        errors.append("Restricted Loss of Control does not fail closed")
+    if "hardRestricted" not in cooldown:
+        errors.append("Restricted Loss of Control does not have a non-optimistic hard gate")
+    if "ability.hardRestricted == true and ability.needsPoll == true" not in readiness_policy:
+        errors.append("Hard restrictions still activate the periodic cooldown poll")
+    if "GetPetActionSlotUsable" not in readiness_policy:
+        errors.append("Pet interrupt readiness does not include intrinsic pet-action usability")
 
     cdm = read(ROOT / "core" / "CDM.lua")
     if "record.cdmCanonicalSpellID == canonicalSpellID" not in cdm:
@@ -159,9 +182,10 @@ def check_interrupt_data() -> list[str]:
     for spec_id, snippet in EXPECTED_SPEC_SNIPPETS.items():
         if snippet not in data:
             errors.append(f"Missing current Blizzard interrupt mapping for spec {spec_id}: {snippet}")
-    for removed_id in (115781, 212619):
-        if re.search(rf"\[{removed_id}\]\s*=|\{{[^\n}}]*\b{removed_id}\b", data):
-            errors.append(f"Removed Retail spell ID {removed_id} returned to runtime data")
+    if re.search(r"\[115781\]\s*=|\{[^\n}]*\b115781\b", data):
+        errors.append("Removed Retail Optical Blast ID 115781 returned to runtime data")
+    if "EXTRA_INTERRUPTS_BY_SPEC" not in data or data.count("212619") < 3:
+        errors.append("Warlock Call Felhunter PvP interrupt coverage is missing")
     if "[19647] = 119910" not in data or "[89766] = 119914" not in data:
         errors.append("Current Warlock pet-action aliases are incomplete")
     return errors
