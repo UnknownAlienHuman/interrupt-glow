@@ -31,6 +31,10 @@ local function CacheIdentity(record, button)
 end
 
 local function OnUpdateAction(button)
+    -- hooksecurefunc hooks cannot be removed. The attach flag provides the
+    -- symmetric behavioral detach required by the module contract.
+    if not Buttons.attached then return end
+
     local record = button and IG.ObservedButtons[button]
     if not record then return end
 
@@ -102,6 +106,8 @@ function Buttons:AttachLABLibrary(library, discoverExisting, forceDiscovery)
 end
 
 function Buttons:OnLABButtonCreated(_, button)
+    if not self.attached then return end
+
     local record = self:ObserveButton(button, "lab", { skipDirty = true })
     if not record then return end
 
@@ -111,6 +117,8 @@ function Buttons:OnLABButtonCreated(_, button)
 end
 
 function Buttons:OnLABButtonContentsChanged(_, button)
+    if not self.attached then return end
+
     local record = self:ObserveButton(button, "lab", { skipDirty = true })
     if not record then return end
 
@@ -123,6 +131,8 @@ end
 -- this for every visual update, two identity reads prevent any button discovery,
 -- cooldown query, allocation or UI work unless the secure action actually changed.
 function Buttons:OnLABButtonUpdate(_, button)
+    if not self.attached then return end
+
     local record = button and IG.ObservedButtons[button]
     if not record then return end
     if CacheIdentity(record, button) then
