@@ -18,6 +18,10 @@ local EVENTS = {
     "PLAYER_FOCUS_CHANGED",
     "ACTIVE_PLAYER_SPECIALIZATION_CHANGED",
     "PLAYER_SPECIALIZATION_CHANGED",
+    "ACTIVE_COMBAT_CONFIG_CHANGED",
+    "ACTIVE_TALENT_GROUP_CHANGED",
+    "TRAIT_CONFIG_UPDATED",
+    "PLAYER_PVP_TALENT_UPDATE",
     "SPELLS_CHANGED",
     "UPDATE_VEHICLE_ACTIONBAR",
     "SPELL_UPDATE_COOLDOWN",
@@ -117,10 +121,15 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "ACTIVE_PLAYER_SPECIALIZATION_CHANGED"
         or event == "PLAYER_SPECIALIZATION_CHANGED"
+        or event == "ACTIVE_COMBAT_CONFIG_CHANGED"
+        or event == "ACTIVE_TALENT_GROUP_CHANGED"
+        or event == "TRAIT_CONFIG_UPDATED"
+        or event == "PLAYER_PVP_TALENT_UPDATE"
         or event == "SPELLS_CHANGED"
     then
-        -- These signals commonly cluster during one spec/talent transition.
-        -- Coalesce them into one spec data rebuild and one button pass.
+        -- Blizzard's own Cooldown Viewer listens to this wider talent/spec set.
+        -- Signals commonly cluster during one transaction, so one-frame dirty
+        -- coalescing still produces a single data/button/cooldown rebuild.
         IG:MarkSpecDirty()
         return
     end
