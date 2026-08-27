@@ -73,10 +73,10 @@ function Options:Build()
         function(value)
             DB.cdText = value
             if value then
-                if IG.Glow then IG.Glow:EnsureCooldownTexts() end
-                -- Countdown can be enabled with no active cast. The on-demand
-                -- readiness cache therefore needs one explicit initial sample.
+                -- Mark pending before the immediate UI refresh so a stale
+                -- deadline cannot flash while the fresh snapshot is queued.
                 IG:MarkCooldownDirty(false)
+                if IG.Glow then IG.Glow:EnsureCooldownTexts() end
             end
             IG:MarkVisualDirty()
         end
