@@ -287,7 +287,10 @@ function Data:MatchesCurrentInterrupt(spellID)
 end
 
 function Data:LearnInterruptCooldownCategories(category, startRecoveryCategory)
-    if IG.CanAccess(category) and type(category) == "number" then
+    if IG.CanAccess(category)
+        and type(category) == "number"
+        and category ~= GLOBAL_RECOVERY_CATEGORY
+    then
         self.interruptCooldownCategories[category] = true
     end
     if IG.CanAccess(startRecoveryCategory)
@@ -300,9 +303,10 @@ end
 
 -- SPELL_UPDATE_COOLDOWN in 12.1 supplies the changed spell plus separate
 -- cooldown and start-recovery categories. Exact interrupt events teach the
--- categories used by that interrupt. Unknown non-global shared-category events
--- are checked only while the result can affect a visible cast/countdown; pure
--- unrelated GCD events are discarded because all duration queries ignore GCD.
+-- non-global categories used by that interrupt. Unknown non-global shared-
+-- category events are checked only while the result can affect visible output;
+-- unrelated global-recovery events are discarded because duration queries
+-- already ignore the GCD.
 function Data:ShouldRefreshForCooldownEvent(spellID, baseSpellID, category, startRecoveryCategory)
     if not IG.CanAccess(spellID)
         or not IG.CanAccess(baseSpellID)
@@ -328,7 +332,7 @@ function Data:ShouldRefreshForCooldownEvent(spellID, baseSpellID, category, star
         return true
     end
 
-    local hasNonGlobalCategory = type(category) == "number"
+    local hasNonGlobalCategory = type(category) == "number" and category ~= GLOBAL_RECOVERY_CATEGORY
         or (type(startRecoveryCategory) == "number" and startRecoveryCategory ~= GLOBAL_RECOVERY_CATEGORY)
     if hasNonGlobalCategory then
         return IsRuntimeRelevant()
