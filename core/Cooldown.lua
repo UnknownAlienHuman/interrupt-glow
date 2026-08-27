@@ -173,17 +173,19 @@ local function GetSpellLossOfControlState(spellID)
     return ReadLossOfControlState(info)
 end
 
--- Returns ready, remaining, readinessRestricted, timingRestricted, needsPoll.
+-- Returns ready, remaining, readinessRestricted, timingRestricted, needsPoll,
+-- hardRestricted. hardRestricted is reserved for a restricted Loss of Control
+-- state and can never be overridden by optimistic cooldown compatibility.
 local function GetActionReadiness(slot, gcdOnlyHint)
     if not C_ActionBar or type(slot) ~= "number" then
-        return nil, nil, true, true, true
+        return nil, nil, true, true, true, false
     end
 
     local locBlocked, locRestricted = GetActionLossOfControlState(slot)
     if locBlocked then
-        return false, nil, false, false, false
+        return false, nil, false, false, false, false
     elseif locRestricted then
-        return nil, nil, true, true, true
+        return nil, nil, true, true, true, true
     end
 
     if type(C_ActionBar.GetActionCharges) == "function" then
@@ -197,7 +199,7 @@ local function GetActionReadiness(slot, gcdOnlyHint)
             if isCharge then
                 local needsPoll = ready ~= true and remaining == nil
                     and (readinessRestricted or timingRestricted)
-                return ready, remaining, readinessRestricted, timingRestricted, needsPoll
+                return ready, remaining, readinessRestricted, timingRestricted, needsPoll, false
             end
         end
     end
@@ -210,7 +212,7 @@ local function GetActionReadiness(slot, gcdOnlyHint)
             durationTimingRestricted = timingRestricted
             if hasDuration and ready ~= nil then
                 local needsPoll = ready == false and remaining == nil and timingRestricted
-                return ready, remaining, false, timingRestricted, needsPoll
+                return ready, remaining, false, timingRestricted, needsPoll, false
             end
         end
     end
@@ -221,27 +223,27 @@ local function GetActionReadiness(slot, gcdOnlyHint)
             local ready, readinessRestricted = ReadCooldownStatus(info, gcdOnlyHint)
             if ready ~= nil then
                 local timingRestricted = ready == false and durationTimingRestricted
-                return ready, nil, false, timingRestricted, timingRestricted
+                return ready, nil, false, timingRestricted, timingRestricted, false
             end
             if readinessRestricted then
-                return nil, nil, true, durationTimingRestricted, true
+                return nil, nil, true, durationTimingRestricted, true, false
             end
         end
     end
 
-    return nil, nil, true, durationTimingRestricted, true
+    return nil, nil, true, durationTimingRestricted, true, false
 end
 
 local function GetSpellReadiness(spellID, gcdOnlyHint)
     if not C_Spell or type(spellID) ~= "number" then
-        return nil, nil, true, true, true
+        return nil, nil, true, true, true, false
     end
 
     local locBlocked, locRestricted = GetSpellLossOfControlState(spellID)
     if locBlocked then
-        return false, nil, false, false, false
+        return false, nil, false, false, false, false
     elseif locRestricted then
-        return nil, nil, true, true, true
+        return nil, nil, true, true, true, true
     end
 
     if type(C_Spell.GetSpellCharges) == "function" then
@@ -255,7 +257,7 @@ local function GetSpellReadiness(spellID, gcdOnlyHint)
             if isCharge then
                 local needsPoll = ready ~= true and remaining == nil
                     and (readinessRestricted or timingRestricted)
-                return ready, remaining, readinessRestricted, timingRestricted, needsPoll
+                return ready, remaining, readinessRestricted, timingRestricted, needsPoll, false
             end
         end
     end
@@ -268,7 +270,7 @@ local function GetSpellReadiness(spellID, gcdOnlyHint)
             durationTimingRestricted = timingRestricted
             if hasDuration and ready ~= nil then
                 local needsPoll = ready == false and remaining == nil and timingRestricted
-                return ready, remaining, false, timingRestricted, needsPoll
+                return ready, remaining, false, timingRestricted, needsPoll, false
             end
         end
     end
@@ -279,20 +281,20 @@ local function GetSpellReadiness(spellID, gcdOnlyHint)
             local ready, readinessRestricted = ReadCooldownStatus(info, gcdOnlyHint)
             if ready ~= nil then
                 local timingRestricted = ready == false and durationTimingRestricted
-                return ready, nil, false, timingRestricted, timingRestricted
+                return ready, nil, false, timingRestricted, timingRestricted, false
             end
             if readinessRestricted then
-                return nil, nil, true, durationTimingRestricted, true
+                return nil, nil, true, durationTimingRestricted, true, false
             end
         end
     end
 
-    return nil, nil, true, durationTimingRestricted, true
+    return nil, nil, true, durationTimingRestricted, true, false
 end
 
 local function GetPetReadiness(slot)
     if type(GetPetActionCooldown) ~= "function" or type(slot) ~= "number" then
-        return nil, nil, true, true, true
+        return nil, nil, true, true, true, false
     end
 
     local ok, startTime, duration, enabled = pcall(GetPetActionCooldown, slot)
@@ -301,24 +303,24 @@ local function GetPetReadiness(slot)
         or not IG.CanAccess(duration)
         or not IG.CanAccess(enabled)
     then
-        return nil, nil, true, true, true
+        return nil, nil, true, true, true, false
     end
 
     if type(startTime) ~= "number" or type(duration) ~= "number" then
-        return nil, nil, true, true, true
+        return nil, nil, true, true, true, false
     end
     if enabled == 0 or enabled == false then
-        return false, nil, false, false, false
+        return false, nil, false, false, false, false
     end
     if startTime <= 0 or duration <= 0 then
-        return true, 0, false, false, false
+        return true, 0, false, false, false, false
     end
 
     local remaining = (startTime + duration) - IG:Now()
     if remaining <= 0 then
-        return true, 0, false, false, false
+        return true, 0, false, false, false, false
     end
-    return false, remaining, false, false, false
+    return false, remaining, false, false, false, false
 end
 
 local function StoreCachedResult(cache, sourceID, generation, ...)
@@ -333,7 +335,8 @@ local function StoreCachedResult(cache, sourceID, generation, ...)
     entry.remaining,
     entry.readinessRestricted,
     entry.timingRestricted,
-    entry.needsPoll = ...
+    entry.needsPoll,
+    entry.hardRestricted = ...
 
     return ...
 end
@@ -341,7 +344,7 @@ end
 function Cooldown:GetCachedReadiness(sourceKind, sourceID, gcdOnlyHint)
     local cache = self.cache[sourceKind]
     if not cache or type(sourceID) ~= "number" then
-        return nil, nil, true, true, true
+        return nil, nil, true, true, true, false
     end
 
     local entry = cache[sourceID]
@@ -350,22 +353,23 @@ function Cooldown:GetCachedReadiness(sourceKind, sourceID, gcdOnlyHint)
             entry.remaining,
             entry.readinessRestricted,
             entry.timingRestricted,
-            entry.needsPoll
+            entry.needsPoll,
+            entry.hardRestricted
     end
 
-    local ready, remaining, readinessRestricted, timingRestricted, needsPoll
+    local ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted
     if sourceKind == "action" then
-        ready, remaining, readinessRestricted, timingRestricted, needsPoll =
+        ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
             GetActionReadiness(sourceID, gcdOnlyHint)
     elseif sourceKind == "spell" then
-        ready, remaining, readinessRestricted, timingRestricted, needsPoll =
+        ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
             GetSpellReadiness(sourceID, gcdOnlyHint)
     elseif sourceKind == "pet" then
-        ready, remaining, readinessRestricted, timingRestricted, needsPoll =
+        ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
             GetPetReadiness(sourceID)
     else
-        ready, remaining, readinessRestricted, timingRestricted, needsPoll =
-            nil, nil, true, true, true
+        ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
+            nil, nil, true, true, true, false
     end
 
     return StoreCachedResult(
@@ -376,18 +380,23 @@ function Cooldown:GetCachedReadiness(sourceKind, sourceID, gcdOnlyHint)
         remaining,
         readinessRestricted,
         timingRestricted,
-        needsPoll
+        needsPoll,
+        hardRestricted
     )
 end
 
 function Cooldown:RefreshAbility(ability)
     if not ability then return false end
 
-    local rawReady, remaining, readinessRestricted, timingRestricted, needsPoll =
+    local rawReady, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
         self:GetCachedReadiness(ability.sourceKind, ability.sourceID, self.gcdHints[ability.key] == true)
 
+    hardRestricted = hardRestricted == true
+
     local ready
-    if rawReady == true then
+    if hardRestricted then
+        ready = false
+    elseif rawReady == true then
         ready = true
     elseif rawReady == false then
         ready = false
@@ -397,7 +406,7 @@ function Cooldown:RefreshAbility(ability)
         ready = false
     end
 
-    local restricted = readinessRestricted == true or timingRestricted == true
+    local restricted = readinessRestricted == true or timingRestricted == true or hardRestricted
     local newDeadline = nil
     if not ready and type(remaining) == "number" and remaining > 0 then
         newDeadline = IG:Now() + remaining
@@ -415,6 +424,7 @@ function Cooldown:RefreshAbility(ability)
         or ability.restricted ~= restricted
         or ability.readinessRestricted ~= (readinessRestricted == true)
         or ability.timingRestricted ~= (timingRestricted == true)
+        or ability.hardRestricted ~= hardRestricted
         or ability.needsPoll ~= needsPoll
         or deadlineChanged
 
@@ -425,20 +435,22 @@ function Cooldown:RefreshAbility(ability)
     ability.sourceChanged = false
     ability.readinessRestricted = readinessRestricted == true
     ability.timingRestricted = timingRestricted == true
+    ability.hardRestricted = hardRestricted
     ability.needsPoll = needsPoll
     if deadlineChanged then ability.deadline = newDeadline end
 
     for record in pairs(ability.records) do
         record.ready = ready
         record.restrictedCooldown = restricted
+        record.hardRestrictedCooldown = hardRestricted
         record.deadline = ability.deadline
     end
 
     if readinessRestricted then IG:BumpStat("cooldown.readinessRestricted") end
     if timingRestricted then IG:BumpStat("cooldown.timingRestricted") end
+    if hardRestricted then IG:BumpStat("cooldown.lossOfControlRestricted") end
     return changed
 end
-
 
 local function CaptureSourceGCDHint(sourceKind, sourceID)
     local fn
