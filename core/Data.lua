@@ -14,13 +14,14 @@ local Data = {
 IG.Data = Data
 IG:RegisterModule("Data", Data)
 
--- Build-time source of truth for player abilities:
+-- Build-time source for ordinary player interrupts:
 -- Blizzard_CooldownBroadcaster/TrackedCooldowns.lua,
 -- namespace.InterruptSpellsBySpec, build 12.1.0.69497.
 --
 -- Blizzard_CooldownBroadcaster is an internal LoadOnDemand MDI component. It is
 -- never loaded or referenced at runtime by Interrupt Glow; this is a vendored,
--- reviewed snapshot.
+-- reviewed snapshot. It is not assumed to include PvP talents or direct pet
+-- actions, which are maintained separately below.
 -- BEGIN GENERATED INTERRUPTS_BY_SPEC
 local INTERRUPTS_BY_SPEC = {
     [250] = { 47528 },                  -- Blood DK: Mind Freeze
@@ -60,6 +61,15 @@ local INTERRUPTS_BY_SPEC = {
 }
 -- END GENERATED INTERRUPTS_BY_SPEC
 
+-- Verified interrupts not covered by Blizzard's MDI-oriented spec snapshot.
+-- Keep these outside the generated block so an upstream sync cannot silently
+-- delete them. IsSpellKnownOrInSpellBook still gates each entry at runtime.
+local EXTRA_INTERRUPTS_BY_SPEC = {
+    [265] = { 212619 },                 -- Affliction: Call Felhunter (PvP talent)
+    [266] = { 212619 },                 -- Demonology: Call Felhunter (PvP talent)
+    [267] = { 212619 },                 -- Destruction: Call Felhunter (PvP talent)
+}
+
 -- Pet action IDs are not present in Blizzard's player-spec broadcaster list.
 -- They are accepted only when the source is an actual pet-action button and
 -- only when their canonical Command Demon spell belongs to the current spec.
@@ -69,17 +79,24 @@ local PET_ACTION_ALIASES = {
 }
 
 Data.interruptsBySpec = INTERRUPTS_BY_SPEC
+Data.extraInterruptsBySpec = EXTRA_INTERRUPTS_BY_SPEC
 Data.petActionAliases = PET_ACTION_ALIASES
 
 local _G = _G
 local C_SpellBook = _G.C_SpellBook
 local C_SpecializationInfo = _G.C_SpecializationInfo
 local PlayerUtil = _G.PlayerUtil
+local Constants = _G.Constants
 local GetSpecialization = _G.GetSpecialization
 local GetSpecializationInfo = _G.GetSpecializationInfo
 local pcall = pcall
 local type = type
 local pairs = pairs
+
+local GLOBAL_RECOVERY_CATEGORY = Constants
+    and Constants.SpellCooldownConsts
+    and Constants.SpellCooldownConsts.GLOBAL_RECOVERY_CATEGORY
+    or 133
 
 local function SafeNumberCall(fn, ...)
     if type(fn) ~= "function" then return nil end
@@ -132,6 +149,17 @@ local function FindOverrideSpell(spellID)
     return SafeNumberCall(C_SpellBook.FindSpellOverrideByID, spellID)
 end
 
+local function AddSpecList(self, list)
+    if type(list) ~= "table" then return end
+    for index = 1, #list do
+        local spellID = list[index]
+        self.specInterrupts[spellID] = true
+        if IsKnownOrInSpellBook(spellID) then
+            self.activeInterrupts[spellID] = true
+        end
+    end
+end
+
 function Data:RefreshActiveSpec()
     local specID = GetCurrentSpecID()
     local changed = specID ~= self.activeSpecID
@@ -148,15 +176,9 @@ function Data:RefreshActiveSpec()
     end
     IG:WipeMap(self.cooldownSpellMatchCache)
 
-    local list = specID and INTERRUPTS_BY_SPEC[specID] or nil
-    if type(list) == "table" then
-        for index = 1, #list do
-            local spellID = list[index]
-            self.specInterrupts[spellID] = true
-            if IsKnownOrInSpellBook(spellID) then
-                self.activeInterrupts[spellID] = true
-            end
-        end
+    if specID then
+        AddSpecList(self, INTERRUPTS_BY_SPEC[specID])
+        AddSpecList(self, EXTRA_INTERRUPTS_BY_SPEC[specID])
     end
 
     IG:BumpStat("data.specRefreshes")
@@ -164,7 +186,7 @@ function Data:RefreshActiveSpec()
 end
 
 -- C_ActionBar.IsInterruptAction is authoritative for slot-backed actions. If a
--- future patch introduces an interrupt before this vendored table is updated,
+-- future patch introduces an interrupt before the vendored tables are updated,
 -- learn its spell family for the current session so CDM/custom copies can bind.
 function Data:LearnRuntimeInterrupt(spellID)
     if not IG.CanAccess(spellID) or type(spellID) ~= "number" then
@@ -236,7 +258,6 @@ function Data:IsInterruptSpell(spellID, sourceKind)
     return self:GetCanonicalSpellID(spellID, sourceKind) ~= nil
 end
 
-
 function Data:MatchesCurrentInterrupt(spellID)
     if not IG.CanAccess(spellID) or type(spellID) ~= "number" then
         return false
@@ -253,20 +274,28 @@ function Data:MatchesCurrentInterrupt(spellID)
 end
 
 -- SPELL_UPDATE_COOLDOWN in 12.1 supplies the changed spell plus separate
--- cooldown and start-recovery categories. A non-interrupt spell with no real
--- cooldown category is normally a GCD-only signal; Interrupt Glow asks all
--- duration APIs with ignoreGCD=true, so that event can be discarded. Real shared
--- cooldown categories remain conservative until Blizzard exposes a direct
--- category query for each tracked interrupt.
-function Data:ShouldRefreshForCooldownEvent(spellID, baseSpellID, category)
-    if not IG.CanAccess(spellID) or not IG.CanAccess(baseSpellID) or not IG.CanAccess(category) then
+-- cooldown and start-recovery categories. An unrelated global-recovery-only
+-- event can be ignored because all duration APIs are queried with ignoreGCD.
+-- Non-global shared categories remain conservative until Blizzard exposes a
+-- direct category query for each tracked interrupt.
+function Data:ShouldRefreshForCooldownEvent(spellID, baseSpellID, category, startRecoveryCategory)
+    if not IG.CanAccess(spellID)
+        or not IG.CanAccess(baseSpellID)
+        or not IG.CanAccess(category)
+        or not IG.CanAccess(startRecoveryCategory)
+    then
         return true
     end
+
     if spellID == nil then return true end
     if self:MatchesCurrentInterrupt(spellID) or self:MatchesCurrentInterrupt(baseSpellID) then
         return true
     end
-    return category ~= nil
+    if category ~= nil then return true end
+    if startRecoveryCategory == nil or startRecoveryCategory == GLOBAL_RECOVERY_CATEGORY then
+        return false
+    end
+    return true
 end
 
 function Data:GetActiveInterrupts()
