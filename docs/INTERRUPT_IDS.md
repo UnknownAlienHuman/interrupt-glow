@@ -1,6 +1,6 @@
 # Interrupt IDs — WoW Retail 12.1.0.69497
 
-Source snapshot:
+## Ordinary specialization snapshot
 
 ```text
 Gethe/wow-ui-source
@@ -9,9 +9,11 @@ file: Interface/AddOns/Blizzard_CooldownBroadcaster/TrackedCooldowns.lua
 section: namespace.InterruptSpellsBySpec
 ```
 
-The Blizzard broadcaster is a private LoadOnDemand MDI component. Interrupt Glow does **not** load or reference it at runtime. The table below is a reviewed build-time snapshot used for direct spell, pet and Cooldown Viewer buttons. Slot-backed action buttons are classified authoritatively at runtime with `C_ActionBar.IsInterruptAction(slot)`.
+`Blizzard_CooldownBroadcaster` is an internal LoadOnDemand MDI component. Interrupt Glow does **not** load or reference it at runtime. Its table is a reviewed build-time source for ordinary specialization interrupts, not an exhaustive PvP/direct-pet registry.
 
-| Class | Specialization | Spec ID | Player interrupt IDs |
+Slot-backed action buttons remain authoritative at runtime through `C_ActionBar.IsInterruptAction(slot)`. The static data is used for direct spell buttons, pet aliases and Cooldown Viewer identity.
+
+| Class | Specialization | Spec ID | Ordinary interrupt IDs |
 |---|---|---:|---|
 | Death Knight | Blood | 250 | `47528` Mind Freeze |
 | Death Knight | Frost | 251 | `47528` Mind Freeze |
@@ -48,9 +50,19 @@ The Blizzard broadcaster is a private LoadOnDemand MDI component. Interrupt Glow
 | Warrior | Fury | 72 | `6552` Pummel |
 | Warrior | Protection | 73 | `6552` Pummel, `386071` Disrupting Shout |
 
-## Specializations intentionally absent
+## Verified exceptions outside the MDI snapshot
 
-The Blizzard 12.1.0 snapshot does not list an interrupt for:
+These are maintained outside the generated block so a Blizzard snapshot refresh cannot silently delete them:
+
+| Specs | ID | Ability | Reason |
+|---|---:|---|---|
+| Warlock 265/266/267 | `212619` | Call Felhunter | Current PvP-talent interrupt; absent from the MDI-oriented list |
+
+Every exception is still gated at runtime by `C_SpellBook.IsSpellKnownOrInSpellBook`. Talent/PvP invalidation listens to the same wider event family used by Blizzard Cooldown Viewer: active combat config, talent group, trait config, PvP talent and `SPELLS_CHANGED`.
+
+## Specializations absent from the ordinary snapshot
+
+The Blizzard table does not list an ordinary interrupt for:
 
 - Restoration Druid;
 - Preservation Evoker;
@@ -59,18 +71,18 @@ The Blizzard 12.1.0 snapshot does not list an interrupt for:
 - Discipline Priest;
 - Holy Priest.
 
-Interrupt Glow must not infer class-wide availability for these specs.
+Interrupt Glow does not statically assume class-wide availability for those specs. If a current slot is nevertheless classified by Blizzard as an interrupt, its spell family is learned for the current session.
 
 ## Pet-action aliases
 
-These IDs are accepted only from an actual pet-action source and only when the canonical Command Demon family belongs to the current specialization:
+Accepted only from an actual pet-action source:
 
 | Pet action | Canonical player family |
 |---:|---:|
 | `19647` Felhunter Spell Lock | `119910` Command Demon Spell Lock |
 | `89766` Felguard Axe Toss | `119914` Command Demon Axe Toss |
 
-Removed Retail IDs such as `115781` Optical Blast and `212619` Call Felhunter are not part of the runtime table.
+`115781` Optical Blast is not in the current Retail runtime data.
 
 ## Update procedure
 
@@ -92,4 +104,4 @@ python tools/sync_interrupts.py \
   --write
 ```
 
-Then update `wowBuild`, `interface`, `sourceCommit`, the fixture, and live-test all changed specs.
+The generated block must not overwrite `EXTRA_INTERRUPTS_BY_SPEC` or `PET_ACTION_ALIASES`. Update build metadata and live-test every changed spec, PvP exception and pet mapping.
