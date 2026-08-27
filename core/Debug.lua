@@ -33,8 +33,6 @@ function Debug:Log(category, message)
     local keep = tonumber(IG.DB.debugKeep) or 400
     if keep < 20 then keep = 20 end
 
-    -- Logger is a final defensive boundary: even if a future caller passes a
-    -- restricted payload by mistake, it is neither formatted nor retained.
     local line = format(
         "%9.3f  %-10s  %s",
         IG:Now(),
@@ -90,7 +88,7 @@ local function CreateDebugWindow()
     frame:SetFrameStrata("DIALOG")
     frame:Hide()
 
-    if frame.TitleText then frame.TitleText:SetText("Interrupt Glow Debug Log") end
+    if frame.TitleText then frame.TitleText:SetText("Interrupt Glow") end
 
     local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", 12, -32)
@@ -115,22 +113,30 @@ local function CreateDebugWindow()
     return frame
 end
 
-function Debug:Show(limit)
+function Debug:ShowText(title, text)
     if not self.window then
         if IG:IsInCombat() then
-            IG:Print("The debug window can be created after combat.")
+            IG:Print("The copyable report window can be created after combat.")
             return
         end
         self.window = CreateDebugWindow()
     end
 
-    local text = self:GetLines(limit)
+    title = SafeText(title, "Interrupt Glow")
+    text = SafeText(text, "")
+
+    if self.window.TitleText then self.window.TitleText:SetText(title) end
+
     local lines = 1
     for _ in text:gmatch("\n") do lines = lines + 1 end
     self.window.EditBox:SetHeight(math_max(440, lines * 15 + 20))
     self.window.EditBox:SetText(text)
     self.window.EditBox:HighlightText(0, 0)
     self.window:Show()
+end
+
+function Debug:Show(limit)
+    self:ShowText("Interrupt Glow Debug Log", self:GetLines(limit))
 end
 
 function Debug:ProfilerReport()
