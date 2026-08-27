@@ -57,6 +57,9 @@ function Options:Build()
         function() return DB.enabled end,
         function(value)
             DB.enabled = value
+            -- Restricted timing polling sleeps while disabled. Re-enabling must
+            -- take one fresh readiness snapshot before a visible cast can glow.
+            if value then IG:MarkCooldownDirty(false) end
             IG:MarkVisualDirty()
         end
     )
@@ -95,8 +98,10 @@ function Options:Build()
         function(value)
             DB.strictNI = value
             -- A restricted current cast must be sampled again so the raw value
-            -- reaches the alpha sink under the new ordinary-unknown policy.
+            -- reaches the alpha sink. Turning strict mode off can also make an
+            -- existing unknown cast newly relevant, so refresh readiness once.
             IG:MarkCastDirty()
+            IG:MarkCooldownDirty(false)
             IG:MarkVisualDirty()
         end
     )
