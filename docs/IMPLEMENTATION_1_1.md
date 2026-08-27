@@ -11,39 +11,91 @@ Baseline: WoW Retail `12.1.0.69497`, Interface `120100`, Blizzard UI commit `027
 - Provider load-order callbacks attach Bartender/ElvUI/LAB, Dominos, ButtonForge and Cooldown Viewer later without polling.
 - Cooldown Viewer is not forced to load.
 - Options controls, debug window and cooldown text are lazy.
+- No addon-owned frame, texture, font string or animation is created during combat.
 
 ## Integration points
 
-- `EventRegistry: ActionButton.OnActionChanged`;
-- `ActionBarButtonEventsFrame:ForEachFrame`;
-- all `LibActionButton-1.0*` callback registries;
-- Dominos indexed registry plus targeted action/slot post-hooks;
-- ButtonForge allocation API, deduplicated `BFButton:FullRefresh`, and `BFButton:ClearCommand`;
-- fixed `RegisterUnitEvent` watchers for `target` and `focus`;
-- `CooldownViewerMixin:OnAcquireItemFrame`;
-- `CooldownViewerItemDataMixin:OnCooldownIDSet`;
-- `CooldownViewerItemDataMixin:ResetCooldownData`.
+- native buttons: `EventRegistry` callback `ActionButton.OnActionChanged`, deduplicated by a current action snapshot;
+- initial native discovery: `ActionBarButtonEventsFrame:ForEachFrame` once after login;
+- LibActionButton: exact `button:UpdateAction()` post-hooks plus `ACTIONBAR_SLOT_CHANGED(slot)` routed only through `buttonsBySlot[slot]`;
+- Dominos: its indexed registry plus targeted action/slot post-hooks;
+- ButtonForge: allocation API, deduplicated `BFButton:FullRefresh`, and `BFButton:ClearCommand`;
+- pet buttons: fixed ten-slot pet-action registry, refreshed by pet lifecycle events;
+- target/focus: fixed `RegisterUnitEvent` cast watchers;
+- Cooldown Viewer: `CooldownViewerMixin:OnAcquireItemFrame`, `CooldownViewerItemDataMixin:OnCooldownIDSet`, and `ResetCooldownData`.
+
+There is no automatic frame enumeration, 1..540 action-slot sweep, nameplate traversal, macro-body parsing or Cooldown Viewer child-tree scan.
 
 ## Runtime data authority
 
-- Slot-backed classification: `C_ActionBar.IsInterruptAction`.
-- Spell identity: `C_ActionBar.GetSpell`, with `GetActionInfo` fallback.
-- Direct/pet/CDM classification: pinned per-spec snapshot plus current pet aliases.
+- Slot-backed classification: `C_ActionBar.IsInterruptAction(slot)`.
+- Current resolved identity: `GetActionInfo(slot)`; Assisted Combat actions are excluded.
+- Direct spell, pet and Cooldown Viewer classification: pinned current-spec data plus reviewed PvP/pet exceptions.
+- Ordinary specialization data comes from Blizzard's `InterruptSpellsBySpec` snapshot.
+- Warlock `212619` Call Felhunter and direct pet-action aliases are maintained outside the generated block.
 - Unknown authoritative slot IDs are learned for the current spec/session only.
-- `SPELLS_CHANGED` within the same spec preserves runtime discoveries; a spec change clears them.
+- Clustered `SPELLS_CHANGED`, combat-config, talent, trait and PvP-talent signals coalesce into one rebuild.
+- Same-spec rebuilds preserve runtime discoveries; a specialization change clears them.
 
-## Cooldown rules
+## Readiness rules
+
+Readiness is evaluated only while its result can be visible:
+
+```text
+addon enabled
+AND
+(relevant target/focus cast OR custom countdown enabled)
+```
+
+Outside that state, cooldown, charge, usability, pet and Loss-of-Control work sleeps.
+
+A newly relevant cast, target/focus identity change, re-enable, policy change or countdown enable marks active abilities `readinessPending`. Glow and custom text fail closed until the next frame completes one bounded readiness pass. This prevents a stale ready result or deadline from being shown for one frame.
+
+The readiness decision combines:
+
+- action/spell cooldown duration with GCD ignored;
+- charge count and recharge duration;
+- `C_ActionBar.IsUsableAction` or `C_Spell.IsSpellUsable`;
+- intrinsic `GetPetActionSlotUsable` for pet sources;
+- Loss of Control;
+- current addon policy for fully restricted ordinary cooldown readiness.
+
+Inaccessible usability, pet state and Loss of Control are hard fail-closed restrictions. The optimistic compatibility option cannot override them.
+
+## Cooldown event rules
 
 - no Interrupt Glow subscription to `ACTIONBAR_UPDATE_COOLDOWN`;
-- irrelevant GCD-only `SPELL_UPDATE_COOLDOWN` signals are filtered by payload;
-- `isOnGCD` is read and normalized only inside that event dispatch;
+- `isOnGCD` is read and normalized only inside `SPELL_UPDATE_COOLDOWN` dispatch;
+- exact interrupt events teach only non-global cooldown/start-recovery categories;
+- unrelated global-recovery events are discarded;
+- unknown non-global shared-category events are evaluated only while readiness is visible;
 - one readiness result is shared by all copies of a canonical ability;
-- one source API evaluation per generation;
-- exact false charge readiness cannot be overridden by optimistic mode;
-- restricted LoC fails closed;
+- one source API evaluation occurs per generation;
 - successful player/pet interrupt casts request an immediate readiness refresh;
-- accessible deadlines use a 50 ms shared expiry driver;
-- restricted timing uses a 250 ms shared poll and an immediate cast-start poll.
+- accessible deadlines use a shared 50 ms expiry driver only while needed;
+- restricted timing uses a shared 250 ms poll only while a relevant cast exists;
+- hard restrictions never enter periodic polling.
+
+## Secret-value boundary
+
+Potentially secret `notInterruptible` follows one direct path:
+
+```text
+UnitCastingInfo / UnitChannelInfo
+  -> local raw value
+  -> Glow:ApplyUnitInterruptibility
+  -> childRegion:SetAlphaFromBoolean(raw, 0, 255)
+```
+
+The raw value is not stored, formatted, logged, returned through an internal event system, compared before `canaccessvalue`, or routed through a `pcall` result lane. The child region carrying the Alpha secret aspect is never animated or read back; candidate state and animation remain on an ordinary parent frame.
+
+## Diagnostics and validation
+
+- Internal counters are dormant unless debug or `/iglow stats start` enables a session profiling window.
+- Debug output rejects inaccessible payloads and stores only normalized text.
+- GitHub Actions workflows are intentionally absent.
+- Local Lua syntax, static invariants, source mapping and mock state-machine scripts are development checks only.
+- Live WoW acceptance remains required for secure execution, SecretValue behavior, taint and FPS/CPU measurements.
 
 ## Deliberate omissions
 
@@ -52,4 +104,4 @@ Baseline: WoW Retail `12.1.0.69497`, Interface `120100`, Blizzard UI commit `027
 - reconstructing restricted remaining seconds;
 - loading Blizzard's private CooldownBroadcaster at runtime.
 
-Dedicated adapters can be added only when a stable callback/lifecycle surface is known.
+Dedicated adapters can be added only when a stable callback or lifecycle surface is verified in the current Blizzard UI source.
