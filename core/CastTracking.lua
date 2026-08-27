@@ -163,27 +163,29 @@ function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRe
     self:ApplyInterruptibility(unit, rawNotInterruptible, active, forcedNotInterruptible)
     changed = changed or oldNIState ~= state.niState
 
-    -- Target/focus cast feedback is latency-sensitive and bounded by the small
-    -- number of currently bound interrupt buttons, so update it synchronously.
-    if IG.Glow then IG.Glow:RefreshUnit(unit) end
-
-    -- The background cooldown driver deliberately sleeps while no relevant cast
-    -- exists. Re-read readiness once when a new cast becomes relevant, when the
-    -- cast identity changes, when hostility/interruptibility makes an existing
-    -- cast newly relevant, or when target/focus itself changed.
+    -- Readiness sleeps while no result can be shown. When a cast becomes
+    -- relevant, changes identity, or target/focus itself changes, invalidate
+    -- readiness before the synchronous visual pass. CandidateFor then fails
+    -- closed until the frame-batched cooldown evaluation completes.
     local castIdentityChanged = active and (
         not oldActive
         or oldCastBarID ~= safeCastBarID
         or oldIsChannel ~= isChannel
     )
     local newRelevant = IsRelevantCast(active, hostile, state.niState)
-    if newRelevant and (
+    local needsReadinessRefresh = newRelevant and (
         forceReadinessRefresh == true
         or castIdentityChanged
         or not oldRelevant
-    ) then
+    )
+    if needsReadinessRefresh then
         IG:MarkCooldownDirty(false)
     end
+
+    -- Stop/non-interruptible transitions remain synchronous. Newly relevant
+    -- transitions are also updated now, but pending readiness suppresses stale
+    -- true state until the next frame finishes the bounded readiness pass.
+    if IG.Glow then IG.Glow:RefreshUnit(unit) end
 
     if changed then
         IG:BumpStat("cast.transitions")
