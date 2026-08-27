@@ -95,15 +95,9 @@ local function ResolveSnapshot(record, slot, actionType, id, subType, interrupt,
 
     if interrupt == false then return false end
 
-    -- Compatibility fallback for a future build/provider where the manual
-    -- IsInterruptAction surface is missing or temporarily unreadable. Current
-    -- resolved spell feedback plus the verified/current-spec registry remains
-    -- sufficient; opaque macros fail closed.
     if spellID then
         local canonicalSpellID = IG.Data:GetCanonicalSpellID(spellID, "action")
-        if canonicalSpellID then
-            return true, "action", slot, spellID, canonicalSpellID
-        end
+        if canonicalSpellID then return true, "action", slot, spellID, canonicalSpellID end
         return false
     end
 
@@ -123,8 +117,19 @@ function Buttons:ResolveRecord(record)
     local slot = ResolveSlot(record.button)
     if not slot then return originalResolveRecord(self, record) end
 
-    local actionType, id, subType, interrupt, assisted = ReadActionSnapshot(slot)
-    StoreSnapshot(record, slot, actionType, id, subType, interrupt, assisted)
+    local actionType, id, subType, interrupt, assisted
+    if record.actionSnapshotFresh == true and record.actionSnapshotSlot == slot then
+        record.actionSnapshotFresh = false
+        actionType = record.actionSnapshotType
+        id = record.actionSnapshotID
+        subType = record.actionSnapshotSubType
+        interrupt = record.actionSnapshotInterrupt
+        assisted = record.actionSnapshotAssisted
+    else
+        actionType, id, subType, interrupt, assisted = ReadActionSnapshot(slot)
+        StoreSnapshot(record, slot, actionType, id, subType, interrupt, assisted)
+    end
+
     return ResolveSnapshot(record, slot, actionType, id, subType, interrupt, assisted)
 end
 
@@ -140,6 +145,7 @@ function Buttons:OnNativeActionChanged(button)
 
     local actionType, id, subType, interrupt, assisted = ReadActionSnapshot(slot)
     if StoreSnapshot(record, slot, actionType, id, subType, interrupt, assisted) then
+        record.actionSnapshotFresh = true
         IG:MarkButtonDirty(button)
         IG:BumpStat("events.nativeActionIdentityChanged")
     else
