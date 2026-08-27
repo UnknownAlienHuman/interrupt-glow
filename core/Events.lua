@@ -24,6 +24,7 @@ local EVENTS = {
     "SPELL_UPDATE_CHARGES",
     "PET_BAR_UPDATE",
     "PET_BAR_UPDATE_COOLDOWN",
+    "PET_BAR_UPDATE_USABLE",
     "PET_UI_UPDATE",
     "ADDON_RESTRICTION_STATE_CHANGED",
 }
@@ -176,7 +177,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         return
     end
 
-    if event == "PET_BAR_UPDATE_COOLDOWN" then
+    if event == "PET_BAR_UPDATE_COOLDOWN" or event == "PET_BAR_UPDATE_USABLE" then
         IG:MarkCooldownDirty(false)
         return
     end
