@@ -749,7 +749,11 @@ bfObject.Mode, bfObject.SpellId = "spell", 15487
 BFButton.FullRefresh(bfObject)
 flush_all()
 assert(bfRecord.isInterrupt == true, "ButtonForge did not rebind")
-assert(spellUsableCalls > 0, "direct spell usability was never evaluated")
+spellUsable[15487] = false
+IG.Cooldown.generation = IG.Cooldown.generation + 1
+local directSpellReady = IG.Cooldown:GetCachedReadiness("spell", 15487, false)
+assert(directSpellReady == false and spellUsableCalls > 0, "direct spell usability was not enforced")
+spellUsable[15487] = nil
 
 -- Cooldown Viewer is not force-loaded and observes only interrupt items.
 local cdmItem = CreateFrame("Button", "CDMInterrupt", UIParent)
