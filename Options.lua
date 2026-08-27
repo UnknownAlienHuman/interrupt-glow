@@ -1,160 +1,186 @@
--- InterruptGlow - Options panel
--- Author: Neomorph
-
 local IG = _G.InterruptGlow
 if not IG then return end
 
-InterruptGlowDB = InterruptGlowDB or {}
-local DB = InterruptGlowDB
+local DB = IG.DB
+local Options = { built = false, controls = {} }
+IG.Options = Options
+IG:RegisterModule("Options", Options)
 
--- Defaults
-if DB.cdText == nil then DB.cdText = false end
-if DB.cdm == nil then DB.cdm = true end
-if DB.strictNI == nil then DB.strictNI = true end
-
-if DB.debug == nil then DB.debug = false end
-if DB.debugChat == nil then DB.debugChat = false end
-if DB.debugLevel == nil then DB.debugLevel = 2 end
-if DB.debugKeep == nil then DB.debugKeep = 400 end
-if DB.debugAutoShow == nil then DB.debugAutoShow = true end
-
-local function Apply()
-    if IG.SetCDTextEnabled then
-        IG:SetCDTextEnabled(DB.cdText)
-    end
-    if DB.cdm and IG.TryFindCDMButton then
-        if C_Timer and C_Timer.After then
-            C_Timer.After(0, function() IG:TryFindCDMButton() end)
-        end
-    elseif (not DB.cdm) and IG.ClearExtraButtons then
-        IG:ClearExtraButtons()
-        if IG.MarkGlowDirty then
-            IG:MarkGlowDirty()
-        elseif IG.ApplyGlowDecision then
-            IG:ApplyGlowDecision()
-        end
-    end
-    if IG.MarkReadyDirty then
-        IG:MarkReadyDirty("options-apply")
-    end
-end
-
+-- Register only a bare canvas at addon load. Font strings, check buttons and
+-- action buttons are created on the first Settings visit, not during login.
 local panel = CreateFrame("Frame", "InterruptGlowOptionsPanel", UIParent)
 panel.name = "Interrupt Glow"
+Options.panel = panel
 
-local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-title:SetPoint("TOPLEFT", 16, -16)
-title:SetText("Interrupt Glow")
-
-local subtitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
-subtitle:SetText("Glows your interrupt button when target/focus is casting (respects not-interruptible and your interrupt cooldown).")
-
-local cd = CreateFrame("CheckButton", nil, panel, "InterfaceOptionsCheckButtonTemplate")
-cd:SetPoint("TOPLEFT", subtitle, "BOTTOMLEFT", 0, -14)
-cd.Text:SetText("Show cooldown countdown numbers")
-cd.tooltipText = "Show seconds remaining until your interrupt is ready."
-cd:SetScript("OnClick", function(self)
-    DB.cdText = self:GetChecked() and true or false
-    Apply()
-end)
-
-local cdm = CreateFrame("CheckButton", nil, panel, "InterfaceOptionsCheckButtonTemplate")
-cdm:SetPoint("TOPLEFT", cd, "BOTTOMLEFT", 0, -10)
-cdm.Text:SetText("Mirror glow onto Blizzard Cooldown Manager interrupt icon (if pinned)")
-cdm.tooltipText = "If you pin your interrupt to Blizzard's Cooldown Manager, mirror the glow and cooldown numbers there."
-cdm:SetScript("OnClick", function(self)
-    DB.cdm = self:GetChecked() and true or false
-    Apply()
-end)
-
-
-local strictNI = CreateFrame("CheckButton", nil, panel, "InterfaceOptionsCheckButtonTemplate")
-strictNI:SetPoint("TOPLEFT", cdm, "BOTTOMLEFT", 0, -10)
-strictNI.Text:SetText("Strict not-interruptible detection")
-strictNI.tooltipText = "Blocks glow unless the cast is confirmed interruptible. If the game keeps interruptibility hidden behind restricted/secret values, unknown stays blocked until you disable strict mode."
-strictNI:SetScript("OnClick", function(self)
-    DB.strictNI = self:GetChecked() and true or false
-    Apply()
-end)
-
-local dbg = CreateFrame("CheckButton", nil, panel, "InterfaceOptionsCheckButtonTemplate")
-dbg:SetPoint("TOPLEFT", strictNI, "BOTTOMLEFT", 0, -10)
-dbg.Text:SetText("Enable debug log buffer")
-dbg.tooltipText = "Stores recent decisions/events in a ring buffer. Use /iglow log show to open a copyable log window."
-dbg:SetScript("OnClick", function(self)
-    DB.debug = self:GetChecked() and true or false
-    Apply()
-    if DB.debug and DB.debugAutoShow and IG and IG.MaybeAutoShowDebugLog then
-        IG:MaybeAutoShowDebugLog("options-debug-on", true)
-    end
-end)
-
-local dbgChat = CreateFrame("CheckButton", nil, panel, "InterfaceOptionsCheckButtonTemplate")
-dbgChat:SetPoint("TOPLEFT", dbg, "BOTTOMLEFT", 0, -6)
-dbgChat.Text:SetText("Echo debug to chat (spammy)")
-dbgChat.tooltipText = "Also prints debug lines to chat. Prefer /iglow log show."
-dbgChat:SetScript("OnClick", function(self)
-    DB.debugChat = self:GetChecked() and true or false
-    Apply()
-end)
-
-local dbgAuto = CreateFrame("CheckButton", nil, panel, "InterfaceOptionsCheckButtonTemplate")
-dbgAuto:SetPoint("TOPLEFT", dbgChat, "BOTTOMLEFT", 0, -6)
-dbgAuto.Text:SetText("Auto-open debug log window")
-dbgAuto.tooltipText = "Automatically opens the copyable debug log window when the addon loads (and when errors occur), while debug logging is enabled."
-dbgAuto:SetScript("OnClick", function(self)
-    DB.debugAutoShow = self:GetChecked() and true or false
-    Apply()
-    if DB.debug and IG and IG.MaybeAutoShowDebugLog then
-        IG:MaybeAutoShowDebugLog("options-autoshow", true)
-    end
-end)
-
-
-local showLog = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-showLog:SetPoint("LEFT", dbg, "RIGHT", 230, 0)
-showLog:SetSize(140, 22)
-showLog:SetText("Show Debug Log")
-showLog:SetScript("OnClick", function()
-    if InterruptGlow and InterruptGlow.Debug and InterruptGlow.Debug.Show then
-        InterruptGlow.Debug:Show(DB.debugKeep or 400)
-    else
-        print("InterruptGlow: Debug log unavailable.")
-    end
-end)
-
-panel.refresh = function()
-    cd:SetChecked(DB.cdText and true or false)
-    cdm:SetChecked(DB.cdm and true or false)
-    strictNI:SetChecked(DB.strictNI and true or false)
-    dbg:SetChecked(DB.debug and true or false)
-    dbgChat:SetChecked(DB.debugChat and true or false)
-    dbgAuto:SetChecked(DB.debugAutoShow and true or false)
+local function ApplyDefaultsOrFullRefresh()
+    IG:MarkAllButtonsDirty()
+    IG:MarkCastDirty()
+    IG:MarkCooldownDirty(false)
+    IG:MarkVisualDirty()
 end
 
+local function CreateCheckButton(anchor, offsetY, label, tooltip, getter, setter)
+    local check = CreateFrame("CheckButton", nil, panel, "InterfaceOptionsCheckButtonTemplate")
+    check:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, offsetY)
+    check.Text:SetText(label)
+    check.tooltipText = tooltip
+    check:SetScript("OnClick", function(self)
+        setter(self:GetChecked() == true)
+    end)
+    check.RefreshValue = function(self)
+        self:SetChecked(getter() == true)
+    end
+    Options.controls[#Options.controls + 1] = check
+    return check
+end
+
+function Options:Build()
+    if self.built then return end
+    self.built = true
+    IG:BumpStat("ui.optionsBuilt")
+
+    local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("Interrupt Glow 1.1")
+
+    local subtitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+    subtitle:SetWidth(620)
+    subtitle:SetJustifyH("LEFT")
+    subtitle:SetText("Event-driven target/focus interrupt highlighting. No macro-body, frame or nameplate scans.")
+
+    local enabled = CreateCheckButton(
+        subtitle,
+        -14,
+        "Enable Interrupt Glow",
+        "Master switch for the addon-owned overlays.",
+        function() return DB.enabled end,
+        function(value)
+            DB.enabled = value
+            -- Readiness work sleeps while disabled. Re-enabling during an
+            -- existing relevant cast must take one fresh snapshot before glow.
+            if value then IG:MarkCooldownDirty(false) end
+            IG:MarkVisualDirty()
+        end
+    )
+
+    local cdText = CreateCheckButton(
+        enabled,
+        -10,
+        "Show accessible cooldown countdown",
+        "Shows a custom number only when remaining time is accessible. Blizzard-owned cooldown UI remains authoritative for restricted values.",
+        function() return DB.cdText end,
+        function(value)
+            DB.cdText = value
+            if value then
+                -- Mark pending before the immediate UI refresh so a stale
+                -- deadline cannot flash while the fresh snapshot is queued.
+                IG:MarkCooldownDirty(false)
+                if IG.Glow then IG.Glow:EnsureCooldownTexts() end
+            end
+            IG:MarkVisualDirty()
+        end
+    )
+
+    local cdm = CreateCheckButton(
+        cdText,
+        -10,
+        "Mirror onto Blizzard Cooldown Viewer interrupt icons",
+        "Uses Cooldown Viewer pooled-item lifecycle hooks; no child-tree scan or texture matching.",
+        function() return DB.cdm end,
+        function(value)
+            DB.cdm = value
+            if IG.CDM then IG.CDM:SetEnabled(value) end
+        end
+    )
+
+    local strictNI = CreateCheckButton(
+        cdm,
+        -10,
+        "Block ordinary unknown interruptibility",
+        "Secret interruptibility is sent directly to a visual alpha gate. This option controls only accessible nil/unknown states.",
+        function() return DB.strictNI end,
+        function(value)
+            DB.strictNI = value
+            -- A restricted current cast must be sampled again so the raw value
+            -- reaches the alpha sink. Turning strict mode off can also make an
+            -- existing unknown cast newly relevant, so refresh readiness once.
+            IG:MarkCastDirty()
+            IG:MarkCooldownDirty(false)
+            IG:MarkVisualDirty()
+        end
+    )
+
+    local optimisticCD = CreateCheckButton(
+        strictNI,
+        -10,
+        "Allow glow when cooldown readiness is fully restricted",
+        "Compatibility mode. It may allow a cooldown-readiness false positive, but never overrides blocked or inaccessible usability, pet state, or Loss of Control.",
+        function() return DB.optimisticRestrictedCooldown end,
+        function(value)
+            DB.optimisticRestrictedCooldown = value
+            IG:MarkCooldownDirty(false)
+        end
+    )
+
+    CreateCheckButton(
+        optimisticCD,
+        -10,
+        "Enable debug ring buffer",
+        "Stores normalized decisions and counters only. Raw secret payloads are never logged.",
+        function() return DB.debug end,
+        function(value) DB.debug = value end
+    )
+
+    local debug = self.controls[#self.controls]
+    local showLog = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    showLog:SetPoint("TOPLEFT", debug, "BOTTOMLEFT", 4, -12)
+    showLog:SetSize(150, 24)
+    showLog:SetText("Show Debug Log")
+    showLog:SetScript("OnClick", function()
+        if IG.Debug then IG.Debug:Show(DB.debugKeep) end
+    end)
+
+    local rescan = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    rescan:SetPoint("LEFT", showLog, "RIGHT", 10, 0)
+    rescan:SetSize(160, 24)
+    rescan:SetText("Discover Buttons")
+    rescan:SetScript("OnClick", function()
+        if IG:IsInCombat() then
+            IG:Print("Discovery is unavailable during combat.")
+            return
+        end
+        if IG.Buttons then IG.Buttons:DiscoverAll(true) end
+        if IG.CDM then IG.CDM:ObserveExistingItems() end
+    end)
+end
+
+function Options:Refresh()
+    self:Build()
+    for index = 1, #self.controls do
+        local control = self.controls[index]
+        if control.RefreshValue then control:RefreshValue() end
+    end
+end
+
+panel.refresh = function() Options:Refresh() end
 panel.default = function()
+    DB.enabled = true
     DB.cdText = false
     DB.cdm = true
     DB.strictNI = true
-
+    DB.optimisticRestrictedCooldown = false
     DB.debug = false
-    DB.debugChat = false
-    DB.debugLevel = 2
-    DB.debugKeep = 400
-    DB.debugAutoShow = true
+    if IG.CDM then IG.CDM:SetEnabled(true) end
+    ApplyDefaultsOrFullRefresh()
+    Options:Refresh()
 end
+panel.okay = function() end
+panel:SetScript("OnShow", function() Options:Refresh() end)
 
-panel.okay = function()
-    Apply()
-end
-
--- Modern Settings support (12.x) + fallback to Interface Options
 if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
     local category = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
     Settings.RegisterAddOnCategory(category)
-else
-    if InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(panel)
-    end
+elseif InterfaceOptions_AddCategory then
+    InterfaceOptions_AddCategory(panel)
 end

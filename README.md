@@ -1,57 +1,106 @@
 # Interrupt Glow
 
-Current version: `1.0.24`
+Current development version: `1.1.0-beta.2`
 
-## Preview
+Interrupt Glow highlights the button that currently performs an interrupt when an interruptible hostile cast is active on `target` or `focus` and that ability is ready.
 
-![Interrupt Glow on an action button](https://media.forgecdn.net/attachments/1511/429/9468-png.png)
+## 1.1 runtime model
 
-Screenshot from the [CurseForge gallery](https://www.curseforge.com/wow/addons/interrupt-glow).
+The 1.0 scan-driven runtime has been removed:
 
-Notes (1.0.x):
-- 12.x secret/restricted values hardened paths for cooldown + interruptible detection.
+- native buttons use `ActionButton.OnActionChanged` with resolved-action snapshot deduplication;
+- slot-backed buttons use `C_ActionBar.IsInterruptAction(slot)` and current `GetActionInfo(slot)` feedback;
+- LibActionButton macro feedback is routed by the changed action slot, never by a slot/frame scan;
+- conditional macro bodies are not parsed;
+- target and focus use fixed-unit `UNIT_SPELLCAST_*` watchers;
+- casts are detected through NeverSecret fields from `UnitCastingInfo` / `UnitChannelInfo`;
+- potentially secret `notInterruptible` is passed directly to addon-owned `SetAlphaFromBoolean(..., 0, 255)` and is never stored, logged or routed through `pcall`;
+- cooldown readiness is shared per canonical ability rather than recalculated for every button copy;
+- `isOnGCD` is normalized during the actual `SPELL_UPDATE_COOLDOWN` event, not read later;
+- charge, Loss of Control, pet usability, pet cooldown and restricted-timing states are handled separately;
+- Blizzard Cooldown Viewer follows pooled-item acquire/set/reset lifecycle hooks;
+- there is no automatic frame enumeration, 540-slot scan, nameplate traversal, macro-body read or CDM tree scan.
 
-Fixes for environments where:
-- GetActionSpell() is missing,
-- GetActionInfo(slot) can report actionType="macro" with id=spellID,
-- Some buttons are SecureActionButtonTemplate-based and not tied to an action slot.
+## Startup and update speed
 
-Behavior:
-- Glows your interrupt button(s) when your current target or focus is casting or channeling.
-- Glows even out of combat to simplify testing.
+Interrupt Glow itself is intentionally not LoadOnDemand: otherwise it could not begin observing casts automatically. Its startup work is lazy:
 
-v0.6.0: Creates a Blizzard-style SpellActivationAlert using ActionButtonSpellAlertTemplate (or fallbacks) and plays ProcStartAnim/ProcLoopAnim if present. Adds /iglow test.
+- gameplay events and provider discovery wait for `PLAYER_LOGIN`;
+- already-loaded registries are enumerated once;
+- later Bartender, ElvUI, Dominos, ButtonForge and Cooldown Viewer availability is handled through load-order callbacks;
+- the Settings panel is only a bare canvas until opened;
+- current interrupt visuals are created immediately outside combat;
+- other physical button shells are prewarmed at 16 buttons per frame;
+- no frames are created during combat.
 
-v0.6.1: Fixes stray backslash syntax error.
+Runtime latency targets:
 
-v0.6.2: Adds filters: hostile target only; interruptible casts only (or unknown).
+- cast/interruptibility change: synchronous;
+- action or conditional-macro feedback: next frame;
+- relevant cooldown signal: next frame;
+- accessible cooldown expiry: at most 50 ms plus one frame, only while a relevant cast or enabled countdown needs it;
+- restricted timing: 250 ms only while a relevant cast exists, with an immediate refresh when that cast becomes relevant;
+- custom integer countdown: 200 ms when enabled;
+- disabled addon: no cooldown/charge/LoC evaluation.
 
-v0.6.3: Simplifies filters: glow only if you can harm the target (UnitCanAttack). Interruptibility filter removed. Cast-start driven logic.
+See [Performance model](docs/PERFORMANCE_MODEL.md).
 
-v0.6.12: Adds a secret-safe non-interruptible check. Primary signal is UNIT_SPELLCAST_(NOT_)INTERRUPTIBLE (boolean). Optional fallback uses Blizzard castbar shield visibility (IsShown/GetAlpha) when state is unknown (e.g. target acquired mid-cast). No spell identity or castGUID comparisons.
+## Interrupt data
 
+The ordinary per-spec snapshot is generated from Blizzard UI build `12.1.0.69497`. Verified PvP-talent and direct pet-action exceptions are stored separately so an upstream sync cannot delete them. Slot-backed buttons remain runtime-authoritative, so a new hotfix interrupt can be learned for the current session before the vendored table is updated.
 
-New in v0.6.43:
-- Target + Focus support (event-driven cast state; no polling).
-- Interrupt SpellID resolution prefers your actual button/slot (spell / macro / secure button attributes).
-- Cooldown numbers update on a per-second timer while on cooldown (no OnUpdate).
-- Blizzard Cooldown Manager (CDM) mirroring remains optional and is only scanned out of combat.
-- Hooks Blizzard TargetFrameSpellBar/FocusFrameSpellBar OnShow/OnHide as a zero-cost fallback for cast detection.
-- Forces a readiness refresh when you successfully use an interrupt (UNIT_SPELLCAST_SUCCEEDED) to prevent stale cooldown state.
+See [Interrupt IDs](docs/INTERRUPT_IDS.md).
 
+## Supported button systems
 
-New in v0.6.45:
-- Cooldown gating: if C_Spell.GetSpellCooldown reports isOnGCD=false but start/duration are unreadable (secret), we no longer hard-block the glow. We fall back to action-slot / widget cooldown, and if still unknown we prefer a false-positive over silence.
+- Blizzard action bars;
+- LibActionButton consumers, including Bartender and ElvUI variants;
+- Dominos indexed buttons;
+- ButtonForge allocation and resolved-command lifecycle;
+- pet action buttons;
+- Blizzard Essential and Utility Cooldown Viewers.
 
-## Current project documentation
+Single Button Assistant next-action highlighting is intentionally excluded from 1.1 because Blizzard updates it through a separate polling model rather than the normal action-button callback.
 
-- Interface: `120001`, `120005`; version: `1.0.24`; saved variables: `InterruptGlowDB`.
-- Install by copying `InterruptGlow` to `World of Warcraft/_retail_/Interface/AddOns/`, then restart or `/reload`.
-- `/iglow test` exercises the visual path; `/iglow state` reports state while a target is casting.
-- Development status: modular refactor complete; a live dungeon/raid test remains. See [todo.md](todo.md).
-- [CurseForge project](https://www.curseforge.com/wow/addons/interrupt-glow)
-- [Architecture](ARCHITECTURE.md) · [Code index](CODE_INDEX.md) · [Code graph](CODE_GRAPH.md)
+## Commands
+
+```text
+/iglow test
+/iglow state
+/iglow stats
+/iglow stats reset
+/iglow rescan
+/iglow log show
+/iglow log clear
+/iglow enable
+/iglow disable
+```
+
+`/iglow rescan` performs bounded discovery of known registries only and is unavailable during combat.
+
+## Validation boundary
+
+The repository contains optional local scripts for Lua syntax, source-snapshot comparison and mock state-machine regressions. They are development aids only. GitHub Actions workflows are intentionally absent because GitHub cannot run World of Warcraft, secure execution, restricted SecretValue contexts, taint logging or real FPS measurements.
+
+Stable release requires live WoW 12.1.0 checks for:
+
+- the reported Quick Heal `@mouseover` reproduction;
+- Mythic+, raid and PvP restrictions;
+- taint and blocked-action logs;
+- form/page/vehicle/override switching in combat;
+- current installed Bartender, ElvUI, Dominos and ButtonForge releases;
+- Warlock pet/sacrifice/Command Demon/Call Felhunter variants;
+- Protection Warrior dual interrupts;
+- Cooldown Viewer pool reuse;
+- `C_AddOnProfiler` mouseover and dense-nameplate stress.
+
+## Metadata
+
+- Interface: `120100`
+- Author: Neomorph
+- Saved variables: `InterruptGlowDB`
+- Blizzard UI source baseline: `12.1.0.69497`, commit `027d26c3406d3de2cbd2b1f67d468fe033a1bcd4`
 
 ## License
 
-Licensed under the [MIT License](LICENSE). Bundled third-party components remain under their own notices.
+MIT. See [LICENSE](LICENSE).

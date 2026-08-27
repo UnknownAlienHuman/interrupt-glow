@@ -1,11 +1,23 @@
 # Code index
 
-| Path | Responsibility |
-| --- | --- |
-| `InterruptGlow.toc` | Metadata and load order. |
-| `Core.lua` | Namespace and initial event registration. |
-| `core/Events.lua` | Login initialization and event routing. |
-| `core/Buttons.lua`, `core/Cooldown.lua`, `core/CastTracking.lua`, `core/Glow.lua` | Button discovery, readiness, cast state, and visual output. |
-| `core/Shared.lua`, `core/Debug.lua`, `core/Slash.lua` | Shared utilities, diagnostics, and commands. |
-| `Options.lua` | Configuration UI and persisted settings. |
-| `todo.md` | Current live-test follow-up. |
+- `Core.lua` — addon namespace and module registry.
+- `core/Shared.lua` — DB migration, access gates, dirty queue and frame-batched state flush.
+- `core/DiagnosticsPolicy.lua` — zero-cost production counters and inaccessible-safe chat output.
+- `core/Data.lua` — generated ordinary spec registry, verified PvP/pet extras, runtime-learned identities and cooldown-category filtering.
+- `core/Debug.lua` — optional normalized ring log and on-demand Blizzard profiler report.
+- `core/Glow.lua` — incrementally prewarmed target/focus alpha gates and relevant-cast-only timing driver.
+- `core/Buttons.lua` — provider registries, ButtonForge/Dominos/pet/CDM adapters and canonical ability records.
+- `core/LABAdapter.lua` — exact LibActionButton action hooks and changed-slot-to-known-buttons routing.
+- `core/ActionResolver.lua` — deduplicated current action feedback, assisted-combat exclusion and authoritative interrupt classification.
+- `core/Cooldown.lua` — cached per-source readiness, event-time GCD hints, charges, LoC and accessible deadlines.
+- `core/ReadinessPolicy.lua` — hard pet-usability/LoC gates and non-duplicating visual scheduling.
+- `core/CastTracking.lua` — fixed target/focus watchers and the sole raw SecretValue visual bridge.
+- `core/CDM.lua` — Cooldown Viewer acquire/set/reset lifecycle, duplicate suppression and off/on rebinding.
+- `core/Events.lua` — `PLAYER_LOGIN`-gated gameplay events, talent/PvP invalidation and disabled-mode filtering.
+- `core/Slash.lua` — explicit session diagnostics and manual bounded discovery.
+- `Options.lua` — lazy Settings canvas and policy controls.
+- `tools/sync_interrupts.py` — local build-time sync/check against Blizzard ordinary `InterruptSpellsBySpec` data.
+- `tests/static_checks.py` — optional local architecture/source invariants; not a WoW acceptance test.
+- `tests/mock_wow.lua` — optional local state-machine regression model; not a WoW client.
+- `docs/INTERRUPT_IDS.md` — ordinary Blizzard mappings plus reviewed PvP/pet exceptions.
+- `docs/PERFORMANCE_MODEL.md` — actual update cadence, complexity and live acceptance boundary.

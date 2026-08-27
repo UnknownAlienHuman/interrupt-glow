@@ -1,49 +1,58 @@
-# InterruptGlow TODO
+# Interrupt Glow 1.1 release checklist
 
-## Done in this pass
+## Static implementation
 
-- [x] Изучены `_Info/KB/core/BlizzardUI_Community_Insights.md`, `_Info/Cleaning/wowuidev_live/05_CASTBARS_COOLDOWNS_ACTIONBARS.md`, `_Info/KB/core/BlizzardUI_HookDecisionTree.md`, `_Info/KB/core/BlizzardUI_security.md`, `_Info/KB/core/BlizzardUI_Lifecycle_LoadOnDemand.md`, `_Info/KB/nodes/BlizzardUI_UnitFrames.md`.
-- [x] Перепроверена Blizzard castbar pipeline по локальному source build `12.0.1.66198`.
-- [x] `Core.lua` распилен до bootstrap/launcher слоя.
-- [x] Логика вынесена в отдельные узлы:
-  - `core/Shared.lua`
-  - `core/Debug.lua`
-  - `core/Buttons.lua`
-  - `core/Cooldown.lua`
-  - `core/CastTracking.lua`
-  - `core/Glow.lua`
-  - `core/Events.lua`
-  - `core/Slash.lua`
-- [x] `InterruptGlow.toc` обновлён под новый load order.
+- [x] Remove automatic full action-slot scan.
+- [x] Remove automatic frame enumeration.
+- [x] Remove nameplate traversal from cast/glow paths.
+- [x] Remove macro-body parsing from slot-backed actions.
+- [x] Use `C_ActionBar.IsInterruptAction` and current resolved action feedback.
+- [x] Deduplicate native action feedback before frame-batched reconcile.
+- [x] Route LAB conditional-macro feedback through the changed action slot only.
+- [x] Remove broad LAB visual-update work for hookable providers.
+- [x] Add exact 12.1.0 ordinary per-spec interrupt snapshot and generator.
+- [x] Keep verified PvP-talent interrupts outside the generated block (`212619` Call Felhunter).
+- [x] Add current Warlock pet aliases; exclude obsolete Optical Blast.
+- [x] Match Blizzard Cooldown Viewer talent/spec/PvP invalidation surfaces.
+- [x] Defer gameplay events/provider discovery to `PLAYER_LOGIN`.
+- [x] Use fully-loaded add-on lifecycle gates and late-provider callbacks.
+- [x] Keep GitHub Actions workflows absent; acceptance is live-client only.
+- [x] Add fixed target/focus unit-event watchers.
+- [x] Detect cast presence through NeverSecret fields.
+- [x] Route secret `notInterruptible` directly to `SetAlphaFromBoolean(..., 0, 255)` without storage, logging, readback or a `pcall` result lane.
+- [x] Share readiness per canonical ability and cache one source result per pass.
+- [x] Preserve dormant ability readiness across rapid heal/interrupt macro transitions.
+- [x] Normalize `isOnGCD` only during `SPELL_UPDATE_COOLDOWN` dispatch.
+- [x] Learn interrupt cooldown/recovery categories and ignore idle unrelated events.
+- [x] Add charge, pet, LoC and restricted-timing handling.
+- [x] Fail closed on inaccessible LoC and intrinsic pet usability.
+- [x] Prevent optimistic cooldown compatibility from bypassing hard restrictions.
+- [x] Stop restricted timing polling when no relevant cast exists.
+- [x] Skip cooldown/charge/LoC evaluation while the addon is disabled.
+- [x] Add immediate player/pet interrupt-success invalidation.
+- [x] Add Cooldown Viewer pool lifecycle, duplicate suppression and off/on rebinding.
+- [x] Incrementally prewarm lightweight overlays outside combat.
+- [x] Keep internal counters disabled outside explicit debug/profile sessions.
+- [x] Make diagnostics inaccessible-safe and combat-lazy.
+- [x] Retain optional local syntax/source/mock scripts as development aids only.
 
-## Current architecture
+## Required live tests
 
-- [x] `Core.lua` только поднимает `InterruptGlow`, `InterruptGlow.Private` и launcher frame.
-- [x] Shared state и safe wrappers живут в `core/Shared.lua`.
-- [x] Hot-path logic (`Cooldown`, `CastTracking`, `Glow`) отделена от bootstrap.
-- [x] Event routing собран в одном месте (`core/Events.lua`), slash/debug вынесены отдельно.
-
-## Next
-
-- [x] Починить NI detection для dungeon/instance casts через Blizzard castbar authority.
-  `core/CastTracking.lua` теперь предпочитает Blizzard castbar verdict (`target`/`focus`/target nameplate) раньше `UnitCastingInfo`, чтобы не терять uninterruptible casts в инстансах, где unit API даёт `nil` или stale state.
-- [x] Добавить safe post-hook на Blizzard castbar update path без `HookScript`.
-  Введён `hooksecurefunc` на `CastingBarMixin:OnEvent` и `:UpdateInterruptibleState`, чтобы смена interruptibility в середине каста сразу переписывала runtime state без edit-mode taint.
-- [x] Прогнать локальную верификацию после фикса и подготовить task commit.
-  Прогнан `npx --yes luaparse` по `core/CastTracking.lua`, `git diff --check` чистый; живой тест в данже остаётся отдельным незавершённым шагом ниже.
-- [x] Выделить явную strategy matrix внутри `core/CastTracking.lua`.
-  Введён единый NI resolver с policy lanes `event-first`, `unit-api-first`, `castbar-fallback:*`, `forbidden-nameplate`.
-- [x] Добавить in-code audit comment над strategy selection.
-  Матрица authority теперь зафиксирована рядом с `NI_STRATEGY`, включая `target`, `focus`, `nameplate`, `boss-token`, `unknown/secret`.
-- [x] Починить resync при появлении normal/forbidden nameplate у `target`/`focus`.
-  `core/Events.lua` теперь обрабатывает `NAME_PLATE_UNIT_ADDED` и `FORBIDDEN_NAME_PLATE_UNIT_ADDED` через `MapEventUnit`, а `core/Shared.lua` больше не опирается на недокументированный `GetNamePlateForUnit("target")`.
-- [x] Убрать прямой slash-cleanup `extraButtons` и сузить ложные macro matches.
-  `/iglow cdm` теперь идёт через `ClearExtraButtons` + `MarkReadyDirty`, а macro text/attributes проверяются с boundary matching вместо голого substring.
-- [x] Усилить secret/taint guards на unit/cooldown surfaces.
-  `core/Shared.lua` получил `pcall`-safe wrappers для `Unit*`, а `core/Cooldown.lua` читает cooldown/charge tables через safe member access и выделяет отдельный `cdSrc=secret` path.
-- [x] Сделать `pcall` observable, а не silent.
-  Guarded paths теперь пишут в debug ring, считают `guard` stats, показывают throttled chat warning и попадают в `/iglow stats` + `/iglow state`.
-- [x] Убрать runtime state с Blizzard frame userdata там, где это давало taint-риск.
-  `core/Glow.lua` и `core/Cooldown.lua` переведены на side tables вместо `__IG_*`, а `core/CastTracking.lua` больше не делает `HookScript` на Blizzard unit-frame castbars.
-- [ ] Прогнать живой тест в данже/рейде после модульного рефактора.
-  Цель: убедиться, что архитектурный распил не вернул ложные glow или регресс по CPU.
+- [ ] Quick Heal `[@mouseover,help][]` regression reproduction.
+- [ ] Conditional heal/interrupt macro changes in combat.
+- [ ] No interrupt currently on bars.
+- [ ] 40–60 visible nameplates.
+- [ ] Target and focus acquired mid-cast.
+- [ ] Restricted Mythic+, raid and PvP.
+- [ ] Page, stance, form, stealth, vehicle and override changes.
+- [ ] Bartender, ElvUI and Dominos current releases.
+- [ ] ButtonForge direct, cleared and conditional macro buttons.
+- [ ] Warlock Felhunter/Felguard, sacrifice, Command Demon and Call Felhunter.
+- [ ] Protection Warrior Pummel + Disrupting Shout.
+- [ ] Cooldown Viewer layout, settings changes, disable/enable and pool reuse.
+- [ ] Charges, intrinsic pet usability and Loss of Control under restrictions.
+- [ ] Enable/disable during an existing relevant cast.
+- [ ] `/reload` with each optional provider already loaded and not loaded yet.
+- [ ] `/console taintLog 2`: no blocked/forbidden action.
+- [ ] `C_AddOnProfiler`: no new >5 ms ticks during 60-second mouseover stress.
+- [ ] Compare enable/disable and `/reload` attach counts for duplicate callbacks.
