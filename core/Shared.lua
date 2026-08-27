@@ -58,7 +58,6 @@ end
 
 function IG:ReadMember(container, key)
     if not CanAccess(container) or container == nil then return nil, false end
-
     local ok, value = pcall(ReadIndex, container, key)
     if not ok or not CanAccess(value) then return nil, false end
     return value, true
@@ -91,8 +90,6 @@ function IG:IsInCombat()
     return InCombatLockdown() == true
 end
 
--- C_AddOns.IsAddOnLoaded returns (loadedOrLoading, loaded). The first result
--- must not be used as an attach gate because the add-on may still be executing.
 function IG:IsAddOnFullyLoaded(addOnName)
     if not C_AddOns or type(C_AddOns.IsAddOnLoaded) ~= "function" then return false end
     local ok, _loadedOrLoading, loaded = pcall(C_AddOns.IsAddOnLoaded, addOnName)
@@ -112,6 +109,16 @@ end
 
 function IG:WipeMap(map)
     for key in pairs(map) do map[key] = nil end
+end
+
+function IG:NeedsReadinessRuntime()
+    if DB.enabled ~= true then return false end
+    if DB.cdText == true then return true end
+
+    local glow = self.Glow
+    return glow ~= nil
+        and type(glow.HasRelevantCast) == "function"
+        and glow:HasRelevantCast() == true
 end
 
 IG._dirty = IG._dirty or {
@@ -155,7 +162,7 @@ function IG:MarkCastDirty()
 end
 
 function IG:MarkCooldownDirty(fromSpellCooldownEvent)
-    if DB.enabled ~= true then
+    if not self:NeedsReadinessRuntime() then
         self._dirty.cooldown = false
         if self.Cooldown and self.Cooldown.ClearGCDHints then self.Cooldown:ClearGCDHints() end
         return
@@ -163,8 +170,6 @@ function IG:MarkCooldownDirty(fromSpellCooldownEvent)
 
     self._dirty.cooldown = true
     if not fromSpellCooldownEvent and self.Cooldown and self.Cooldown.ClearGCDHints then
-        -- A different invalidation in the same frame makes an earlier
-        -- SPELL_UPDATE_COOLDOWN hint potentially stale. Failing closed is safer.
         self.Cooldown:ClearGCDHints()
     end
     self:RequestFlush()
@@ -196,7 +201,7 @@ function IG:Flush()
         dirty.spec = false
         if self.Data then self.Data:RefreshActiveSpec() end
         dirty.allButtons = true
-        dirty.cooldown = DB.enabled == true
+        dirty.cooldown = self:NeedsReadinessRuntime()
     end
 
     if dirty.allButtons then
@@ -214,7 +219,7 @@ function IG:Flush()
 
     if dirty.cooldown then
         dirty.cooldown = false
-        if DB.enabled == true and Cooldown then
+        if self:NeedsReadinessRuntime() and Cooldown then
             Cooldown:RefreshAll()
         elseif Cooldown and Cooldown.ClearGCDHints then
             Cooldown:ClearGCDHints()
