@@ -10,6 +10,8 @@ local Data = {
     activeInterrupts = {},
     runtimeInterrupts = {},
     cooldownSpellMatchCache = {},
+    interruptCooldownCategories = {},
+    interruptStartRecoveryCategories = {},
 }
 IG.Data = Data
 IG:RegisterModule("Data", Data)
@@ -160,6 +162,14 @@ local function AddSpecList(self, list)
     end
 end
 
+local function IsRuntimeRelevant()
+    local glow = IG.Glow
+    if glow and type(glow.HasRelevantCast) == "function" and glow:HasRelevantCast() then
+        return true
+    end
+    return IG.DB and IG.DB.enabled == true and IG.DB.cdText == true
+end
+
 function Data:RefreshActiveSpec()
     local specID = GetCurrentSpecID()
     local changed = specID ~= self.activeSpecID
@@ -167,6 +177,10 @@ function Data:RefreshActiveSpec()
 
     IG:WipeMap(self.specInterrupts)
     IG:WipeMap(self.activeInterrupts)
+    IG:WipeMap(self.cooldownSpellMatchCache)
+    IG:WipeMap(self.interruptCooldownCategories)
+    IG:WipeMap(self.interruptStartRecoveryCategories)
+
     if changed then
         -- Runtime discoveries are authoritative only inside the specialization
         -- that exposed them through C_ActionBar.IsInterruptAction. Preserve them
@@ -174,7 +188,6 @@ function Data:RefreshActiveSpec()
         -- unbinds, but never carry them into another specialization.
         IG:WipeMap(self.runtimeInterrupts)
     end
-    IG:WipeMap(self.cooldownSpellMatchCache)
 
     if specID then
         AddSpecList(self, INTERRUPTS_BY_SPEC[specID])
@@ -273,11 +286,23 @@ function Data:MatchesCurrentInterrupt(spellID)
     return matches
 end
 
+function Data:LearnInterruptCooldownCategories(category, startRecoveryCategory)
+    if IG.CanAccess(category) and type(category) == "number" then
+        self.interruptCooldownCategories[category] = true
+    end
+    if IG.CanAccess(startRecoveryCategory)
+        and type(startRecoveryCategory) == "number"
+        and startRecoveryCategory ~= GLOBAL_RECOVERY_CATEGORY
+    then
+        self.interruptStartRecoveryCategories[startRecoveryCategory] = true
+    end
+end
+
 -- SPELL_UPDATE_COOLDOWN in 12.1 supplies the changed spell plus separate
--- cooldown and start-recovery categories. An unrelated global-recovery-only
--- event can be ignored because all duration APIs are queried with ignoreGCD.
--- Non-global shared categories remain conservative until Blizzard exposes a
--- direct category query for each tracked interrupt.
+-- cooldown and start-recovery categories. Exact interrupt events teach the
+-- categories used by that interrupt. Unknown non-global shared-category events
+-- are checked only while the result can affect a visible cast/countdown; pure
+-- unrelated GCD events are discarded because all duration queries ignore GCD.
 function Data:ShouldRefreshForCooldownEvent(spellID, baseSpellID, category, startRecoveryCategory)
     if not IG.CanAccess(spellID)
         or not IG.CanAccess(baseSpellID)
@@ -288,14 +313,28 @@ function Data:ShouldRefreshForCooldownEvent(spellID, baseSpellID, category, star
     end
 
     if spellID == nil then return true end
+
     if self:MatchesCurrentInterrupt(spellID) or self:MatchesCurrentInterrupt(baseSpellID) then
+        self:LearnInterruptCooldownCategories(category, startRecoveryCategory)
         return true
     end
-    if category ~= nil then return true end
-    if startRecoveryCategory == nil or startRecoveryCategory == GLOBAL_RECOVERY_CATEGORY then
-        return false
+
+    if type(category) == "number" and self.interruptCooldownCategories[category] then
+        return true
     end
-    return true
+    if type(startRecoveryCategory) == "number"
+        and self.interruptStartRecoveryCategories[startRecoveryCategory]
+    then
+        return true
+    end
+
+    local hasNonGlobalCategory = type(category) == "number"
+        or (type(startRecoveryCategory) == "number" and startRecoveryCategory ~= GLOBAL_RECOVERY_CATEGORY)
+    if hasNonGlobalCategory then
+        return IsRuntimeRelevant()
+    end
+
+    return false
 end
 
 function Data:GetActiveInterrupts()
