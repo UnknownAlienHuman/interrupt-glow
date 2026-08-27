@@ -145,8 +145,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "SPELL_UPDATE_COOLDOWN" then
-        local spellID, baseSpellID, category = ...
-        if IG.Data and not IG.Data:ShouldRefreshForCooldownEvent(spellID, baseSpellID, category) then
+        local spellID, baseSpellID, category, startRecoveryCategory = ...
+        if IG.Data and not IG.Data:ShouldRefreshForCooldownEvent(
+            spellID,
+            baseSpellID,
+            category,
+            startRecoveryCategory
+        ) then
             IG:BumpStat("events.spellCooldownIgnored")
             return
         end
