@@ -209,7 +209,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "ADDON_RESTRICTION_STATE_CHANGED" then
-        local _restrictionType, _state = ...
+        local restrictionType, state = ...
+        if IG.RuntimeProbe then
+            IG.RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
+        end
         IG:BumpStat("events.restrictionChanged")
         IG:MarkCastDirty()
         IG:MarkCooldownDirty(false)
