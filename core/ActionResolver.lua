@@ -44,7 +44,7 @@ local function ReadActionSnapshot(slot)
         local ok, value = pcall(C_ActionBar.IsAssistedCombatAction, slot)
         if ok and IG.CanAccess(value) then assisted = value == true end
     end
-    if assisted == nil then assisted = subType == "assistedcombat" end
+    assisted = assisted == true or subType == "assistedcombat"
 
     local interrupt = nil
     if C_ActionBar and type(C_ActionBar.IsInterruptAction) == "function" then
@@ -75,29 +75,38 @@ local function StoreSnapshot(record, slot, actionType, id, subType, interrupt, a
     return changed
 end
 
+local function GetResolvedSpellID(actionType, id, subType)
+    if actionType == "spell" and type(id) == "number" then return id end
+    if actionType == "macro" and subType == "spell" and type(id) == "number" then return id end
+    return nil
+end
+
 local function ResolveSnapshot(record, slot, actionType, id, subType, interrupt, assisted)
     if assisted == true then return false end
 
-    if interrupt == true then
-        local spellID = nil
-        if actionType == "spell" and type(id) == "number" then
-            spellID = id
-        elseif actionType == "macro" and subType == "spell" and type(id) == "number" then
-            spellID = id
-        end
+    local spellID = GetResolvedSpellID(actionType, id, subType)
 
+    if interrupt == true then
         local canonicalSpellID = spellID and IG.Data:GetCanonicalSpellID(spellID, "action") or nil
-        if spellID and not canonicalSpellID then
-            canonicalSpellID = IG.Data:LearnRuntimeInterrupt(spellID)
-        end
+        if spellID and not canonicalSpellID then canonicalSpellID = IG.Data:LearnRuntimeInterrupt(spellID) end
         canonicalSpellID = canonicalSpellID or spellID
         return true, "action", slot, spellID, canonicalSpellID
     end
 
     if interrupt == false then return false end
 
-    -- If the current build/provider does not expose a readable interrupt flag,
-    -- retain the original direct-spell fallback and fail closed otherwise.
+    -- Compatibility fallback for a future build/provider where the manual
+    -- IsInterruptAction surface is missing or temporarily unreadable. Current
+    -- resolved spell feedback plus the verified/current-spec registry remains
+    -- sufficient; opaque macros fail closed.
+    if spellID then
+        local canonicalSpellID = IG.Data:GetCanonicalSpellID(spellID, "action")
+        if canonicalSpellID then
+            return true, "action", slot, spellID, canonicalSpellID
+        end
+        return false
+    end
+
     return originalResolveRecord(Buttons, record)
 end
 
