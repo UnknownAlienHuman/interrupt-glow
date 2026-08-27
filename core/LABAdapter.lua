@@ -7,7 +7,6 @@ local hooksecurefunc = _G.hooksecurefunc
 local type = type
 local pairs = pairs
 local pcall = pcall
-local rawget = rawget
 
 -- LibActionButton fires OnButtonUpdate after every full visual Update(), which
 -- includes cooldown, usability, target and other high-frequency refreshes. The
@@ -17,12 +16,15 @@ local rawget = rawget
 local hookedButtons = setmetatable({}, { __mode = "k" })
 
 local function CacheIdentity(record, button)
-    if not record or type(button) ~= "table" and type(button) ~= "userdata" then
-        return false
-    end
+    if not record or not button then return false end
 
-    local stateType = rawget(button, "_state_type")
-    local stateAction = rawget(button, "_state_action")
+    -- LAB stores these as ordinary addon-owned fields on its frame object. Use
+    -- the shared protected-index helper because WoW frame objects are not
+    -- guaranteed to be plain Lua tables on every client build.
+    local stateType, typeKnown = IG:ReadMember(button, "_state_type")
+    local stateAction, actionKnown = IG:ReadMember(button, "_state_action")
+    if not typeKnown or not actionKnown then return false end
+
     local changed = record.labStateType ~= stateType or record.labStateAction ~= stateAction
     record.labStateType = stateType
     record.labStateAction = stateAction
