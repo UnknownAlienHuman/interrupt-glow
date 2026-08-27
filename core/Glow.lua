@@ -132,6 +132,12 @@ local function SetCandidate(branch, candidate)
     end
 end
 
+local function ReadinessPending(record)
+    return record
+        and record.ability
+        and record.ability.readinessPending == true
+end
+
 function Glow:CreateShell(record)
     if not record or not record.button then return nil end
     if record.overlay then return record.overlay end
@@ -396,6 +402,7 @@ local function CandidateFor(record, unit)
 
     return IG.DB.enabled == true
         and record.isInterrupt == true
+        and not ReadinessPending(record)
         and record.ready == true
         and castState.active == true
         and castState.hostile == true
@@ -443,6 +450,7 @@ function Glow:RefreshCooldownText(record, now)
     if IG.DB.enabled ~= true
         or not IG.DB.cdText
         or not record.isInterrupt
+        or ReadinessPending(record)
         or record.ready
         or record.restrictedCooldown
     then
