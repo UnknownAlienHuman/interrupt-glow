@@ -6,6 +6,8 @@ local _G = _G
 local GetPetActionSlotUsable = _G.GetPetActionSlotUsable
 local type = type
 local pcall = pcall
+local pairs = pairs
+local next = next
 
 -- PetActionBar uses GetPetActionSlotUsable separately from its checksRange and
 -- inRange fields. Gate only intrinsic pet-action usability; do not turn target
@@ -44,4 +46,36 @@ function Cooldown:RefreshAbility(ability)
     end
 
     return changed
+end
+
+-- Keep cooldown evaluation and visual application inside the shared frame batch.
+-- The base implementation called Glow:RefreshAll() directly and Shared.lua could
+-- then execute the already-dirty visual phase a second time in the same frame.
+function Cooldown:RefreshAll()
+    self.generation = self.generation + 1
+    if self.generation > 2147483000 then
+        self.generation = 1
+        IG:WipeMap(self.cache.action)
+        IG:WipeMap(self.cache.spell)
+        IG:WipeMap(self.cache.pet)
+    end
+
+    IG:BumpStat(next(self.gcdHints) ~= nil and "cooldown.spellEventPasses" or "cooldown.otherPasses")
+
+    local changed = false
+    for _, ability in pairs(IG.AbilityStates) do
+        if ability.sourceKind ~= nil and next(ability.records) ~= nil then
+            if self:RefreshAbility(ability) then changed = true end
+            IG:BumpStat("cooldown.abilitiesEvaluated")
+        end
+    end
+
+    self:ClearGCDHints()
+
+    if changed then
+        -- Shared.Flush processes this later in the same frame; no duplicate pass.
+        IG:MarkVisualDirty()
+    elseif IG.Glow then
+        IG.Glow:UpdateRuntimeDriver()
+    end
 end
