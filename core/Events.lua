@@ -102,14 +102,14 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "PLAYER_TARGET_CHANGED" then
         if IG.Glow then IG.Glow:RefreshUnitRelation() end
-        if IG.CastTracking then IG.CastTracking:RefreshUnit("target") end
+        if IG.CastTracking then IG.CastTracking:RefreshUnit("target", nil, true) end
         if IG.Glow then IG.Glow:RefreshUnit("focus") end
         return
     end
 
     if event == "PLAYER_FOCUS_CHANGED" then
         if IG.Glow then IG.Glow:RefreshUnitRelation() end
-        if IG.CastTracking then IG.CastTracking:RefreshUnit("focus") end
+        if IG.CastTracking then IG.CastTracking:RefreshUnit("focus", nil, true) end
         if IG.Glow then IG.Glow:RefreshUnit("target") end
         return
     end
