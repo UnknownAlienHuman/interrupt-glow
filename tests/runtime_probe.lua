@@ -5,8 +5,15 @@ local printed = {}
 
 InterruptGlow = {
     name = "InterruptGlow",
-    version = "1.1.0-beta.3",
-    DB = { debug = false, debugKeep = 400, debugChat = false },
+    version = "1.1.0-beta.4",
+    DB = {
+        schema = 3,
+        producerVersion = "1.1.0-beta.4",
+        interface = 120100,
+        debug = false,
+        debugKeep = 400,
+        debugChat = false,
+    },
     AbilityStates = {
         [15487] = {
             key = 15487,
@@ -55,6 +62,15 @@ InterruptGlow = {
         buttonForgeAttached = false,
     },
     CDM = { attached = false },
+    Glow = {
+        prewarmFrame = {},
+        runtimeFrame = {},
+        prewarmHead = 1,
+        prewarmTail = 0,
+        prewarmScheduled = false,
+        runtimeWorkerEnabled = false,
+    },
+    flushFrame = {},
     modules = {},
 }
 
@@ -62,12 +78,16 @@ function InterruptGlow:RegisterModule(name, module) self.modules[name] = module 
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:IsInCombat() return false end
 function InterruptGlow:IsAddOnFullyLoaded(name) return name == "Dominos" end
+function InterruptGlow:HasDirtyWork() return false end
 function InterruptGlow:Now() return _G.mockNow end
 function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
 function InterruptGlow:StartProfileCounters() self:WipeMap(self.Stats) end
 function InterruptGlow:StopProfileCounters() end
 function InterruptGlow:Print(message) printed[#printed + 1] = message end
 function InterruptGlow.Data:GetActiveInterrupts() return pairs(self.activeInterrupts) end
+InterruptGlow.Worker = {
+    SupportsOnUpdateMode = function(_, frame) return frame ~= nil end,
+}
 
 UIParent = {}
 ChatFontNormal = {}
@@ -151,9 +171,11 @@ local probe = InterruptGlow.RuntimeProbe
 local initialReport = probe:BuildReport()
 assert(initialReport:find("cooldownPolicy=NeverSecret"))
 assert(initialReport:find("repository=UnknownAlienHuman/interrupt%-glow"))
-assert(initialReport:find("kbCommit=e45366cb0ca56dfe49664daa9f2579e629af0cb3"))
+assert(initialReport:find("kbCommit=071e6a755f4613908d019b23e8e121b0bf91ce5d"))
+assert(initialReport:find("savedSchema=3", 1, true))
 assert(initialReport:find("Dominos.loaded=true"))
 assert(initialReport:find("focus.channelSuppressed=true"))
+assert(initialReport:find("runtime.enabled=false", 1, true))
 assert(initialReport:find("upstream.WOWUI%-2026%-005=ACTIVE_UPSTREAM"))
 
 assert(probe:Start("quick-heal-mouseover") == true)
@@ -169,7 +191,9 @@ metricValues[Enum.AddOnProfilerMetric.CountTimeOver1Ms] = 20
 metricValues[Enum.AddOnProfilerMetric.CountTimeOver5Ms] = 7
 metricValues[Enum.AddOnProfilerMetric.CountTimeOver10Ms] = 3
 mockNow = 120
+local printedBeforeRestriction = #printed
 probe:OnRestrictionStateChanged(1, 2)
+assert(#printed == printedBeforeRestriction, "automatic restriction marker spammed chat")
 assert(probe:Stop() == true)
 probe:Show()
 
@@ -192,5 +216,5 @@ assert(secondReport:find("lastRestrictionState=unobserved", 1, true))
 assert(not secondReport:find("restriction.1=", 1, true))
 assert(probe:Stop() == true)
 
-assert(#printed >= 6)
+assert(#printed >= 5)
 print("RUNTIME PROBE MOCK PASSED")
