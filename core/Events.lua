@@ -94,7 +94,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "PLAYER_ENTERING_WORLD" then
         if IG.Buttons then IG.Buttons:RefreshPetButtons() end
-        IG:MarkCastDirty()
+        if IG.CastTracking and type(IG.CastTracking.ResetAllIdentities) == "function" then
+            IG.CastTracking:ResetAllIdentities(event)
+        else
+            IG:MarkCastDirty()
+        end
         IG:MarkCooldownDirty(false)
         return
     end
@@ -106,14 +110,22 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "PLAYER_TARGET_CHANGED" then
         if IG.Glow then IG.Glow:RefreshUnitRelation() end
-        if IG.CastTracking then IG.CastTracking:RefreshUnit("target", nil, true) end
+        if IG.CastTracking and type(IG.CastTracking.ResetUnitIdentity) == "function" then
+            IG.CastTracking:ResetUnitIdentity("target", event)
+        elseif IG.CastTracking then
+            IG.CastTracking:RefreshUnit("target", nil, true)
+        end
         if IG.Glow then IG.Glow:RefreshUnit("focus") end
         return
     end
 
     if event == "PLAYER_FOCUS_CHANGED" then
         if IG.Glow then IG.Glow:RefreshUnitRelation() end
-        if IG.CastTracking then IG.CastTracking:RefreshUnit("focus", nil, true) end
+        if IG.CastTracking and type(IG.CastTracking.ResetUnitIdentity) == "function" then
+            IG.CastTracking:ResetUnitIdentity("focus", event)
+        elseif IG.CastTracking then
+            IG.CastTracking:RefreshUnit("focus", nil, true)
+        end
         if IG.Glow then IG.Glow:RefreshUnit("target") end
         return
     end
