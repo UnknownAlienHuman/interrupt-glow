@@ -31,7 +31,7 @@ local sort = table.sort
 local concat = table.concat
 local format = string.format
 
-local KB_COMMIT = "e45366cb0ca56dfe49664daa9f2579e629af0cb3"
+local KB_COMMIT = "071e6a755f4613908d019b23e8e121b0bf91ce5d"
 local PROVIDERS = {
     "Bartender4",
     "ElvUI",
@@ -49,6 +49,15 @@ local function SafeScalar(value, fallback)
         return tostring(value)
     end
     return "<" .. valueType .. ">"
+end
+
+local function CaptureScalar(value)
+    if not IG.CanAccess(value) then return nil end
+    local valueType = type(value)
+    if valueType == "string" or valueType == "number" or valueType == "boolean" then
+        return value
+    end
+    return nil
 end
 
 local function SafeCall(fn, ...)
@@ -165,6 +174,9 @@ local function AppendBuildSection(lines)
     AddLine(lines, "sourceBuild=" .. SafeScalar(IG.Data and IG.Data.wowBuild))
     AddLine(lines, "sourceCommit=" .. SafeScalar(IG.Data and IG.Data.sourceCommit))
     AddLine(lines, "kbCommit=" .. KB_COMMIT)
+    AddLine(lines, "savedSchema=" .. SafeScalar(IG.DB and IG.DB.schema))
+    AddLine(lines, "savedProducerVersion=" .. SafeScalar(IG.DB and IG.DB.producerVersion))
+    AddLine(lines, "savedInterface=" .. SafeScalar(IG.DB and IG.DB.interface))
     AddLine(lines, "capturedAt=" .. SafeScalar(type(date) == "function" and date("!%Y-%m-%dT%H:%M:%SZ") or nil))
 end
 
@@ -219,6 +231,31 @@ local function AppendProviderSection(lines)
     AddLine(lines, "dominos.attached=" .. SafeScalar(buttons and buttons.dominosAttached))
     AddLine(lines, "buttonForge.attached=" .. SafeScalar(buttons and buttons.buttonForgeAttached))
     AddLine(lines, "cooldownViewer.attached=" .. SafeScalar(IG.CDM and IG.CDM.attached))
+end
+
+local function AppendWorkerSection(lines)
+    AddLine(lines, "")
+    AddLine(lines, "[workers]")
+
+    local worker = IG.Worker
+    local supportsFlush = false
+    local supportsPrewarm = false
+    local supportsRuntime = false
+    if worker and type(worker.SupportsOnUpdateMode) == "function" then
+        supportsFlush = worker:SupportsOnUpdateMode(IG.flushFrame) == true
+        supportsPrewarm = worker:SupportsOnUpdateMode(IG.Glow and IG.Glow.prewarmFrame) == true
+        supportsRuntime = worker:SupportsOnUpdateMode(IG.Glow and IG.Glow.runtimeFrame) == true
+    end
+
+    AddLine(lines, "flush.onUpdateMode=" .. tostring(supportsFlush))
+    AddLine(lines, "flush.dirty=" .. tostring(IG:HasDirtyWork()))
+    AddLine(lines, "prewarm.onUpdateMode=" .. tostring(supportsPrewarm))
+    AddLine(lines, "prewarm.scheduled=" .. SafeScalar(IG.Glow and IG.Glow.prewarmScheduled))
+    AddLine(lines, "prewarm.pending=" .. tostring(
+        IG.Glow ~= nil and IG.Glow.prewarmHead <= IG.Glow.prewarmTail
+    ))
+    AddLine(lines, "runtime.onUpdateMode=" .. tostring(supportsRuntime))
+    AddLine(lines, "runtime.enabled=" .. SafeScalar(IG.Glow and IG.Glow.runtimeWorkerEnabled))
 end
 
 local function AppendCaptureSection(lines)
@@ -400,6 +437,7 @@ function RuntimeProbe:BuildReport()
     AppendBuildSection(lines)
     AppendContextSection(lines)
     AppendProviderSection(lines)
+    AppendWorkerSection(lines)
     AppendCaptureSection(lines)
     AppendCastSection(lines)
     AppendSecrecySection(lines)
@@ -407,6 +445,18 @@ function RuntimeProbe:BuildReport()
     AppendCountersSection(lines)
     AppendProfilerSection(lines)
     return concat(lines, "\n")
+end
+
+function RuntimeProbe:AddMark(label, announce)
+    if not self.active then return false end
+
+    self.marks[#self.marks + 1] = {
+        elapsed = IG:Now() - self.startedAt,
+        label = NormalizeLabel(label, "mark"),
+        profiler = CaptureProfiler(),
+    }
+    if announce then IG:Print("Capture marker added.") end
+    return true
 end
 
 function RuntimeProbe:Start(label)
@@ -436,14 +486,7 @@ function RuntimeProbe:Mark(label)
         IG:Print("No active capture. Use /iglow capture start.")
         return false
     end
-
-    self.marks[#self.marks + 1] = {
-        elapsed = IG:Now() - self.startedAt,
-        label = NormalizeLabel(label, "mark"),
-        profiler = CaptureProfiler(),
-    }
-    IG:Print("Capture marker added.")
-    return true
+    return self:AddMark(label, true)
 end
 
 function RuntimeProbe:Stop()
@@ -473,8 +516,8 @@ end
 function RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
     if not self.active then return end
 
-    local safeType = IG.CanAccess(restrictionType) and restrictionType or nil
-    local safeState = IG.CanAccess(state) and state or nil
+    local safeType = CaptureScalar(restrictionType)
+    local safeState = CaptureScalar(state)
     self.lastRestrictionType = safeType
     self.lastRestrictionState = safeState
 
@@ -483,8 +526,8 @@ function RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
         restrictionType = safeType,
         state = safeState,
     }
-    self:Mark("restriction type="
+    self:AddMark("restriction type="
         .. SafeScalar(safeType, "unknown")
         .. " state="
-        .. SafeScalar(safeState, "unknown"))
+        .. SafeScalar(safeState, "unknown"), false)
 end
