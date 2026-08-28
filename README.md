@@ -1,6 +1,6 @@
 # Interrupt Glow
 
-Current development version: `1.1.0-beta.3`
+Current development version: `1.1.0-beta.4`
 
 Interrupt Glow highlights the button that currently performs an interrupt when an interruptible hostile cast is active on `target` or `focus` and that ability is ready.
 
@@ -19,11 +19,67 @@ The old scan-driven runtime is gone:
 - Cooldown Viewer uses pooled-item acquire/set/reset lifecycle hooks;
 - no automatic frame enumeration, 540-slot scan, nameplate traversal, macro-body read, or CDM child-tree scan remains.
 
+## Beta.4 hardening
+
+### Explicit worker modes
+
+One-shot dirty work and button prewarming now use Retail 12.1 `SetOnUpdateMode`:
+
+```text
+dirty flush      -> RunOnce
+prewarm slice    -> RunOnce
+active deadlines -> RunAlways
+idle             -> Disabled
+```
+
+The workers are explicitly disabled at construction; they do not remain visible or active merely to discover that there is no work.
+
+### Strict SavedVariables schema
+
+Only typed preferences and producer metadata are retained:
+
+```text
+schema
+producerVersion
+interface
+enabled
+cdText
+cdm
+strictNI
+optimisticRestrictedCooldown
+debug
+debugChat
+debugKeep
+```
+
+Legacy slot/cooldown caches, unknown keys, corrupt types, frame references and transient runtime state are discarded on load. `debugKeep` is clamped to `20..2000`.
+
+### Bounded caches
+
+Dormant ability state is preserved during same-specialization conditional-macro churn to avoid allocation/GC churn. A real specialization change reconciles all buttons, prunes unreferenced abilities and resets source-readiness caches.
+
+### Deferred Cooldown Viewer reconciliation
+
+Blizzard Cooldown Viewer pool hooks now change only ordinary identity and queue one dirty record. Binding and addon-owned visual changes occur on the next addon frame, outside Blizzard reset/layout stacks.
+
+### Conservative GCD handling
+
+Interrupt Glow ignores the global cooldown through:
+
+```lua
+C_ActionBar.GetActionCooldownDuration(slot, true)
+C_Spell.GetSpellCooldownDuration(spellID, true)
+```
+
+`isOnGCD=true` does **not** prove that an active cooldown is only the GCD; a personal cooldown may overlap. Therefore it is never accepted as positive readiness evidence. `UNIT_SPELLCAST_SUCCEEDED` is only an invalidation signal for a confirmed interrupt source.
+
+If the ignore-GCD duration is inaccessible, the fallback is conservative rather than showing a false-ready glow.
+
 ## Channel lifecycle hardening
 
-Current upstream reports show that `UnitChannelInfo` can return stale or phantom channels after a real stop. Interrupt Glow therefore treats synchronous `UNIT_SPELLCAST_CHANNEL_STOP` and `UNIT_SPELLCAST_EMPOWER_STOP` as authoritative. Later channel snapshots are suppressed until a real channel/empower start or a target/focus identity change.
+Current upstream reports show that `UnitChannelInfo` can return stale or phantom channels after a real stop. Interrupt Glow treats synchronous `UNIT_SPELLCAST_CHANNEL_STOP` and `UNIT_SPELLCAST_EMPOWER_STOP` as authoritative. Later channel snapshots are suppressed until a real channel/empower start or a target/focus identity change.
 
-Delayed stop events are matched against the NeverSecret `castBarID`, so a stop from an older cast cannot clear a newer cast. The workaround tracks active issue family `WOWUI-2026-005` and must be retired only after named-build retesting of the target-death, Lightning Lasso and Ray of Frost reproductions.
+Delayed stop events are matched against NeverSecret `castBarID`, so an old stop cannot clear a newer cast. The workaround tracks active issue family `WOWUI-2026-005` and remains until named-build retesting passes target-death, Lightning Lasso and Ray of Frost reproductions.
 
 ## Startup and lifecycle
 
@@ -32,10 +88,9 @@ Interrupt Glow itself is intentionally not LoadOnDemand because it must observe 
 - gameplay events and provider discovery wait for `PLAYER_LOGIN`;
 - already-loaded registries are enumerated once;
 - Bartender, ElvUI, Dominos, ButtonForge and Cooldown Viewer use load-order callbacks;
-- native EventRegistry registration uses Blizzard callback-handle containers when available;
+- native EventRegistry registration uses callback-handle containers when available;
 - Settings controls and report UI are created only when opened;
-- overlays are precreated outside combat in bounded batches;
-- timing drivers are hidden while idle;
+- overlays are created outside combat in bounded batches;
 - no frames are created during combat.
 
 ## In-client runtime probe
@@ -51,19 +106,9 @@ The probe is disabled until explicitly started:
 /iglow capture show
 ```
 
-Reports include:
+Reports include build/interface, SavedVariables schema, provider state, worker state, normalized target/focus and ability state, current `C_Secrets` policy, the conservative GCD policy, session-only counters and native `C_AddOnProfiler` baselines/deltas through `CountTimeOver1000Ms`.
 
-- build/interface and pinned source revisions;
-- instance/restriction context;
-- provider loaded/attached state;
-- normalized target/focus and ability state;
-- current `C_Secrets` policy;
-- session-only internal counters;
-- native `C_AddOnProfiler` start/end snapshots;
-- threshold-count deltas through `CountTimeOver1000Ms`;
-- marker-level profiler snapshots.
-
-Blizzard profiler counters are application-session cumulative. The probe records a baseline and subtracts counts at stop; it does not pretend to reset native counters. See [Runtime probe](docs/RUNTIME_PROBE.md).
+Blizzard profiler counters are application-session cumulative. The probe records a baseline and subtracts threshold counts; it does not pretend to reset native counters. See [Runtime probe](docs/RUNTIME_PROBE.md).
 
 ## Supported button systems
 
@@ -96,7 +141,7 @@ Single Button Assistant next-action highlighting remains intentionally excluded 
 Repository rules are in `AGENTS.md`. Shared workflow is pinned to:
 
 ```text
-UnknownAlienHuman/wow-addon-engineering-kb@e45366cb0ca56dfe49664daa9f2579e629af0cb3
+UnknownAlienHuman/wow-addon-engineering-kb@312085aa8d23dfe283b416ba0f394fef1cae22dd
 ```
 
 Platform source is pinned to:
@@ -106,26 +151,16 @@ Gethe/wow-ui-source@027d26c3406d3de2cbd2b1f67d468fe033a1bcd4
 WoW 12.1.0.69497 / Interface 120100
 ```
 
-The shared KB currently mentions `SPELL_SECRECY_CHANGED`, but the symbol is not confirmed in the pinned generated docs or implementation. Interrupt Glow does not register an unverified event.
+`SPELL_SECRECY_CHANGED` remains unconfirmed in the pinned generated docs and implementation. Interrupt Glow does not register an unverified event.
 
 ## Validation boundary
 
-Local Lua/mock checks catch syntax and state-machine regressions only. GitHub Actions workflows remain absent. Stable release still requires live-client evidence for:
-
-- Quick Heal `@mouseover` stress;
-- default UI, InterruptGlow-only, provider, and full-stack attribution runs;
-- Mythic+, raid and PvP restrictions;
-- `taintLog 2` and forbidden/blocked errors;
-- current Bartender, ElvUI, Dominos and ButtonForge versions;
-- Warlock pet/sacrifice/Command Demon/Call Felhunter variants;
-- Protection Warrior dual interrupts;
-- Cooldown Viewer pool reuse;
-- target-death, Lightning Lasso and Ray of Frost phantom-channel scenarios.
+Local Lua/mock checks catch syntax and modeled state-machine regressions only. GitHub Actions workflows remain absent. Stable release still requires live-client evidence for Quick Heal mouseover stress, GCD/personal-cooldown overlap, default/provider/full-stack attribution, restricted contexts, taint, provider versions, Warlock/PWarrior variants, Cooldown Viewer pool reuse and the active phantom-channel scenarios.
 
 ## Metadata
 
 - Interface: `120100`
-- Version: `1.1.0-beta.3`
+- Version: `1.1.0-beta.4`
 - Author: Neomorph
 - Saved variables: `InterruptGlowDB`
 
