@@ -11,7 +11,7 @@ section: namespace.InterruptSpellsBySpec
 
 `Blizzard_CooldownBroadcaster` is an internal LoadOnDemand MDI component. Interrupt Glow does **not** load or reference it at runtime. Its table is a reviewed build-time source for ordinary specialization interrupts, not an exhaustive PvP/direct-pet registry.
 
-Slot-backed action buttons remain authoritative at runtime through `C_ActionBar.IsInterruptAction(slot)`. The static data is used for direct spell buttons, pet aliases and Cooldown Viewer identity.
+Slot-backed action buttons remain authoritative at runtime through `C_ActionBar.IsInterruptAction(slot)`. Static data is used for direct spell buttons, pet aliases and Cooldown Viewer identity.
 
 | Class | Specialization | Spec ID | Ordinary interrupt IDs |
 |---|---|---:|---|
@@ -43,50 +43,37 @@ Slot-backed action buttons remain authoritative at runtime through `C_ActionBar.
 | Shaman | Elemental | 262 | `57994` Wind Shear |
 | Shaman | Enhancement | 263 | `57994` Wind Shear |
 | Shaman | Restoration | 264 | `57994` Wind Shear |
-| Warlock | Affliction | 265 | `119910` Spell Lock (Command Demon), `132409` Spell Lock (Grimoire of Sacrifice) |
-| Warlock | Demonology | 266 | `119910` Spell Lock (Command Demon), `119914` Axe Toss (Command Demon) |
-| Warlock | Destruction | 267 | `119910` Spell Lock (Command Demon), `132409` Spell Lock (Grimoire of Sacrifice) |
+| Warlock | Affliction | 265 | `119910` Command Demon Spell Lock, `132409` Grimoire of Sacrifice Spell Lock |
+| Warlock | Demonology | 266 | `119910` Command Demon Spell Lock, `119914` Command Demon Axe Toss |
+| Warlock | Destruction | 267 | `119910` Command Demon Spell Lock, `132409` Grimoire of Sacrifice Spell Lock |
 | Warrior | Arms | 71 | `6552` Pummel |
 | Warrior | Fury | 72 | `6552` Pummel |
 | Warrior | Protection | 73 | `6552` Pummel, `386071` Disrupting Shout |
 
-## Verified exceptions outside the MDI snapshot
-
-These are maintained outside the generated block so a Blizzard snapshot refresh cannot silently delete them:
+## Reviewed exceptions outside the MDI snapshot
 
 | Specs | ID | Ability | Reason |
 |---|---:|---|---|
-| Warlock 265/266/267 | `212619` | Call Felhunter | Current PvP-talent interrupt; absent from the MDI-oriented list |
+| Warlock 265/266/267 | `212619` | Call Felhunter | PvP-talent interrupt absent from the MDI-oriented table |
 
-Every exception is still gated at runtime by `C_SpellBook.IsSpellKnownOrInSpellBook`. Talent/PvP invalidation listens to the same wider event family used by Blizzard Cooldown Viewer: active combat config, talent group, trait config, PvP talent and `SPELLS_CHANGED`.
+Every exception is still gated by `C_SpellBook.IsSpellKnownOrInSpellBook`. Talent/PvP invalidation listens to active combat config, talent group, trait config, PvP talent and `SPELLS_CHANGED`.
 
 ## Specializations absent from the ordinary snapshot
 
-The Blizzard table does not list an ordinary interrupt for:
-
-- Restoration Druid;
-- Preservation Evoker;
-- Mistweaver Monk;
-- Holy Paladin;
-- Discipline Priest;
-- Holy Priest.
-
-Interrupt Glow does not statically assume class-wide availability for those specs. If a current slot is nevertheless classified by Blizzard as an interrupt, its spell family is learned for the current session.
+The Blizzard table does not list an ordinary interrupt for Restoration Druid, Preservation Evoker, Mistweaver Monk, Holy Paladin, Discipline Priest or Holy Priest. Interrupt Glow does not statically assume class-wide availability. If Blizzard classifies a current slot as an interrupt, its spell family may be learned for the current specialization/session.
 
 ## Pet-action aliases
 
-Accepted only from an actual pet-action source:
+Accepted only from actual pet-action sources:
 
 | Pet action | Canonical player family |
 |---:|---:|
 | `19647` Felhunter Spell Lock | `119910` Command Demon Spell Lock |
 | `89766` Felguard Axe Toss | `119914` Command Demon Axe Toss |
 
-`115781` Optical Blast is not in the current Retail runtime data.
+`115781` Optical Blast is not in current Retail runtime data.
 
 ## Update procedure
-
-From a local checkout of `wow-ui-source`:
 
 ```bash
 python tools/sync_interrupts.py \
@@ -95,13 +82,8 @@ python tools/sync_interrupts.py \
   --check
 ```
 
-After reviewing the patch/build change:
+After reviewing a build change, use `--write`, then update build metadata and live-test every changed specialization, PvP exception and pet mapping. The generated block must not overwrite `EXTRA_INTERRUPTS_BY_SPEC` or `PET_ACTION_ALIASES`.
 
-```bash
-python tools/sync_interrupts.py \
-  --source ../wow-ui-source/Interface/AddOns/Blizzard_CooldownBroadcaster/TrackedCooldowns.lua \
-  --data-file core/Data.lua \
-  --write
-```
+## Readiness note
 
-The generated block must not overwrite `EXTRA_INTERRUPTS_BY_SPEC` or `PET_ACTION_ALIASES`. Update build metadata and live-test every changed spec, PvP exception and pet mapping.
+Interrupt identity and readiness are separate. A correct interrupt ID does not make a button ready. Final readiness also requires ignore-GCD duration, charges, usability, pet state and Loss of Control. `isOnGCD=true` is never accepted as positive readiness proof.
