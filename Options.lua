@@ -163,8 +163,11 @@ function Options:Refresh()
     end
 end
 
-panel.refresh = function() Options:Refresh() end
-panel.default = function()
+local function RefreshPanel()
+    Options:Refresh()
+end
+
+local function ResetDefaults()
     DB.enabled = true
     DB.cdText = false
     DB.cdm = true
@@ -175,8 +178,22 @@ panel.default = function()
     ApplyDefaultsOrFullRefresh()
     Options:Refresh()
 end
-panel.okay = function() end
-panel:SetScript("OnShow", function() Options:Refresh() end)
+
+local function CommitPanel()
+    -- Controls apply immediately; no deferred transaction is kept.
+end
+
+-- Current Canvas Settings contract (10.0+, updated in 11.0/12.x).
+panel.OnRefresh = RefreshPanel
+panel.OnDefault = ResetDefaults
+panel.OnCommit = CommitPanel
+
+-- Legacy Interface Options contract retained for compatibility fallback.
+panel.refresh = RefreshPanel
+panel.default = ResetDefaults
+panel.okay = CommitPanel
+
+panel:SetScript("OnShow", RefreshPanel)
 
 if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
     local category = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
