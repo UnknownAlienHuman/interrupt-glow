@@ -23,6 +23,11 @@ local broadUpdateDisabled = setmetatable({}, { __mode = "k" })
 local slotEventFrame = CreateFrame("Frame")
 slotEventFrame:Hide()
 
+local function IsButtonObject(value)
+    local valueType = type(value)
+    return valueType == "table" or valueType == "userdata"
+end
+
 local function GetIdentity(button)
     if not button then return nil, nil, nil end
 
@@ -115,29 +120,36 @@ local function HookButton(button)
     return true
 end
 
-local function ForEachLibraryButton(library, callback)
+local function ForEachButtonTable(buttons, callback)
     local count = 0
-    if not library then return count end
-
-    if type(library.GetAllButtons) == "function" then
-        local ok, buttons = pcall(library.GetAllButtons, library)
-        if ok and type(buttons) == "table" then
-            for button in pairs(buttons) do
-                count = count + 1
-                callback(button)
-            end
-            return count
-        end
-    end
-
-    local registry = library.buttonRegistry
-    if type(registry) == "table" then
-        for button in pairs(registry) do
+    for key, value in pairs(buttons) do
+        -- Upstream LAB uses a button-keyed set, but forks may expose an array.
+        -- Accept both without treating numeric array indices as frames.
+        local button = IsButtonObject(key) and key or (IsButtonObject(value) and value or nil)
+        if button then
             count = count + 1
             callback(button)
         end
     end
     return count
+end
+
+local function ForEachLibraryButton(library, callback)
+    if not library then return 0 end
+
+    if type(library.GetAllButtons) == "function" then
+        local ok, buttons = pcall(library.GetAllButtons, library)
+        if ok and type(buttons) == "table" then
+            local count = ForEachButtonTable(buttons, callback)
+            if count > 0 then return count end
+        end
+    end
+
+    local registry = library.buttonRegistry
+    if type(registry) == "table" then
+        return ForEachButtonTable(registry, callback)
+    end
+    return 0
 end
 
 local function DisableBroadUpdateIfFullyHooked(library)
@@ -146,8 +158,13 @@ local function DisableBroadUpdateIfFullyHooked(library)
 
     local allHooked = true
     local buttonCount = ForEachLibraryButton(library, function(button)
+        local wasObserved = IG.ObservedButtons[button] ~= nil
         local record = IG.ObservedButtons[button]
-        if record then CacheIdentity(record, button) end
+            or Buttons:ObserveButton(button, "lab", { skipDirty = true })
+        if record then
+            CacheIdentity(record, button)
+            if not wasObserved then IG:MarkButtonDirty(button) end
+        end
         if not HookButton(button) then allHooked = false end
     end)
 
