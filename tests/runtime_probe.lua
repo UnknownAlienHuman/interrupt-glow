@@ -72,6 +72,8 @@ InterruptGlow = {
     },
     flushFrame = {},
     modules = {},
+    profileCountersEnabled = false,
+    profileCounterOwner = nil,
 }
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
@@ -81,8 +83,23 @@ function InterruptGlow:IsAddOnFullyLoaded(name) return name == "Dominos" end
 function InterruptGlow:HasDirtyWork() return false end
 function InterruptGlow:Now() return _G.mockNow end
 function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
-function InterruptGlow:StartProfileCounters() self:WipeMap(self.Stats) end
-function InterruptGlow:StopProfileCounters() end
+function InterruptGlow:StartProfileCounters(owner)
+    if self.profileCounterOwner and self.profileCounterOwner ~= owner then
+        return false, self.profileCounterOwner
+    end
+    self:WipeMap(self.Stats)
+    self.profileCounterOwner = owner
+    self.profileCountersEnabled = true
+    return true, owner
+end
+function InterruptGlow:StopProfileCounters(owner)
+    if self.profileCounterOwner and self.profileCounterOwner ~= owner then
+        return false, self.profileCounterOwner
+    end
+    self.profileCounterOwner = nil
+    self.profileCountersEnabled = false
+    return true
+end
 function InterruptGlow:Print(message) printed[#printed + 1] = message end
 function InterruptGlow.Data:GetActiveInterrupts() return pairs(self.activeInterrupts) end
 InterruptGlow.Worker = {
@@ -177,6 +194,7 @@ assert(initialReport:find("cooldownPolicy=NeverSecret"))
 assert(initialReport:find("repository=UnknownAlienHuman/interrupt%-glow"))
 assert(initialReport:find("kbCommit=312085aa8d23dfe283b416ba0f394fef1cae22dd"))
 assert(initialReport:find("savedSchema=3", 1, true))
+assert(initialReport:find("counterOwner=none", 1, true))
 assert(initialReport:find("Dominos.loaded=true"))
 assert(initialReport:find("focus.channelSuppressed=true"))
 assert(initialReport:find("runtime.enabled=false", 1, true))
@@ -185,6 +203,7 @@ assert(initialReport:find("gcd.isOnGCDReadinessProof=false", 1, true))
 assert(initialReport:find("upstream.WOWUI%-2026%-005=ACTIVE_UPSTREAM"))
 
 assert(probe:Start("quick-heal-mouseover") == true)
+assert(InterruptGlow.profileCounterOwner == "capture")
 metricValues[Enum.AddOnProfilerMetric.PeakTime] = 2.5
 metricValues[Enum.AddOnProfilerMetric.CountTimeOver1Ms] = 14
 metricValues[Enum.AddOnProfilerMetric.CountTimeOver5Ms] = 4
@@ -201,6 +220,7 @@ local printedBeforeRestriction = #printed
 probe:OnRestrictionStateChanged(1, 2)
 assert(#printed == printedBeforeRestriction, "automatic restriction marker spammed chat")
 assert(probe:Stop() == true)
+assert(InterruptGlow.profileCounterOwner == nil)
 probe:Show()
 
 assert(shownReport)
@@ -213,6 +233,16 @@ assert(shownReport:find("delta.PeakTimeIncrease=7.1", 1, true))
 assert(shownReport:find("marker.1.label=friendly-hover", 1, true))
 assert(shownReport:find("restriction.1=20.000 type=1 state=2", 1, true))
 
+-- A manual diagnostic owner must block capture acquisition without losing its
+-- counters or mutating probe state.
+assert(InterruptGlow:StartProfileCounters("manual") == true)
+InterruptGlow.Stats.manual = 7
+assert(probe:Start("blocked-by-manual") == false)
+assert(InterruptGlow.profileCounterOwner == "manual")
+assert(InterruptGlow.Stats.manual == 7)
+assert(probe.active == false)
+assert(InterruptGlow:StopProfileCounters("manual") == true)
+
 -- A new capture must not inherit the previous context's last restriction state.
 mockNow = 130
 assert(probe:Start("second-context") == true)
@@ -222,5 +252,5 @@ assert(secondReport:find("lastRestrictionState=unobserved", 1, true))
 assert(not secondReport:find("restriction.1=", 1, true))
 assert(probe:Stop() == true)
 
-assert(#printed >= 5)
+assert(#printed >= 6)
 print("RUNTIME PROBE MOCK PASSED")
