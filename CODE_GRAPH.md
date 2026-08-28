@@ -10,9 +10,9 @@ InterruptGlow.toc
   -> core/Data.lua
        generated ordinary spec map + reviewed PvP/pet extras + category cache
   -> core/Debug.lua
-       optional normalized log, copyable report window and profiler output
+       normalized log, copyable report and native profiler snapshots/deltas
   -> core/RuntimeProbe.lua
-       session-only build/context/secrecy/state/profiler evidence
+       build/context/provider/secrecy/cast/readiness/profiler evidence
   -> core/Glow.lua
        precreated target/focus alpha gates and relevant-cast-only time driver
   -> core/Buttons.lua
@@ -30,18 +30,18 @@ InterruptGlow.toc
   -> core/Usability.lua
        action/spell usability policy and targeted invalidation
   -> core/CastTracking.lua
-       fixed target/focus watchers and raw secret visual bridge
+       event-authoritative target/focus lifecycle + raw secret visual bridge
   -> core/CDM.lua
        Cooldown Viewer pooled-item lifecycle
   -> core/Events.lua
-       PLAYER_LOGIN gating, optional-provider lifecycle, restriction evidence and bounded invalidation
+       PLAYER_LOGIN gating, unit-identity resets, restriction evidence and bounded invalidation
   -> core/Slash.lua
        user controls and runtime capture commands
   -> Options.lua
        bare Settings canvas; controls built on first show
 ```
 
-## Runtime data flow
+## Action/readiness flow
 
 ```text
 Blizzard native callback
@@ -52,43 +52,75 @@ Blizzard native callback
 LAB conditional macro
   -> ACTIONBAR_SLOT_CHANGED(slot)
   -> LABAdapter buttonsBySlot[slot]
-  -> only existing buttons for that slot become dirty
+  -> dirty only existing buttons for that slot
 
 Dirty button
   -> Buttons:ReconcileRecord
-  -> shared dormant-capable AbilityState
-  -> generation-valid readiness reused or one cooldown evaluation queued
+  -> shared AbilityState
+  -> generation-valid readiness reused or one bounded evaluation queued
   -> Glow:RefreshRecord
-
-Target/focus UNIT_SPELLCAST event
-  -> CastTracking direct UnitCastingInfo/UnitChannelInfo
-  -> NeverSecret active/castBarID state
-  -> raw notInterruptible remains local
-  -> childTexture:SetAlphaFromBoolean(raw, 0, 255)
-  -> ordinary parent receives candidate alpha/animation
-
-Explicit runtime capture
-  -> session counters enabled
-  -> build/context/restriction/secrecy/normalized-state/profiler snapshot
-  -> copyable addon-owned report window
-  -> no raw SecretValue retained
 ```
 
-## Lifecycle
+## Cast flow
+
+```text
+START / INTERRUPTIBILITY event
+  -> fixed target/focus watcher
+  -> UnitCastingInfo / permitted UnitChannelInfo snapshot
+  -> NeverSecret presence/castBarID normalization
+  -> raw notInterruptible remains local
+  -> childTexture:SetAlphaFromBoolean(raw, 0, 255)
+
+CHANNEL_STOP / EMPOWER_STOP
+  -> read only NeverSecret event castBarID
+  -> ignore stale stop for an older cast
+  -> set channel snapshot suppression
+  -> clear normalized state synchronously
+
+later unit-state event while suppressed
+  -> UnitCastingInfo remains permitted
+  -> UnitChannelInfo skipped
+
+unit identity change or real channel start
+  -> clear suppression
+  -> permit one fresh snapshot
+```
+
+## Runtime evidence flow
+
+```text
+/iglow capture start
+  -> clear addon-owned counters
+  -> native profiler baseline
+
+capture marks
+  -> elapsed marker + native profiler snapshot
+
+restriction transition
+  -> record accessible event payload
+  -> marker snapshot
+
+/iglow capture stop
+  -> native profiler final snapshot
+  -> subtract cumulative threshold counters
+  -> preserve PeakTime start/end/increase
+  -> copyable report with no raw SecretValue
+```
+
+## Callback lifecycle
 
 ```text
 Buttons:AttachNative
   -> NativeCallbackPolicy
   -> EventUtil.CreateCallbackHandleContainer when supported
   -> exact unregister on Detach
-  -> legacy owner-based callback fallback otherwise
+  -> owner-based fallback otherwise
 
 Permanent hooksecurefunc integrations
-  -> attach-once
-  -> cheap attached flag in post-hook
-  -> no attempt to unhook unsupported permanent hooks
+  -> attach once
+  -> cheap attached guard after detach
 ```
 
 ## Validation boundary
 
-Local scripts may catch syntax, source drift and state-machine errors. GitHub Actions workflows remain absent. WoW FPS, taint, protected execution and contextual SecretValue behavior require `/iglow capture ...` plus live-client smoke tests.
+Local scripts catch syntax, source drift and modeled state-machine errors. GitHub Actions workflows remain absent. WoW FPS, taint, protected execution, contextual SecretValue behavior, provider attribution and upstream channel-fix retirement require explicit live-client captures.
