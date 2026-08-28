@@ -155,6 +155,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if IG.CanAccess(spellID) and type(spellID) == "number" and IG.Data then
             local sourceKind = unit == "pet" and "pet" or "spell"
             if IG.Data:GetCanonicalSpellID(spellID, sourceKind) then
+                -- This is only an interrupt-source invalidation signal. It is
+                -- never treated as proof that a GCD started or ended.
                 IG:BumpStat("events.interruptSucceeded")
                 IG:MarkCooldownDirty(false)
             end
@@ -163,10 +165,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "SPELL_UPDATE_COOLDOWN" then
-        if not RuntimeNeedsReadiness() then
-            if IG.Cooldown then IG.Cooldown:ClearGCDHints() end
-            return
-        end
+        if not RuntimeNeedsReadiness() then return end
 
         local spellID, baseSpellID, category, startRecoveryCategory = ...
         if IG.Data and not IG.Data:ShouldRefreshForCooldownEvent(
@@ -178,9 +177,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
             IG:BumpStat("events.spellCooldownIgnored")
             return
         end
+
+        -- Readiness ignores the global cooldown through the duration API's
+        -- ignoreGlobalCooldown flag. `isOnGCD` is not collected as a positive
+        -- readiness hint because it cannot prove absence of a personal cooldown.
         IG:BumpStat("events.spellCooldown")
-        if IG.Cooldown then IG.Cooldown:CaptureGCDHints() end
-        IG:MarkCooldownDirty(true)
+        IG:MarkCooldownDirty(false)
         return
     end
 
