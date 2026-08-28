@@ -2,12 +2,16 @@ local IG = _G.InterruptGlow
 if not IG then return end
 
 local DB = IG.DB
-local Options = { built = false, controls = {} }
+local Options = {
+    built = false,
+    buildDeferred = false,
+    controls = {},
+}
 IG.Options = Options
 IG:RegisterModule("Options", Options)
 
 -- Register only a bare canvas at addon load. Font strings, check buttons and
--- action buttons are created on the first Settings visit, not during login.
+-- action buttons are created on the first out-of-combat Settings visit.
 local panel = CreateFrame("Frame", "InterruptGlowOptionsPanel", UIParent)
 panel.name = "Interrupt Glow"
 Options.panel = panel
@@ -35,7 +39,18 @@ local function CreateCheckButton(anchor, offsetY, label, tooltip, getter, setter
 end
 
 function Options:Build()
-    if self.built then return end
+    if self.built then return true end
+
+    -- Settings can be opened in combat. Keep the already-registered bare canvas,
+    -- but never create addon-owned font strings, check buttons or action buttons
+    -- until combat ends. PLAYER_REGEN_ENABLED completes the build only if the
+    -- panel is still shown; otherwise the next OnShow does it.
+    if IG:IsInCombat() then
+        self.buildDeferred = true
+        return false
+    end
+
+    self.buildDeferred = false
     self.built = true
     IG:BumpStat("ui.optionsBuilt")
 
@@ -153,18 +168,30 @@ function Options:Build()
         if IG.Buttons then IG.Buttons:DiscoverAll(true) end
         if IG.CDM then IG.CDM:ObserveExistingItems() end
     end)
+
+    return true
 end
 
 function Options:Refresh()
-    self:Build()
+    if not self:Build() then return false end
+
     for index = 1, #self.controls do
         local control = self.controls[index]
         if control.RefreshValue then control:RefreshValue() end
     end
+    return true
+end
+
+function Options:OnCombatEnded()
+    if not self.buildDeferred then return false end
+    if type(panel.IsShown) == "function" and not panel:IsShown() then
+        return false
+    end
+    return self:Refresh()
 end
 
 local function RefreshPanel()
-    Options:Refresh()
+    return Options:Refresh()
 end
 
 local function ResetDefaults()
