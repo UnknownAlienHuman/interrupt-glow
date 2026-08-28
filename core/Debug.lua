@@ -16,6 +16,22 @@ local math_max = math.max
 local type = type
 local tostring = tostring
 
+local PROFILER_METRICS = {
+    { "SessionAverageTime", "SessionAverageTime", false },
+    { "RecentAverageTime", "RecentAverageTime", false },
+    { "EncounterAverageTime", "EncounterAverageTime", false },
+    { "LastTime", "LastTime", false },
+    { "PeakTime", "PeakTime", false },
+    { "CountTimeOver1Ms", "CountTimeOver1Ms", true },
+    { "CountTimeOver5Ms", "CountTimeOver5Ms", true },
+    { "CountTimeOver10Ms", "CountTimeOver10Ms", true },
+    { "CountTimeOver50Ms", "CountTimeOver50Ms", true },
+    { "CountTimeOver100Ms", "CountTimeOver100Ms", true },
+    { "CountTimeOver500Ms", "CountTimeOver500Ms", true },
+    { "CountTimeOver1000Ms", "CountTimeOver1000Ms", true },
+}
+Debug.profilerMetrics = PROFILER_METRICS
+
 local function SafeText(value, fallback)
     if not IG.CanAccess(value) then return "<inaccessible>" end
     if value == nil then return fallback or "" end
@@ -26,6 +42,7 @@ local function SafeText(value, fallback)
     end
     return "<" .. valueType .. ">"
 end
+Debug.SafeText = SafeText
 
 function Debug:Log(category, message)
     if not IG.DB.debug then return end
@@ -139,35 +156,91 @@ function Debug:Show(limit)
     self:ShowText("Interrupt Glow Debug Log", self:GetLines(limit))
 end
 
-function Debug:ProfilerReport()
+-- Native C_AddOnProfiler counters are application-session cumulative values.
+-- A capture records a start snapshot and subtracts cumulative threshold counts
+-- at the end; it never pretends that those counters were reset.
+function Debug:ProfilerSnapshot()
     local profiler = _G.C_AddOnProfiler
     local enum = _G.Enum and _G.Enum.AddOnProfilerMetric
-    if not profiler or not enum or type(profiler.GetAddOnMetric) ~= "function" then
-        return "C_AddOnProfiler is unavailable."
-    end
-
-    local metrics = {
-        { "RecentAverageTime", enum.RecentAverageTime },
-        { "EncounterAverageTime", enum.EncounterAverageTime },
-        { "LastTime", enum.LastTime },
-        { "PeakTime", enum.PeakTime },
-        { "CountTimeOver1Ms", enum.CountTimeOver1Ms },
-        { "CountTimeOver5Ms", enum.CountTimeOver5Ms },
-        { "CountTimeOver10Ms", enum.CountTimeOver10Ms },
-        { "CountTimeOver50Ms", enum.CountTimeOver50Ms },
+    local snapshot = {
+        available = false,
+        enabled = nil,
+        ticksPerSecond = nil,
+        metrics = {},
     }
 
-    local output = {}
-    local count = 0
-    for index = 1, #metrics do
-        local entry = metrics[index]
-        local ok, value = pcall(profiler.GetAddOnMetric, IG.name, entry[2])
-        if ok and IG.CanAccess(value) then
-            count = count + 1
-            output[count] = format("%-24s %s", entry[1], SafeText(value, "0"))
+    if not profiler or not enum or type(profiler.GetAddOnMetric) ~= "function" then
+        return snapshot
+    end
+
+    snapshot.available = true
+
+    if type(profiler.IsEnabled) == "function" then
+        local ok, value = pcall(profiler.IsEnabled)
+        if ok and IG.CanAccess(value) and type(value) == "boolean" then
+            snapshot.enabled = value
         end
     end
 
-    if count == 0 then return "No profiler metrics returned for " .. IG.name .. "." end
+    if snapshot.enabled == false then return snapshot end
+
+    if type(profiler.GetTicksPerSecond) == "function" then
+        local ok, value = pcall(profiler.GetTicksPerSecond)
+        if ok and IG.CanAccess(value) then snapshot.ticksPerSecond = value end
+    end
+
+    for index = 1, #PROFILER_METRICS do
+        local entry = PROFILER_METRICS[index]
+        local metric = enum[entry[2]]
+        if metric ~= nil then
+            local ok, value = pcall(profiler.GetAddOnMetric, IG.name, metric)
+            if ok and IG.CanAccess(value) and type(value) == "number" then
+                snapshot.metrics[entry[1]] = value
+            end
+        end
+    end
+
+    return snapshot
+end
+
+function Debug:ProfilerDelta(startSnapshot, endSnapshot)
+    local delta = { metrics = {}, peakIncrease = nil }
+    local startMetrics = startSnapshot and startSnapshot.metrics or {}
+    local endMetrics = endSnapshot and endSnapshot.metrics or {}
+
+    for index = 1, #PROFILER_METRICS do
+        local entry = PROFILER_METRICS[index]
+        if entry[3] == true then
+            local before = startMetrics[entry[1]]
+            local after = endMetrics[entry[1]]
+            if type(before) == "number" and type(after) == "number" then
+                delta.metrics[entry[1]] = after - before
+            end
+        end
+    end
+
+    local beforePeak = startMetrics.PeakTime
+    local afterPeak = endMetrics.PeakTime
+    if type(beforePeak) == "number" and type(afterPeak) == "number" then
+        delta.peakIncrease = afterPeak - beforePeak
+    end
+    return delta
+end
+
+function Debug:ProfilerReport(snapshot)
+    snapshot = snapshot or self:ProfilerSnapshot()
+    if not snapshot.available then return "C_AddOnProfiler is unavailable." end
+
+    local output = {
+        "enabled=" .. SafeText(snapshot.enabled, "unknown"),
+        "ticksPerSecond=" .. SafeText(snapshot.ticksPerSecond, "unknown"),
+    }
+
+    for index = 1, #PROFILER_METRICS do
+        local name = PROFILER_METRICS[index][1]
+        local value = snapshot.metrics[name]
+        if value ~= nil then output[#output + 1] = name .. "=" .. SafeText(value) end
+    end
+
     return concat(output, "\n")
 end
