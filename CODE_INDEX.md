@@ -1,29 +1,31 @@
 # Code index
 
-- `AGENTS.md` — canonical project rules, source hierarchy, security and live-validation contract.
+- `AGENTS.md` — canonical project rules, current KB pin, active upstream issues and live-validation contract.
 - `AGENT_GUIDE.md` — compatibility pointer to `AGENTS.md`.
-- `Core.lua` — addon namespace and module registry.
+- `Core.lua` — addon namespace, version fallback and module registry.
 - `core/Shared.lua` — DB migration, access gates, dirty queue and frame-batched state flush.
 - `core/DiagnosticsPolicy.lua` — dormant production counters and inaccessible-safe chat output.
 - `core/Data.lua` — generated ordinary spec registry, reviewed PvP/pet exceptions, runtime-learned identities and cooldown-category filtering.
-- `core/Debug.lua` — optional normalized ring log, copyable report window and on-demand Blizzard profiler output.
-- `core/RuntimeProbe.lua` — session-only in-client build/context/secrecy/state/profiler evidence collector.
+- `core/Debug.lua` — normalized ring log, copyable report window and native profiler start/end/delta primitives.
+- `core/RuntimeProbe.lua` — session-only build/context/provider/secrecy/cast/readiness/profiler evidence collector.
 - `core/Glow.lua` — incrementally prewarmed target/focus alpha gates and relevant-cast-only timing driver.
 - `core/Buttons.lua` — provider registries, ButtonForge/Dominos/pet/CDM adapters and canonical ability records.
-- `core/NativeCallbackPolicy.lua` — handle-container lifecycle for `ActionButton.OnActionChanged`, with compatibility fallback.
+- `core/NativeCallbackPolicy.lua` — callback-handle lifecycle for `ActionButton.OnActionChanged`, with compatibility fallback.
 - `core/LABAdapter.lua` — exact LibActionButton action hooks and changed-slot-to-known-buttons routing.
 - `core/ActionResolver.lua` — deduplicated current action feedback, Assisted Combat exclusion and authoritative interrupt classification.
 - `core/Cooldown.lua` — cached per-source readiness, event-time GCD hints, charges, LoC and accessible deadlines.
 - `core/ReadinessPolicy.lua` — hard pet-usability/LoC policy and non-duplicating visual scheduling.
 - `core/Usability.lua` — action/spell usability gates and targeted usability invalidation.
-- `core/CastTracking.lua` — fixed target/focus watchers and the sole raw SecretValue visual bridge.
+- `core/CastTracking.lua` — fixed target/focus watchers, event-authoritative channel lifecycle, stale-stop guard and sole raw SecretValue visual bridge.
 - `core/CDM.lua` — Cooldown Viewer acquire/set/reset lifecycle, duplicate suppression and off/on rebinding.
-- `core/Events.lua` — `PLAYER_LOGIN`-gated gameplay events, restriction capture and bounded invalidation.
-- `core/Slash.lua` — runtime probe, session diagnostics and manual bounded discovery commands.
+- `core/Events.lua` — `PLAYER_LOGIN`-gated gameplay events, target/focus identity resets, restriction capture and bounded invalidation.
+- `core/Slash.lua` — runtime capture, session diagnostics and manual bounded discovery commands.
 - `Options.lua` — lazy Settings canvas and policy controls.
-- `docs/RUNTIME_PROBE.md` — exact live-client capture procedure and evidence boundary.
+- `docs/RUNTIME_PROBE.md` — equal-input attribution, Quick Heal capture and upstream phantom-channel smoke matrix.
+- `docs/PERFORMANCE_MODEL.md` — runtime complexity and native profiler interpretation contract.
 - `tools/sync_interrupts.py` — local build-time sync/check against Blizzard ordinary `InterruptSpellsBySpec` data.
 - `tests/static_checks.py` — optional local architecture/source invariants; not a WoW acceptance test.
 - `tests/mock_wow.lua` — optional local state-machine regression model; not a WoW client.
-- `tests/runtime_probe.lua` — proves probe report/capture/restriction paths execute.
+- `tests/runtime_probe.lua` — proves provider/state/profiler-delta/restriction evidence and fresh-capture reset.
 - `tests/native_callback_handles.lua` — proves native callback registration is attach-once and unregisterable.
+- `tests/channel_guard.lua` — proves stale channel snapshots cannot resurrect stopped casts and old stop events cannot clear newer casts.
