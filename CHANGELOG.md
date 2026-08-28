@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0-beta.5
+
+- Fix inaccessible Loss of Control handling: secret/restricted LoC information now hard-fails closed instead of being treated as clear, and optimistic cooldown compatibility cannot bypass it.
+- Add a focused action/spell LoC regression test covering restricted data, optimistic mode, and accessible nil/no-LoC behavior.
+- Align the static validation contract and release metadata with `1.1.0-beta.5`.
+- Harden canonical readiness source selection across action, pet, direct spell, ButtonForge and Cooldown Viewer copies.
+- Reconcile canonical sources before the batched readiness filter so a bound ability with a temporarily missing source cannot be skipped for a full generation.
+- Preserve runtime-discovered interrupt families across base/override aliases while revalidating current spellbook availability.
+- Keep Cooldown Viewer identity captured at its pool callback and defer bind/unbind and visual work to the addon-owned frame batch.
+- Retire broad LibActionButton visual callbacks after late-created buttons expose exact `UpdateAction` hooks; support both set-style and array-style LAB registries.
+- Bound prewarm work by records inspected, not only successful shell allocations.
+- Add explicit ownership for manual and capture counter windows and bound runtime-probe markers/restriction evidence.
+- Implement current Canvas Settings lifecycle methods and defer first control creation until out of combat.
+- Keep `UNIT_SPELLCAST_SUCCEEDED` payload access-gated and use inaccessible payloads only as a bounded fail-closed invalidation signal.
+- Keep GitHub Actions workflows absent; local and live-client validation remain separate gates.
+
 ## 1.1.0-beta.4
 
 - Repin the shared workflow to `wow-addon-engineering-kb@312085aa8d23dfe283b416ba0f394fef1cae22dd` and follow its current-first event, performance, persistence, hook and GCD guidance.
