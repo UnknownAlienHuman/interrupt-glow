@@ -22,8 +22,10 @@ core/ReadinessPolicy.lua
 core/Usability.lua
 core/GCDSafetyPolicy.lua
 core/CachePolicy.lua
+core/AbilitySourcePolicy.lua
 core/CastTracking.lua
 core/CDM.lua
+core/CDMPolicy.lua
 core/Events.lua
 core/Slash.lua
 Options.lua
