@@ -24,6 +24,7 @@ local requiredOrder = {
     "core/RuntimeProbe.lua",
     "core/RuntimeProbePolicy.lua",
     "core/Glow.lua",
+    "core/PrewarmPolicy.lua",
     "core/Buttons.lua",
     "core/ActionResolver.lua",
     "core/Cooldown.lua",
@@ -49,6 +50,8 @@ end
 
 assert(positions["core/RuntimeProbe.lua"] < positions["core/RuntimeProbePolicy.lua"])
 assert(positions["core/RuntimeProbePolicy.lua"] < positions["core/Glow.lua"])
+assert(positions["core/Glow.lua"] < positions["core/PrewarmPolicy.lua"])
+assert(positions["core/PrewarmPolicy.lua"] < positions["core/Buttons.lua"])
 assert(positions["core/AbilitySourcePolicy.lua"] < positions["core/CastTracking.lua"])
 assert(positions["core/CDM.lua"] < positions["core/CDMPolicy.lua"])
 assert(positions["core/CDMPolicy.lua"] < positions["core/Events.lua"])
