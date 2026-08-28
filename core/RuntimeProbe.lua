@@ -31,7 +31,7 @@ local sort = table.sort
 local concat = table.concat
 local format = string.format
 
-local KB_COMMIT = "071e6a755f4613908d019b23e8e121b0bf91ce5d"
+local KB_COMMIT = "312085aa8d23dfe283b416ba0f394fef1cae22dd"
 local PROVIDERS = {
     "Bartender4",
     "ElvUI",
@@ -258,6 +258,21 @@ local function AppendWorkerSection(lines)
     AddLine(lines, "runtime.enabled=" .. SafeScalar(IG.Glow and IG.Glow.runtimeWorkerEnabled))
 end
 
+local function AppendPolicySection(lines)
+    AddLine(lines, "")
+    AddLine(lines, "[policies]")
+
+    local policy = IG.modules and IG.modules.GCDSafetyPolicy or nil
+    AddLine(lines, "gcd.ignoreGlobalCooldownDuration=" .. SafeScalar(
+        policy and policy.ignoresGlobalCooldownInDurationAPI,
+        "unknown"
+    ))
+    AddLine(lines, "gcd.isOnGCDReadinessProof=" .. SafeScalar(
+        policy and policy.treatsIsOnGCDAsReadinessProof,
+        "unknown"
+    ))
+end
+
 local function AppendCaptureSection(lines)
     AddLine(lines, "")
     AddLine(lines, "[capture]")
@@ -438,6 +453,7 @@ function RuntimeProbe:BuildReport()
     AppendContextSection(lines)
     AppendProviderSection(lines)
     AppendWorkerSection(lines)
+    AppendPolicySection(lines)
     AppendCaptureSection(lines)
     AppendCastSection(lines)
     AppendSecrecySection(lines)
