@@ -63,7 +63,7 @@ assert(ready == nil and remaining == nil)
 assert(readinessRestricted == true and timingRestricted == true)
 assert(needsPoll == false and hardRestricted == true)
 
--- Even the compatibility option may not turn inaccessible LoC into a ready glow.
+-- The optimistic option may not turn inaccessible LoC into a ready glow.
 local record = {}
 local ability = {
     key = 15487,
