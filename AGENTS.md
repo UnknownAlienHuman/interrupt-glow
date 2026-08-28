@@ -37,7 +37,8 @@ Read this repository first. Then route through the KB and pinned Blizzard source
 11. `isOnGCD` may be normalized only during `SPELL_UPDATE_COOLDOWN` dispatch.
 12. Restricted Loss of Control and inaccessible action/spell/pet usability are hard fail-closed gates.
 13. A synchronous cast/channel stop is authoritative over a later `UnitChannelInfo` snapshot until a real start or unit-identity reset.
-14. Keep GitHub Actions workflows absent. Live WoW FPS, taint, secure execution, and restricted contexts are the release gate.
+14. `RegisterUnitEvent` filters must be passed as unit varargs. Never pass a unit-token table; current field evidence tracks table-form behavior as an unresolved contract issue.
+15. Keep GitHub Actions workflows absent. Live WoW FPS, taint, secure execution, and restricted contexts are the release gate.
 
 ## Lifecycle contract
 
@@ -46,6 +47,7 @@ Read this repository first. Then route through the KB and pinned Blizzard source
 - Permanent `hooksecurefunc` hooks must have a cheap module-attached guard.
 - New visual objects are created out of combat and reused.
 - Target/focus identity changes explicitly reset channel-snapshot suppression; generic unit-state events do not.
+- Fixed target/focus watchers use direct `RegisterUnitEvent(event, unit)` calls; do not replace them with a table-form helper.
 
 ## Active upstream issue contract
 
@@ -59,6 +61,8 @@ Retirement gate:
 4. only then remove the active workaround and current documentation route.
 
 Do not close or silently remove the workaround merely because source changed.
+
+`WOWUI-2026-009` tracks the unresolved `RegisterUnitEvent` table-vs-varargs behavior. Interrupt Glow already uses explicit unit varargs and must preserve that form until the public contract and current Blizzard callers converge.
 
 ## Secrecy policy
 
@@ -110,4 +114,5 @@ Missing tooling is `skipped`, never `pass`. Offline/mock checks do not prove WoW
 - Protection Warrior dual interrupts;
 - Cooldown Viewer pool reuse;
 - target-death channel, Lightning Lasso, and Ray of Frost phantom-channel repros;
+- direct verification that target/focus `RegisterUnitEvent` filtering does not leak unrelated units;
 - native profiler baseline/delta capture.
