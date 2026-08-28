@@ -46,7 +46,8 @@ function UnitIsDeadOrGhost(_) return false end
 function CreateFrame()
     local frame = { scripts = {} }
     function frame:RegisterUnitEvent(event, unit)
-        registeredEvents[event] = unit
+        registeredEvents[event] = registeredEvents[event] or {}
+        registeredEvents[event][unit] = true
     end
     function frame:UnregisterAllEvents() end
     function frame:SetScript(name, fn) self.scripts[name] = fn end
@@ -63,8 +64,8 @@ tracker:Attach()
 local state = InterruptGlow.CastState.target
 assert(state.active == true and state.isChannel == true)
 assert(state.castBarID == 10)
-assert(registeredEvents.UNIT_SPELLCAST_CHANNEL_UPDATE == "target")
-assert(registeredEvents.UNIT_SPELLCAST_EMPOWER_UPDATE == "target")
+assert(registeredEvents.UNIT_SPELLCAST_CHANNEL_UPDATE.target == true)
+assert(registeredEvents.UNIT_SPELLCAST_EMPOWER_UPDATE.target == true)
 
 -- The client can continue returning the old channel after its synchronous stop
 -- event. The stop must clear immediately and suppress later polling snapshots.
