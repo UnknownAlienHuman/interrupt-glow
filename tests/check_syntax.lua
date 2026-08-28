@@ -32,6 +32,7 @@ local localTests = {
     "tests/shared_worker.lua",
     "tests/cache_policy.lua",
     "tests/glow_worker.lua",
+    "tests/prewarm_budget.lua",
     "tests/gcd_safety.lua",
     "tests/toc_contract.lua",
 }
