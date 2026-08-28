@@ -8,7 +8,7 @@ local Glow = {
     prewarmQueued = setmetatable({}, { __mode = "k" }),
     prewarmBudgetPerFrame = 16,
     prewarmScheduled = false,
-    runtimeWorkerEnabled = false,
+    runtimeWorkerEnabled = nil,
     driverElapsed = 0,
     restrictedPollElapsed = 0,
     countdownTextElapsed = 0,
