@@ -421,6 +421,8 @@ function RuntimeProbe:Start(label)
     self.stoppedAt = nil
     self.marks = {}
     self.restrictionTransitions = {}
+    self.lastRestrictionType = nil
+    self.lastRestrictionState = nil
     self.profilerStop = nil
     self.lastReport = nil
     IG:StartProfileCounters()
