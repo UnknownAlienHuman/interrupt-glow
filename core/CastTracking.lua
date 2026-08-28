@@ -4,6 +4,10 @@ if not IG then return end
 local CastTracking = {
     attached = false,
     unitFrames = {},
+    channelSuppressed = {
+        target = false,
+        focus = false,
+    },
 }
 IG.CastTracking = CastTracking
 IG:RegisterModule("CastTracking", CastTracking)
@@ -23,9 +27,6 @@ local UNITS = { "target", "focus" }
 local function SafeUnitBoolean(fn, ...)
     if type(fn) ~= "function" then return nil end
 
-    -- Fixed, valid unit tokens are used throughout this module. Calling the API
-    -- directly avoids routing potentially secret returns through pcall. The
-    -- access predicate is the first operation on the returned value.
     local value = fn(...)
     if not IG.CanAccess(value) then return nil end
     if value == true then return true end
@@ -51,10 +52,55 @@ local function IsRelevantCast(active, hostile, niState)
     return true
 end
 
--- Presence is determined only through NeverSecret fields. All other return
--- values remain local to this call. notInterruptible travels directly from the
--- Blizzard API to the visual sink and is never inserted into addon state or a
--- pcall result table/lane.
+local function SafeEventCastBarID(value)
+    if IG.CanAccess(value) and type(value) == "number" then return value end
+    return nil
+end
+
+-- The generated 12.1 event contract marks castBarID NeverSecret. Read only that
+-- field from otherwise secret-capable spellcast payloads; never store castGUID,
+-- spellID or interruptedBy.
+local function GetEventCastBarID(event, ...)
+    if event == "UNIT_SPELLCAST_STOP"
+        or event == "UNIT_SPELLCAST_FAILED"
+        or event == "UNIT_SPELLCAST_FAILED_QUIET"
+    then
+        local _unit, _castGUID, _spellID, castBarID = ...
+        return SafeEventCastBarID(castBarID)
+    elseif event == "UNIT_SPELLCAST_INTERRUPTED"
+        or event == "UNIT_SPELLCAST_CHANNEL_STOP"
+    then
+        local _unit, _castGUID, _spellID, _interruptedBy, castBarID = ...
+        return SafeEventCastBarID(castBarID)
+    elseif event == "UNIT_SPELLCAST_EMPOWER_STOP" then
+        local _unit, _castGUID, _spellID, _complete, _interruptedBy, castBarID = ...
+        return SafeEventCastBarID(castBarID)
+    end
+    return nil
+end
+
+local function IsStaleCastEvent(state, eventCastBarID)
+    return state ~= nil
+        and type(eventCastBarID) == "number"
+        and type(state.castBarID) == "number"
+        and eventCastBarID ~= state.castBarID
+end
+
+function CastTracking:SetChannelSuppressed(unit, suppressed, reason)
+    suppressed = suppressed == true
+    self.channelSuppressed[unit] = suppressed
+
+    local state = IG.CastState[unit]
+    if state then
+        state.channelSuppressed = suppressed
+        if reason then state.lastEvent = reason end
+    end
+end
+
+-- UnitChannelInfo has an active upstream stale/phantom family (#777/#784/#834).
+-- Once a synchronous channel/empower stop is observed, that event is more
+-- authoritative than a subsequent polling snapshot. Suppression is cleared by
+-- a real start event or by an explicit unit-identity reset.
 local function SnapshotCast(unit)
     if type(UnitCastingInfo) == "function" then
         local _name,
@@ -73,6 +119,11 @@ local function SnapshotCast(unit)
             if not IG.CanAccess(castBarID) then castBarID = nil end
             return true, notInterruptible, castBarID, false
         end
+    end
+
+    if CastTracking.channelSuppressed[unit] == true then
+        IG:BumpStat("cast.channelSnapshotSuppressed")
+        return false, nil, nil, false
     end
 
     if type(UnitChannelInfo) == "function" then
@@ -124,14 +175,48 @@ function CastTracking:ApplyInterruptibility(unit, rawNotInterruptible, active, f
         if IG.Glow then IG.Glow:ApplyUnitInterruptibility(unit, rawNotInterruptible, true) end
     else
         state.niState = "restricted"
-        if IG.Glow then
-            IG.Glow:ApplyUnitInterruptibility(unit, rawNotInterruptible, true)
-        end
+        if IG.Glow then IG.Glow:ApplyUnitInterruptibility(unit, rawNotInterruptible, true) end
         IG:BumpStat("secret.castInterruptibilityRestricted")
     end
 end
 
-function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRefresh)
+function CastTracking:ClearUnit(unit, reason, eventCastBarID)
+    local state = IG.CastState[unit]
+    if not state then return false end
+
+    if IsStaleCastEvent(state, eventCastBarID) then
+        IG:BumpStat("cast.staleStopIgnored")
+        return false
+    end
+
+    local changed = state.active == true
+        or state.hostile == true
+        or state.castBarID ~= nil
+        or state.isChannel == true
+        or state.niState ~= "none"
+
+    state.active = false
+    state.hostile = false
+    state.castBarID = nil
+    state.isChannel = false
+    state.lastEvent = reason
+    state.channelSuppressed = self.channelSuppressed[unit] == true
+    self:ApplyInterruptibility(unit, false, false)
+
+    if IG.Glow then IG.Glow:RefreshUnit(unit) end
+
+    if changed then
+        IG:BumpStat("cast.transitions")
+        IG:BumpStat("cast.eventStops")
+        if IG.DB.debug and IG.Debug then
+            IG.Debug:Log("cast", ("unit=%s active=false reason=%s suppressed=%s")
+                :format(unit, tostring(reason), tostring(state.channelSuppressed)))
+        end
+    end
+    return true
+end
+
+function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRefresh, reason)
     local state = IG.CastState[unit]
     if not state then return end
 
@@ -159,14 +244,12 @@ function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRe
     state.hostile = hostile
     state.castBarID = safeCastBarID
     state.isChannel = isChannel
+    state.channelSuppressed = self.channelSuppressed[unit] == true
+    if reason then state.lastEvent = reason end
 
     self:ApplyInterruptibility(unit, rawNotInterruptible, active, forcedNotInterruptible)
     changed = changed or oldNIState ~= state.niState
 
-    -- Readiness sleeps while no result can be shown. When a cast becomes
-    -- relevant, changes identity, or target/focus itself changes, invalidate
-    -- readiness before the synchronous visual pass. CandidateFor then fails
-    -- closed until the frame-batched cooldown evaluation completes.
     local castIdentityChanged = active and (
         not oldActive
         or oldCastBarID ~= safeCastBarID
@@ -178,39 +261,106 @@ function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRe
         or castIdentityChanged
         or not oldRelevant
     )
-    if needsReadinessRefresh then
-        IG:MarkCooldownDirty(false)
-    end
+    if needsReadinessRefresh then IG:MarkCooldownDirty(false) end
 
-    -- Stop/non-interruptible transitions remain synchronous. Newly relevant
-    -- transitions are also updated now, but pending readiness suppresses stale
-    -- true state until the next frame finishes the bounded readiness pass.
     if IG.Glow then IG.Glow:RefreshUnit(unit) end
 
     if changed then
         IG:BumpStat("cast.transitions")
         if IG.DB.debug and IG.Debug then
-            IG.Debug:Log("cast", ("unit=%s active=%s hostile=%s channel=%s ni=%s")
-                :format(unit, tostring(active), tostring(hostile), tostring(isChannel), tostring(state.niState)))
+            IG.Debug:Log("cast", ("unit=%s active=%s hostile=%s channel=%s ni=%s reason=%s suppressed=%s")
+                :format(
+                    unit,
+                    tostring(active),
+                    tostring(hostile),
+                    tostring(isChannel),
+                    tostring(state.niState),
+                    tostring(reason),
+                    tostring(state.channelSuppressed)
+                ))
         end
+    end
+end
+
+function CastTracking:ResetUnitIdentity(unit, reason)
+    self:SetChannelSuppressed(unit, false, reason or "UNIT_IDENTITY_RESET")
+    self:RefreshUnit(unit, nil, true, reason or "UNIT_IDENTITY_RESET")
+end
+
+function CastTracking:ResetAllIdentities(reason)
+    if IG.Glow then IG.Glow:RefreshUnitRelation() end
+    for index = 1, #UNITS do
+        self:ResetUnitIdentity(UNITS[index], reason or "WORLD_IDENTITY_RESET")
     end
 end
 
 function CastTracking:RefreshAll()
     if IG.Glow then IG.Glow:RefreshUnitRelation() end
-    self:RefreshUnit("target")
-    self:RefreshUnit("focus")
+    self:RefreshUnit("target", nil, false, "REFRESH_ALL")
+    self:RefreshUnit("focus", nil, false, "REFRESH_ALL")
 end
 
-function CastTracking:OnUnitEvent(unit, event)
+function CastTracking:OnUnitEvent(unit, event, ...)
     IG:BumpStat("events.cast")
 
+    if event == "UNIT_SPELLCAST_CHANNEL_START"
+        or event == "UNIT_SPELLCAST_EMPOWER_START"
+    then
+        self:SetChannelSuppressed(unit, false, event)
+        self:RefreshUnit(unit, nil, false, event)
+        return
+    end
+
+    if event == "UNIT_SPELLCAST_CHANNEL_STOP"
+        or event == "UNIT_SPELLCAST_EMPOWER_STOP"
+    then
+        local eventCastBarID = GetEventCastBarID(event, ...)
+        local state = IG.CastState[unit]
+        if IsStaleCastEvent(state, eventCastBarID) then
+            IG:BumpStat("cast.staleStopIgnored")
+            return
+        end
+
+        self:SetChannelSuppressed(unit, true, event)
+        self:ClearUnit(unit, event, eventCastBarID)
+        return
+    end
+
+    if event == "UNIT_SPELLCAST_STOP"
+        or event == "UNIT_SPELLCAST_FAILED"
+        or event == "UNIT_SPELLCAST_FAILED_QUIET"
+        or event == "UNIT_SPELLCAST_INTERRUPTED"
+    then
+        local state = IG.CastState[unit]
+        local eventCastBarID = GetEventCastBarID(event, ...)
+        if IsStaleCastEvent(state, eventCastBarID) then
+            IG:BumpStat("cast.staleStopIgnored")
+            return
+        end
+        if state and state.isChannel == true then
+            self:SetChannelSuppressed(unit, true, event)
+        end
+        self:ClearUnit(unit, event, eventCastBarID)
+        return
+    end
+
+    if event == "UNIT_SPELLCAST_CHANNEL_UPDATE"
+        or event == "UNIT_SPELLCAST_EMPOWER_UPDATE"
+    then
+        if self.channelSuppressed[unit] == true then
+            IG:BumpStat("cast.suppressedUpdateIgnored")
+            return
+        end
+        self:RefreshUnit(unit, nil, false, event)
+        return
+    end
+
     if event == "UNIT_SPELLCAST_INTERRUPTIBLE" then
-        self:RefreshUnit(unit, false)
+        self:RefreshUnit(unit, false, false, event)
     elseif event == "UNIT_SPELLCAST_NOT_INTERRUPTIBLE" then
-        self:RefreshUnit(unit, true)
+        self:RefreshUnit(unit, true, false, event)
     else
-        self:RefreshUnit(unit)
+        self:RefreshUnit(unit, nil, false, event)
     end
 end
 
@@ -225,8 +375,10 @@ local function CreateUnitWatcher(unit)
         "UNIT_SPELLCAST_FAILED_QUIET",
         "UNIT_SPELLCAST_INTERRUPTED",
         "UNIT_SPELLCAST_CHANNEL_START",
+        "UNIT_SPELLCAST_CHANNEL_UPDATE",
         "UNIT_SPELLCAST_CHANNEL_STOP",
         "UNIT_SPELLCAST_EMPOWER_START",
+        "UNIT_SPELLCAST_EMPOWER_UPDATE",
         "UNIT_SPELLCAST_EMPOWER_STOP",
         "UNIT_SPELLCAST_INTERRUPTIBLE",
         "UNIT_SPELLCAST_NOT_INTERRUPTIBLE",
@@ -235,12 +387,10 @@ local function CreateUnitWatcher(unit)
         "UNIT_TARGETABLE_CHANGED",
     }
 
-    for index = 1, #events do
-        frame:RegisterUnitEvent(events[index], unit)
-    end
+    for index = 1, #events do frame:RegisterUnitEvent(events[index], unit) end
 
-    frame:SetScript("OnEvent", function(_, event)
-        CastTracking:OnUnitEvent(unit, event)
+    frame:SetScript("OnEvent", function(_, event, ...)
+        CastTracking:OnUnitEvent(unit, event, ...)
     end)
     return frame
 end
@@ -251,6 +401,7 @@ function CastTracking:Attach()
 
     for index = 1, #UNITS do
         local unit = UNITS[index]
+        self.channelSuppressed[unit] = false
         self.unitFrames[unit] = CreateUnitWatcher(unit)
     end
 
@@ -263,5 +414,8 @@ function CastTracking:Detach()
         frame:SetScript("OnEvent", nil)
     end
     self.unitFrames = {}
+    for index = 1, #UNITS do
+        self.channelSuppressed[UNITS[index]] = false
+    end
     self.attached = false
 end

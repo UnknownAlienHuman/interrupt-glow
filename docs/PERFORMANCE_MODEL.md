@@ -1,116 +1,138 @@
 # Performance model — Interrupt Glow 1.1
 
-## Update latency
+## Complexity and latency
 
-| Signal | Work | Expected visual latency |
+| Signal | Work | Expected latency |
 |---|---|---:|
-| Target/focus cast start, stop or interruptibility event | fixed-unit snapshot and currently bound interrupt records only | synchronous handler update |
-| Native action feedback | resolved-action snapshot compare; enqueue only if identity changed | next frame |
-| LAB action state | exact `UpdateAction` post-hook; conditional macro feedback uses `buttonsBySlot[eventSlot]` | next frame |
-| Dominos action feedback | changed controller button or indexed action slot only | next frame |
-| ButtonForge conditional macro | three raw resolved-command reads; enqueue only if identity changed | next frame |
-| Relevant `SPELL_UPDATE_COOLDOWN` | event-time GCD hint plus one pass over active canonical abilities | next frame |
-| Accessible cooldown deadline | one shared driver, only while a relevant cast/countdown needs it | at most 50 ms plus one frame |
-| Restricted cooldown timing | one shared driver, only while a relevant cast exists | at most 250 ms; refreshed immediately when a cast becomes relevant |
-| Integer cooldown text | same shared driver, only when enabled | 200 ms |
-| Initial ordinary-button shell prewarm | 16 physical buttons per frame | current interrupts are immediate; remaining bars spread across frames |
+| Target/focus cast start or interruptibility event | one fixed-unit snapshot plus bound interrupt records | synchronous |
+| Channel/empower stop | event-authoritative clear; no `UnitChannelInfo` re-query | synchronous |
+| Native action feedback | one resolved snapshot compare; enqueue only if changed | next frame |
+| LAB conditional macro | exact `UpdateAction` hook or `buttonsBySlot[eventSlot]` | next frame |
+| Dominos/ButtonForge feedback | changed provider button/slot only | next frame |
+| Relevant cooldown event | one bounded pass over active canonical abilities | next frame |
+| Accessible deadline | one shared worker while a result can be visible | ≤50 ms plus one frame |
+| Restricted timing | one shared worker only during a relevant cast | ≤250 ms |
+| Integer countdown | same worker only when enabled | 200 ms |
+| Initial shell prewarm | 16 physical buttons per `RunOnce` slice | bounded startup slicing |
 
-Current Blizzard ordinary data exposes at most two player interrupt families for a specialization. Verified PvP/pet extras add only a small constant. Readiness work therefore scales with active canonical abilities, not physical button copies.
+Readiness scales with active canonical interrupt sources, not physical button copies or visible nameplates.
+
+## Worker policy
+
+Retail 12.1 `SetOnUpdateMode` is explicit:
+
+```text
+flushFrame   -> RunOnce while dirty, Disabled when clean
+prewarmFrame -> RunOnce per bounded slice, Disabled when queue is empty
+runtimeFrame -> RunAlways only with deadline/poll work, Disabled otherwise
+```
+
+The initial state is explicitly written to `Disabled`; state deduplication cannot accidentally leave a newly created OnUpdate frame active.
 
 ## Mouseover hot path
 
-### Blizzard
+### Native Blizzard
 
 ```text
 ActionButton.OnActionChanged(button)
-  -> read slot/actionType/id/subType/interrupt/assisted
-  -> compare with record snapshot
-  -> no-op if unchanged
-  -> otherwise one deduplicated dirty record
+  -> read current action snapshot
+  -> unchanged: return
+  -> changed: one deduplicated dirty record
 ```
 
 ### LibActionButton
 
 ```text
-exact UpdateAction post-hook
+UpdateAction post-hook
 or ACTIONBAR_SLOT_CHANGED(slot)
   -> buttonsBySlot[slot]
-  -> dirty only existing buttons for that slot
-  -> one frame-batched classification
+  -> dirty only known buttons for that slot
 ```
 
-LAB's broad `OnButtonUpdate` callback is removed for providers whose buttons expose `UpdateAction`; a nonstandard-provider fallback performs identity reads only. There is no action-slot scan.
+No mouseover path performs macro-body parsing, frame/nameplate enumeration, slot scanning, cooldown work for a current shared ability, UI allocation, or diagnostic formatting while capture/debug is inactive.
 
-### ButtonForge
+## GCD correctness
 
-ButtonForge already resolves conditional macros in its own update path. Interrupt Glow reads its resulting `Mode`, `MacroMode` and `SpellId`, then queues only if that normalized identity changed.
+Interrupt readiness is not derived from a GCD heuristic.
 
-None of these paths performs:
+Primary sources:
 
-- macro-body parsing;
-- frame enumeration;
-- 540-slot scanning;
-- nameplate traversal;
-- cooldown API work when the shared ability state is current;
-- UI object or timer creation.
+```lua
+C_ActionBar.GetActionCooldownDuration(slot, true)
+C_Spell.GetSpellCooldownDuration(spellID, true)
+```
 
-## Cooldown event filtering
+The second argument explicitly excludes the global cooldown. `isOnGCD=true` is not sufficient to classify an active cooldown as GCD-only because a personal cooldown may overlap. The final `GCDSafetyPolicy` discards all legacy `gcdOnlyHint` inputs and the event path no longer collects them.
 
-`SPELL_UPDATE_COOLDOWN` supplies changed spell, base spell, cooldown category and start-recovery category.
+`UNIT_SPELLCAST_SUCCEEDED` is only an invalidation signal after confirming the successful source is a current interrupt. It does not prove a GCD transition.
 
-Interrupt Glow:
+Required live edge case:
 
-1. accepts exact current interrupt/base/override events;
-2. learns the interrupt's non-global cooldown/recovery categories;
-3. accepts future events for learned categories;
-4. ignores unrelated pure global-recovery events;
-5. checks unknown non-global shared-category events only while a relevant cast or enabled countdown can make the result visible.
+```text
+interrupt starts personal cooldown
+another ability/GCD is active simultaneously
+restricted or partially accessible timing context
+```
 
-`isOnGCD` is normalized only during the actual event dispatch and consumed as a plain one-frame hint. It is never read later.
+The interrupt must remain not-ready until the ignore-GCD personal duration is actually zero.
 
-## Restricted data
+## Channel stale-snapshot guard
 
-- Secret cast interruptibility goes directly to `SetAlphaFromBoolean(..., 0, 255)` without `pcall`, storage, logging or readback.
-- Restricted Loss of Control is a hard fail-closed gate and is never overridden by optimistic cooldown compatibility.
-- Inaccessible pet usability is also a hard fail-closed gate.
-- Exact `currentCharges == 0` remains not-ready even when recharge timing is secret.
-- Secret remaining time never becomes a custom number.
-- Restricted timing polling sleeps without a relevant cast; cast relevance transitions force one immediate readiness snapshot.
+After a verified channel/empower stop, `UnitChannelInfo` is suppressed until a real start or target/focus identity reset. Ordinary `UnitCastingInfo` remains available. NeverSecret `castBarID` prevents an old delayed stop from clearing a newer cast.
 
-## Disabled mode
+This removes both false glow and repeated readiness work caused by phantom second channels.
 
-When `DB.enabled=false`:
+## Cooldown filtering and caches
 
-- cast/button state remains cheap and current for instant re-enable;
-- cooldown, charge, LoC and pet-readiness evaluation is skipped;
-- timing/countdown drivers are asleep;
-- enabling performs one fresh cast/readiness/visual update.
+`SPELL_UPDATE_COOLDOWN` accepts exact interrupt families and learned non-global shared categories. Unrelated global-recovery events are discarded. GCD hints are not collected.
 
-## Startup cost
+Same-spec macro churn retains dormant ability state to avoid allocation churn. A real specialization change reconciles buttons, prunes unreferenced ability records and clears action/spell/pet readiness caches.
 
-Interrupt Glow itself is not LoadOnDemand because it must observe combat automatically. Startup is lazy internally:
+## Cooldown Viewer hooks
 
-1. TOC loads code and a bare Settings canvas.
-2. Gameplay events, provider attach and discovery wait for `PLAYER_LOGIN`.
-3. Already-loaded providers are enumerated exactly once.
-4. Bartender, ElvUI, Dominos, ButtonForge and Cooldown Viewer use load-order callbacks rather than polling.
-5. Current interrupt buttons receive visuals immediately.
-6. Other physical button shells are prewarmed at 16 buttons per frame.
-7. Options controls, debug window and cooldown font strings are created only when needed.
+Pool acquire/set/reset hooks perform only:
 
-## Acceptance boundary
+```text
+read canonical identity
+store latest ordinary identity
+queue one dirty item record
+```
 
-Local scripts can catch syntax, source drift and state-machine regressions. They cannot validate WoW FPS, taint, protected execution or SecretValue behavior. GitHub Actions workflows are intentionally absent.
+They do not start visual animations, unbind records, or modify addon-owned UI inside Blizzard layout/reset stacks. Reconciliation occurs in the addon `RunOnce` flush.
 
-Live ship gates:
+## Idle and disabled states
 
-- no `EnumerateFrames` or nameplate traversal;
-- no macro-body API in runtime files;
-- no `ACTIONBAR_UPDATE_COOLDOWN` subscription;
-- `ACTIONBAR_SLOT_CHANGED` only in the LAB adapter as an event-slot-to-known-buttons diff;
-- no frame creation during combat;
-- no secret payload storage/logging/readback;
-- no duplicate startup/provider discovery;
-- no stale CDM binding after pool reset/reuse;
-- no blocked/forbidden actions or taint;
-- no >5 ms Interrupt Glow spikes during the live 60-second mouseover/nameplate stress test.
+When no relevant cast exists and countdown text is disabled:
+
+- cooldown/charge/usability/LoC evaluation is idle;
+- deadline/restricted workers are Disabled;
+- only bounded action/cast lifecycle state remains active.
+
+When the addon is disabled, readiness work is skipped entirely. Internal counters are dormant unless debug or explicit capture is active.
+
+## Native profiler protocol
+
+Use `C_AddOnProfiler`; never enable legacy `scriptProfile`.
+
+Capture start/end and marker snapshots include session/recent/encounter averages, last/peak time, threshold counters through 1000 ms, enabled state and ticks per second. Threshold counters are cumulative and are subtracted between snapshots. `PeakTime` is shown as start/end/increase, not as a resettable window maximum.
+
+## Attribution matrix
+
+Use equal-duration, equal-input runs:
+
+1. default UI / no third-party addons;
+2. Interrupt Glow only;
+3. Interrupt Glow plus required action-bar provider;
+4. full addon stack.
+
+Record build, location, combat/restriction context, visible nameplate count, macro, target/focus actions, provider versions, worker state, SavedVariables schema and the complete runtime report.
+
+## Startup and persistence cost
+
+Interrupt Glow itself is not LoadOnDemand because it must observe casts automatically. Startup is internally lazy, and the SavedVariables loader reconstructs only a small known-key preference table. No runtime cache is deserialized.
+
+A separate LOD options companion is not introduced before native profiler evidence shows material startup/UI cost; current settings/report UI has no idle OnUpdate and is created only when opened.
+
+## Live acceptance
+
+Required client gates include Quick Heal mouseover stress, GCD/personal-cooldown overlap, phantom-channel regressions, restricted Mythic+/raid/PvP, taint/blocked/forbidden errors, worker idle state, SavedVariables migration, provider load-order/full-stack attribution and no new >5 ms threshold crossings attributable to Interrupt Glow in the fixed-duration primary scenario.

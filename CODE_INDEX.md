@@ -1,23 +1,39 @@
 # Code index
 
-- `Core.lua` — addon namespace and module registry.
-- `core/Shared.lua` — DB migration, access gates, dirty queue and frame-batched state flush.
-- `core/DiagnosticsPolicy.lua` — zero-cost production counters and inaccessible-safe chat output.
-- `core/Data.lua` — generated ordinary spec registry, verified PvP/pet extras, runtime-learned identities and cooldown-category filtering.
-- `core/Debug.lua` — optional normalized ring log and on-demand Blizzard profiler report.
-- `core/Glow.lua` — incrementally prewarmed target/focus alpha gates and relevant-cast-only timing driver.
+- `AGENTS.md` — canonical project rules, current KB pin, active upstream issues and live-validation contract.
+- `AGENT_GUIDE.md` — compatibility pointer to `AGENTS.md`.
+- `Core.lua` — addon namespace, beta.4 fallback version and module registry.
+- `core/Worker.lua` — Retail 12.1 `SetOnUpdateMode` policy for Disabled/RunOnce/RunAlways workers.
+- `core/Shared.lua` — strict SavedVariables schema 3, access gates, dirty queue and RunOnce frame-batched flush.
+- `core/DiagnosticsPolicy.lua` — dormant production counters and inaccessible-safe chat output.
+- `core/Data.lua` — generated spec registry, reviewed PvP/pet exceptions, runtime identities and cooldown-category filtering.
+- `core/Debug.lua` — normalized log, copyable report and native profiler snapshot/delta primitives.
+- `core/RuntimeProbe.lua` — build/context/provider/worker/policy/secrecy/cast/readiness/profiler evidence collector.
+- `core/Glow.lua` — prewarmed target/focus alpha gates, RunOnce prewarm and active-only RunAlways timing.
 - `core/Buttons.lua` — provider registries, ButtonForge/Dominos/pet/CDM adapters and canonical ability records.
-- `core/LABAdapter.lua` — exact LibActionButton action hooks and changed-slot-to-known-buttons routing.
-- `core/ActionResolver.lua` — deduplicated current action feedback, assisted-combat exclusion and authoritative interrupt classification.
-- `core/Cooldown.lua` — cached per-source readiness, event-time GCD hints, charges, LoC and accessible deadlines.
-- `core/ReadinessPolicy.lua` — hard pet-usability/LoC gates and non-duplicating visual scheduling.
-- `core/CastTracking.lua` — fixed target/focus watchers and the sole raw SecretValue visual bridge.
-- `core/CDM.lua` — Cooldown Viewer acquire/set/reset lifecycle, duplicate suppression and off/on rebinding.
-- `core/Events.lua` — `PLAYER_LOGIN`-gated gameplay events, talent/PvP invalidation and disabled-mode filtering.
-- `core/Slash.lua` — explicit session diagnostics and manual bounded discovery.
+- `core/NativeCallbackPolicy.lua` — callback-handle lifecycle for `ActionButton.OnActionChanged`.
+- `core/LABAdapter.lua` — exact LibActionButton action hooks and changed-slot routing.
+- `core/ActionResolver.lua` — deduplicated current action feedback, Assisted Combat exclusion and interrupt classification.
+- `core/Cooldown.lua` — duration/charge/LoC readiness primitives and accessible deadlines.
+- `core/ReadinessPolicy.lua` — hard pet/LoC restrictions and non-duplicating visual scheduling.
+- `core/Usability.lua` — action/spell usability gates and targeted invalidation.
+- `core/GCDSafetyPolicy.lua` — discards legacy GCD hints and forbids `isOnGCD` as positive readiness proof.
+- `core/CachePolicy.lua` — specialization-bounded dormant abilities and source-readiness caches.
+- `core/CastTracking.lua` — fixed target/focus watchers, event-authoritative channel lifecycle and sole raw SecretValue bridge.
+- `core/CDM.lua` — pooled Cooldown Viewer identity with deferred next-frame reconciliation.
+- `core/Events.lua` — player-login gating, identity resets, restriction capture and bounded invalidation.
+- `core/Slash.lua` — runtime capture, diagnostics and manual bounded discovery commands.
 - `Options.lua` — lazy Settings canvas and policy controls.
-- `tools/sync_interrupts.py` — local build-time sync/check against Blizzard ordinary `InterruptSpellsBySpec` data.
-- `tests/static_checks.py` — optional local architecture/source invariants; not a WoW acceptance test.
-- `tests/mock_wow.lua` — optional local state-machine regression model; not a WoW client.
-- `docs/INTERRUPT_IDS.md` — ordinary Blizzard mappings plus reviewed PvP/pet exceptions.
-- `docs/PERFORMANCE_MODEL.md` — actual update cadence, complexity and live acceptance boundary.
+- `docs/RUNTIME_PROBE.md` — attribution, Quick Heal, GCD overlap, worker/persistence/CDM and phantom-channel live matrices.
+- `docs/PERFORMANCE_MODEL.md` — complexity, worker state, GCD correctness and profiler contract.
+- `tools/sync_interrupts.py` — local build-time sync/check against Blizzard ordinary interrupt data.
+- `tests/static_checks.py` — optional source invariants; not a WoW acceptance test.
+- `tests/mock_wow.lua` — modeled integration/hot-path regression suite; not a WoW client.
+- `tests/shared_worker.lua` — SavedVariables sanitation and RunOnce flush rearming.
+- `tests/glow_worker.lua` — prewarm/runtime OnUpdate mode sleep/wake behavior.
+- `tests/cache_policy.lua` — specialization cache pruning/reset.
+- `tests/gcd_safety.lua` — proves GCD hints cannot make an interrupt ready.
+- `tests/cdm_toggle.lua` — proves pool hooks defer binding/visual reconciliation.
+- `tests/runtime_probe.lua` — report schema, policy, profiler-delta and restriction-context reset.
+- `tests/native_callback_handles.lua` — attach-once/detach/reattach callback lifecycle.
+- `tests/channel_guard.lua` — phantom snapshot and stale stop-event protection.

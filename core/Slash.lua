@@ -88,10 +88,36 @@ local function Rescan()
     IG:Print("Targeted button discovery requested.")
 end
 
+local function HandleCapture(rest)
+    if not IG.RuntimeProbe then
+        IG:Print("Runtime probe module is unavailable.")
+        return
+    end
+
+    local action, label = match(rest or "", "^%s*(%S*)%s*(.-)%s*$")
+    action = lower(action or "")
+
+    if action == "start" then
+        IG.RuntimeProbe:Start(label)
+    elseif action == "mark" then
+        IG.RuntimeProbe:Mark(label)
+    elseif action == "stop" then
+        IG.RuntimeProbe:Stop()
+    elseif action == "show" or action == "report" or action == "" then
+        IG.RuntimeProbe:Show()
+    else
+        IG:Print("Usage: /iglow capture start [label] | mark [label] | stop | show")
+    end
+end
+
 local function PrintHelp()
     IG:Print("Commands:")
     IG:Print("  /iglow test          - toggle visual test mode")
     IG:Print("  /iglow state         - show normalized runtime state")
+    IG:Print("  /iglow probe         - show build/context/secrecy/profiler snapshot")
+    IG:Print("  /iglow capture start [label]")
+    IG:Print("  /iglow capture mark [label]")
+    IG:Print("  /iglow capture stop|show")
     IG:Print("  /iglow stats         - show counters and Blizzard profiler metrics")
     IG:Print("  /iglow stats start   - reset and enable session-only internal counters")
     IG:Print("  /iglow stats stop    - disable internal counters")
@@ -106,20 +132,24 @@ function Slash:Handle(message)
     message = message or ""
     local command, rest = match(message, "^%s*(%S*)%s*(.-)%s*$")
     command = lower(command or "")
-    rest = lower(rest or "")
+    local restLower = lower(rest or "")
 
     if command == "test" then
         SetTestMode()
     elseif command == "state" then
         PrintState()
+    elseif command == "probe" then
+        if IG.RuntimeProbe then IG.RuntimeProbe:Show() end
+    elseif command == "capture" then
+        HandleCapture(rest)
     elseif command == "stats" then
-        if rest == "start" then
+        if restLower == "start" then
             IG:StartProfileCounters()
             IG:Print("Session-only internal counters enabled.")
-        elseif rest == "stop" then
+        elseif restLower == "stop" then
             IG:StopProfileCounters()
             IG:Print("Internal counters disabled.")
-        elseif rest == "reset" then
+        elseif restLower == "reset" then
             ResetStats()
         else
             PrintStats()
@@ -127,7 +157,7 @@ function Slash:Handle(message)
     elseif command == "rescan" then
         Rescan()
     elseif command == "log" then
-        if rest == "clear" and IG.Debug then
+        if restLower == "clear" and IG.Debug then
             IG.Debug:Clear()
             IG:Print("Debug log cleared.")
         elseif IG.Debug then

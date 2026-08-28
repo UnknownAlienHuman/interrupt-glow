@@ -94,7 +94,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "PLAYER_ENTERING_WORLD" then
         if IG.Buttons then IG.Buttons:RefreshPetButtons() end
-        IG:MarkCastDirty()
+        if IG.CastTracking and type(IG.CastTracking.ResetAllIdentities) == "function" then
+            IG.CastTracking:ResetAllIdentities(event)
+        else
+            IG:MarkCastDirty()
+        end
         IG:MarkCooldownDirty(false)
         return
     end
@@ -106,14 +110,22 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "PLAYER_TARGET_CHANGED" then
         if IG.Glow then IG.Glow:RefreshUnitRelation() end
-        if IG.CastTracking then IG.CastTracking:RefreshUnit("target", nil, true) end
+        if IG.CastTracking and type(IG.CastTracking.ResetUnitIdentity) == "function" then
+            IG.CastTracking:ResetUnitIdentity("target", event)
+        elseif IG.CastTracking then
+            IG.CastTracking:RefreshUnit("target", nil, true)
+        end
         if IG.Glow then IG.Glow:RefreshUnit("focus") end
         return
     end
 
     if event == "PLAYER_FOCUS_CHANGED" then
         if IG.Glow then IG.Glow:RefreshUnitRelation() end
-        if IG.CastTracking then IG.CastTracking:RefreshUnit("focus", nil, true) end
+        if IG.CastTracking and type(IG.CastTracking.ResetUnitIdentity) == "function" then
+            IG.CastTracking:ResetUnitIdentity("focus", event)
+        elseif IG.CastTracking then
+            IG.CastTracking:RefreshUnit("focus", nil, true)
+        end
         if IG.Glow then IG.Glow:RefreshUnit("target") end
         return
     end
@@ -143,6 +155,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if IG.CanAccess(spellID) and type(spellID) == "number" and IG.Data then
             local sourceKind = unit == "pet" and "pet" or "spell"
             if IG.Data:GetCanonicalSpellID(spellID, sourceKind) then
+                -- This is only an interrupt-source invalidation signal. It is
+                -- never treated as proof that a GCD started or ended.
                 IG:BumpStat("events.interruptSucceeded")
                 IG:MarkCooldownDirty(false)
             end
@@ -151,10 +165,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "SPELL_UPDATE_COOLDOWN" then
-        if not RuntimeNeedsReadiness() then
-            if IG.Cooldown then IG.Cooldown:ClearGCDHints() end
-            return
-        end
+        if not RuntimeNeedsReadiness() then return end
 
         local spellID, baseSpellID, category, startRecoveryCategory = ...
         if IG.Data and not IG.Data:ShouldRefreshForCooldownEvent(
@@ -166,9 +177,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
             IG:BumpStat("events.spellCooldownIgnored")
             return
         end
+
+        -- Readiness ignores the global cooldown through the duration API's
+        -- ignoreGlobalCooldown flag. `isOnGCD` is not collected as a positive
+        -- readiness hint because it cannot prove absence of a personal cooldown.
         IG:BumpStat("events.spellCooldown")
-        if IG.Cooldown then IG.Cooldown:CaptureGCDHints() end
-        IG:MarkCooldownDirty(true)
+        IG:MarkCooldownDirty(false)
         return
     end
 
@@ -209,7 +223,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "ADDON_RESTRICTION_STATE_CHANGED" then
-        local _restrictionType, _state = ...
+        local restrictionType, state = ...
+        if IG.RuntimeProbe then
+            IG.RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
+        end
         IG:BumpStat("events.restrictionChanged")
         IG:MarkCastDirty()
         IG:MarkCooldownDirty(false)
