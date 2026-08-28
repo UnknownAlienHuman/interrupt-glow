@@ -2,7 +2,7 @@
 ## Title: Interrupt Glow
 ## Notes: Secret-safe interrupt highlighting for target and focus.
 ## Author: Neomorph
-## Version: 1.1.0-beta.2
+## Version: 1.1.0-beta.3
 ## SavedVariables: InterruptGlowDB
 
 Core.lua
