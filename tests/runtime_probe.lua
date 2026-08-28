@@ -182,6 +182,15 @@ assert(shownReport:find("delta.CountTimeOver10Ms=3", 1, true))
 assert(shownReport:find("delta.PeakTimeIncrease=7.1", 1, true))
 assert(shownReport:find("marker.1.label=friendly-hover", 1, true))
 assert(shownReport:find("restriction.1=20.000 type=1 state=2", 1, true))
-assert(#printed >= 4)
 
+-- A new capture must not inherit the previous context's last restriction state.
+mockNow = 130
+assert(probe:Start("second-context") == true)
+local secondReport = probe:BuildReport()
+assert(secondReport:find("lastRestrictionType=unobserved", 1, true))
+assert(secondReport:find("lastRestrictionState=unobserved", 1, true))
+assert(not secondReport:find("restriction.1=", 1, true))
+assert(probe:Stop() == true)
+
+assert(#printed >= 6)
 print("RUNTIME PROBE MOCK PASSED")
