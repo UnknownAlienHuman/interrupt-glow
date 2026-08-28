@@ -6,33 +6,53 @@ local CreateFrame = _G.CreateFrame
 local InCombatLockdown = _G.InCombatLockdown
 local GetTime = _G.GetTime
 local C_AddOns = _G.C_AddOns
+local Worker = IG.Worker
 local pcall = pcall
 local type = type
 local tostring = tostring
 local tonumber = tonumber
 local pairs = pairs
 local next = next
+local math_floor = math.floor
 
-if type(InterruptGlowDB) ~= "table" then InterruptGlowDB = {} end
-local DB = InterruptGlowDB
+local CURRENT_SCHEMA = 3
+local CURRENT_INTERFACE = 120100
+local rawDB = type(InterruptGlowDB) == "table" and InterruptGlowDB or {}
 
-if DB.schema ~= 2 then
-    DB.slots = nil
-    DB.localCD = nil
-    DB.schema = 2
+local function ReadBoolean(key, defaultValue)
+    local value = rawDB[key]
+    if type(value) == "boolean" then return value end
+    return defaultValue
 end
 
-if DB.enabled == nil then DB.enabled = true end
-if DB.cdText == nil then DB.cdText = false end
-if DB.cdm == nil then DB.cdm = true end
-if DB.strictNI == nil then DB.strictNI = true end
-if DB.optimisticRestrictedCooldown == nil then DB.optimisticRestrictedCooldown = false end
-if DB.debug == nil then DB.debug = false end
-if DB.debugChat == nil then DB.debugChat = false end
-if DB.debugKeep == nil then DB.debugKeep = 400 end
-if DB.debugAutoShow == nil then DB.debugAutoShow = false end
+local function ReadDebugKeep()
+    local value = rawDB.debugKeep
+    if type(value) ~= "number" or value ~= value then return 400 end
+    value = math_floor(value)
+    if value < 20 then return 20 end
+    if value > 2000 then return 2000 end
+    return value
+end
 
+-- SavedVariables contain preferences only. Rebuild a known-key schema on every
+-- load so legacy slot/cooldown caches, corrupt values and arbitrary old keys do
+-- not survive indefinitely. No runtime, frame or secret-capable value is copied.
+local DB = {
+    schema = CURRENT_SCHEMA,
+    producerVersion = type(IG.version) == "string" and IG.version or "unknown",
+    interface = CURRENT_INTERFACE,
+    enabled = ReadBoolean("enabled", true),
+    cdText = ReadBoolean("cdText", false),
+    cdm = ReadBoolean("cdm", true),
+    strictNI = ReadBoolean("strictNI", true),
+    optimisticRestrictedCooldown = ReadBoolean("optimisticRestrictedCooldown", false),
+    debug = ReadBoolean("debug", false),
+    debugChat = ReadBoolean("debugChat", false),
+    debugKeep = ReadDebugKeep(),
+}
+InterruptGlowDB = DB
 IG.DB = DB
+
 IG.ObservedButtons = IG.ObservedButtons or setmetatable({}, { __mode = "k" })
 IG.PendingButtons = IG.PendingButtons or setmetatable({}, { __mode = "k" })
 IG.InterruptRecords = IG.InterruptRecords or setmetatable({}, { __mode = "k" })
@@ -136,17 +156,40 @@ IG._dirty = IG._dirty or {
     cast = false,
     cooldown = false,
     visual = false,
+    pruneCaches = false,
 }
 
 local flushFrame = IG.flushFrame
 if not flushFrame then
     flushFrame = CreateFrame("Frame")
-    flushFrame:Hide()
     IG.flushFrame = flushFrame
 end
 
+local flushScheduled = false
+
+local function DisableFlushWorker()
+    flushScheduled = false
+    if Worker then
+        Worker:Disable(flushFrame)
+    elseif flushFrame.Hide then
+        flushFrame:Hide()
+    end
+end
+
+local function ScheduleFlushWorker()
+    if flushScheduled then return end
+    flushScheduled = true
+    if Worker then
+        Worker:RunOnce(flushFrame)
+    elseif flushFrame.Show then
+        flushFrame:Show()
+    end
+end
+
+DisableFlushWorker()
+
 function IG:RequestFlush()
-    flushFrame:Show()
+    ScheduleFlushWorker()
 end
 
 function IG:MarkButtonDirty(button)
@@ -198,6 +241,7 @@ function IG:HasDirtyWork()
         or dirty.cast
         or dirty.cooldown
         or dirty.visual
+        or dirty.pruneCaches
         or next(self.PendingButtons) ~= nil
 end
 
@@ -210,7 +254,12 @@ function IG:Flush()
 
     if dirty.spec then
         dirty.spec = false
-        if self.Data then self.Data:RefreshActiveSpec() end
+        local specChanged = false
+        if self.Data then
+            local _specID, changed = self.Data:RefreshActiveSpec()
+            specChanged = changed == true
+        end
+        dirty.pruneCaches = dirty.pruneCaches or specChanged
         dirty.allButtons = true
         dirty.cooldown = self:NeedsReadinessRuntime()
         if dirty.cooldown then MarkActiveAbilitiesReadinessPending() end
@@ -222,6 +271,12 @@ function IG:Flush()
         if Buttons then Buttons:ReconcileAll() end
     elseif next(self.PendingButtons) ~= nil then
         if Buttons then Buttons:ReconcilePending() else self:WipeMap(self.PendingButtons) end
+    end
+
+    if dirty.pruneCaches then
+        dirty.pruneCaches = false
+        if Buttons and Buttons.PruneDormantAbilities then Buttons:PruneDormantAbilities() end
+        if Cooldown and Cooldown.ResetCaches then Cooldown:ResetCaches() end
     end
 
     if dirty.cast then
@@ -243,10 +298,15 @@ function IG:Flush()
         if Glow then Glow:RefreshAll() end
     end
 
-    if self:HasDirtyWork() then self:RequestFlush() end
+    if self:HasDirtyWork() then
+        self:RequestFlush()
+    else
+        DisableFlushWorker()
+    end
 end
 
-flushFrame:SetScript("OnUpdate", function(self)
-    self:Hide()
+flushFrame:SetScript("OnUpdate", function()
+    -- RunOnce resets itself before execution. The fallback worker is hidden here.
+    DisableFlushWorker()
     IG:Flush()
 end)
