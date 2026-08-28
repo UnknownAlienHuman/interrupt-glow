@@ -37,6 +37,7 @@ function InterruptGlow:BumpStat() end
 
 local Buttons = InterruptGlow.Buttons
 function Buttons:ObserveButton(button, adapter)
+    assert(type(button) == "table", "numeric LAB array index was treated as a button")
     local record = InterruptGlow.ObservedButtons[button]
     if not record then
         record = { button = button, adapter = adapter }
@@ -53,9 +54,15 @@ function Buttons:Detach()
     self.attached = false
 end
 
+local allButtons = {}
 local library = {
     buttonRegistry = {},
 }
+function library:GetAllButtons()
+    -- Deliberately use an array to cover LAB forks that do not expose the
+    -- upstream button-keyed set directly.
+    return allButtons
+end
 function library.UnregisterCallback(owner, event)
     assert(owner == Buttons)
     assert(event == "OnButtonUpdate")
@@ -76,6 +83,7 @@ local button = {
     _state_action = 7,
     UpdateAction = function() end,
 }
+allButtons[1] = button
 library.buttonRegistry[button] = true
 Buttons:OnLABButtonCreated(nil, button)
 assert(hookedCalls == 1)
