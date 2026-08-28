@@ -38,6 +38,7 @@ local localTests = {
     "tests/gcd_safety.lua",
     "tests/invalid_source_readiness.lua",
     "tests/options_lifecycle.lua",
+    "tests/options_combat_defer.lua",
     "tests/toc_contract.lua",
 }
 
