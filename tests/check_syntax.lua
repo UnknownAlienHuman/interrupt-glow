@@ -24,6 +24,7 @@ local localTests = {
     "tests/cdm_policy.lua",
     "tests/ability_source_policy.lua",
     "tests/lab_callback_policy.lua",
+    "tests/restricted_success_event.lua",
     "tests/runtime_probe.lua",
     "tests/native_callback_handles.lua",
     "tests/channel_guard.lua",
