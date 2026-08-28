@@ -4,6 +4,7 @@ if not IG or not IG.Cooldown then return end
 local Cooldown = IG.Cooldown
 local pairs = pairs
 local type = type
+local next = next
 
 -- A canonical interrupt can be represented by several physical buttons:
 -- current action slots, a pet action, ButtonForge/direct spell, and one or more
@@ -33,22 +34,6 @@ local function IsBetterSource(record, bestKind, bestID)
 
     -- Stable deterministic choice among duplicate buttons of one source kind.
     return record.sourceID < bestID
-end
-
-local function HasCurrentSource(ability)
-    if type(ability.sourceKind) ~= "string" or type(ability.sourceID) ~= "number" then
-        return false
-    end
-
-    for record in pairs(ability.records or {}) do
-        if IsEligibleRecord(record)
-            and record.sourceKind == ability.sourceKind
-            and record.sourceID == ability.sourceID
-        then
-            return true
-        end
-    end
-    return false
 end
 
 local function SelectBestSource(ability)
@@ -83,10 +68,10 @@ end
 local function EnsureCurrentSource(ability)
     if not ability then return false end
 
-    -- Keep an existing source while at least one current record still owns it.
-    -- This avoids source churn when duplicate bars are created or reordered.
-    if HasCurrentSource(ability) then return false end
-
+    -- Recompute the best source from currently bound records every time. Keeping
+    -- a still-valid lower-priority source would violate action > pet > spell
+    -- authority when a stronger source appears later (for example after a
+    -- conditional macro switches back to the interrupt branch).
     local sourceKind, sourceID = SelectBestSource(ability)
     if ability.sourceKind == sourceKind and ability.sourceID == sourceID then
         return false
@@ -109,4 +94,5 @@ IG:RegisterModule("AbilitySourcePolicy", {
     priority = SOURCE_PRIORITY,
     EnsureCurrentSource = EnsureCurrentSource,
     sharedReadinessRequiresBoundSource = true,
+    upgradesToHigherPrioritySource = true,
 })
