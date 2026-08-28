@@ -21,6 +21,7 @@ local UnitCanAttack = _G.UnitCanAttack
 local UnitIsDeadOrGhost = _G.UnitIsDeadOrGhost
 local type = type
 local pairs = pairs
+local select = select
 
 local UNITS = { "target", "focus" }
 
@@ -57,24 +58,21 @@ local function SafeEventCastBarID(value)
     return nil
 end
 
--- The generated 12.1 event contract marks castBarID NeverSecret. Read only that
--- field from otherwise secret-capable spellcast payloads; never store castGUID,
--- spellID or interruptedBy.
+-- The generated 12.1 event contract marks castBarID NeverSecret. Select only
+-- that return position from otherwise secret-capable event payloads; castGUID,
+-- spellID, interruptedBy and complete are never bound into addon locals.
 local function GetEventCastBarID(event, ...)
     if event == "UNIT_SPELLCAST_STOP"
         or event == "UNIT_SPELLCAST_FAILED"
         or event == "UNIT_SPELLCAST_FAILED_QUIET"
     then
-        local _unit, _castGUID, _spellID, castBarID = ...
-        return SafeEventCastBarID(castBarID)
+        return SafeEventCastBarID(select(4, ...))
     elseif event == "UNIT_SPELLCAST_INTERRUPTED"
         or event == "UNIT_SPELLCAST_CHANNEL_STOP"
     then
-        local _unit, _castGUID, _spellID, _interruptedBy, castBarID = ...
-        return SafeEventCastBarID(castBarID)
+        return SafeEventCastBarID(select(5, ...))
     elseif event == "UNIT_SPELLCAST_EMPOWER_STOP" then
-        local _unit, _castGUID, _spellID, _complete, _interruptedBy, castBarID = ...
-        return SafeEventCastBarID(castBarID)
+        return SafeEventCastBarID(select(6, ...))
     end
     return nil
 end
