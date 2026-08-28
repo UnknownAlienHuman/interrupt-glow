@@ -8,7 +8,7 @@
 - Interface: `120100`
 - Verified Blizzard source: `12.1.0.69497`
 - `wow-ui-source` commit: `027d26c3406d3de2cbd2b1f67d468fe033a1bcd4`
-- Shared engineering KB: `UnknownAlienHuman/wow-addon-engineering-kb@bb13f191903ca4ff63a4c93535edb9eacab9630d`
+- Shared engineering KB: `UnknownAlienHuman/wow-addon-engineering-kb@e45366cb0ca56dfe49664daa9f2579e629af0cb3`
 
 Read this repository first. Then route through the KB and pinned Blizzard source. Project behavior does not override the current Blizzard API/security contract.
 
@@ -18,8 +18,9 @@ Read this repository first. Then route through the KB and pinned Blizzard source
 2. Read `wow-addon-engineering-kb/KB/core/BlizzardUI_DevWorkflow.md`.
 3. For performance, read `KB/core/BlizzardUI_Performance_Modules.md`.
 4. For SecretValue/taint, read `KB/core/BlizzardUI_security.md` and `KB/deep/WoWDevSecretValue_KB_12.1.0.md`.
-5. Prove API/event/hook claims in pinned generated docs and implementation.
-6. Use the in-client runtime probe for data-, hotfix-, restriction-, or performance-dependent claims.
+5. For developer-chat findings and upstream regressions, read `KB/field/README.md` and `KB/field/Active_Upstream_Issues.md`.
+6. Prove API/event/hook claims in pinned generated docs and implementation.
+7. Use the in-client runtime probe for data-, hotfix-, restriction-, or performance-dependent claims.
 
 ## Hard runtime rules
 
@@ -35,7 +36,8 @@ Read this repository first. Then route through the KB and pinned Blizzard source
 10. Keep provider integration callback-first, idempotent, bounded, and behaviorally guarded after detach.
 11. `isOnGCD` may be normalized only during `SPELL_UPDATE_COOLDOWN` dispatch.
 12. Restricted Loss of Control and inaccessible action/spell/pet usability are hard fail-closed gates.
-13. Keep GitHub Actions workflows absent. Live WoW FPS, taint, secure execution, and restricted contexts are the release gate.
+13. A synchronous cast/channel stop is authoritative over a later `UnitChannelInfo` snapshot until a real start or unit-identity reset.
+14. Keep GitHub Actions workflows absent. Live WoW FPS, taint, secure execution, and restricted contexts are the release gate.
 
 ## Lifecycle contract
 
@@ -43,6 +45,20 @@ Read this repository first. Then route through the KB and pinned Blizzard source
 - Optional Blizzard/third-party providers attach through `ContinueOnAddOnLoaded` or an equivalent verified lifecycle surface.
 - Permanent `hooksecurefunc` hooks must have a cheap module-attached guard.
 - New visual objects are created out of combat and reused.
+- Target/focus identity changes explicitly reset channel-snapshot suppression; generic unit-state events do not.
+
+## Active upstream issue contract
+
+`WOWUI-2026-005` is active: `UnitChannelInfo` can report stale or phantom channels after a real stop (`WoWUIBugs` #777, #784, #834). Current mitigation is event-authoritative channel lifecycle in `core/CastTracking.lua`.
+
+Retirement gate:
+
+1. named live build with the upstream fix;
+2. repeat target-death, Lightning Lasso, and Ray of Frost repros;
+3. confirm no phantom channel without the guard;
+4. only then remove the active workaround and current documentation route.
+
+Do not close or silently remove the workaround merely because source changed.
 
 ## Secrecy policy
 
@@ -55,7 +71,7 @@ C_Secrets.ShouldActionCooldownBeSecret(slot)
 C_Secrets.ShouldUnitSpellCastingBeSecret(unit)
 ```
 
-The KB currently recommends `SPELL_SECRECY_CHANGED` cache invalidation, but that event is **not confirmed** in the pinned `12.1.0.69497` generated docs or implementation. Do not register an unverified event. Re-search current source and probe the live client before adding it.
+The shared KB recommends `SPELL_SECRECY_CHANGED` cache invalidation, but that event is **not confirmed** in the pinned `12.1.0.69497` generated docs or implementation. Do not register an unverified event. Re-search current source and probe the live client before adding it.
 
 ## Runtime evidence
 
@@ -68,7 +84,9 @@ Use:
 /iglow capture show
 ```
 
-The report records build/interface, addon version, instance context, observed restriction transitions, current `C_Secrets` policy, normalized cast/ability state, internal counters, and `C_AddOnProfiler` metrics. It must never contain raw secret payloads.
+The report records build/interface, addon version, instance context, provider load state, observed restriction transitions, current `C_Secrets` policy, normalized cast/ability state, internal counters, and native `C_AddOnProfiler` start/end/delta metrics. It must never contain raw secret payloads.
+
+Native profiler counters are application-session cumulative. Capture a baseline at start and subtract threshold counts at stop; do not call the operation a reset. Use `SessionAverageTime`, `RecentAverageTime`, `EncounterAverageTime`, `PeakTime`, and all threshold counters through `CountTimeOver1000Ms`. Do not enable legacy `scriptProfile`.
 
 ## Validation reporting
 
@@ -81,4 +99,15 @@ ref/tree tested
 observed result
 ```
 
-Missing tooling is `skipped`, never `pass`. Offline/mock checks do not prove WoW behavior. Required in-client validation includes the Quick Heal `@mouseover` reproduction, restricted Mythic+/raid/PvP, `taintLog 2`, provider load-order cases, Warlock pet variants, Protection Warrior dual interrupts, Cooldown Viewer pool reuse, and profiler stress.
+Missing tooling is `skipped`, never `pass`. Offline/mock checks do not prove WoW behavior. Required in-client validation includes:
+
+- Quick Heal `@mouseover` reproduction;
+- no-addons/default UI, InterruptGlow-only, required-provider, and full-stack attribution runs;
+- restricted Mythic+/raid/PvP;
+- `taintLog 2`;
+- provider load-order cases;
+- Warlock pet variants;
+- Protection Warrior dual interrupts;
+- Cooldown Viewer pool reuse;
+- target-death channel, Lightning Lasso, and Ray of Frost phantom-channel repros;
+- native profiler baseline/delta capture.
