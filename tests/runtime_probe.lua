@@ -5,7 +5,8 @@ local printed = {}
 
 InterruptGlow = {
     name = "InterruptGlow",
-    version = "1.1.0-beta.2",
+    version = "1.1.0-beta.3",
+    DB = { debug = false, debugKeep = 400, debugChat = false },
     AbilityStates = {
         [15487] = {
             key = 15487,
@@ -23,8 +24,24 @@ InterruptGlow = {
     },
     Stats = { ["events.actionButtonChanged"] = 10 },
     CastState = {
-        target = { active = true, hostile = true, niState = "interruptible", castBarID = 5 },
-        focus = { active = false, hostile = false, niState = "none", castBarID = nil },
+        target = {
+            active = true,
+            hostile = true,
+            isChannel = true,
+            niState = "interruptible",
+            castBarID = 5,
+            channelSuppressed = false,
+            lastEvent = "UNIT_SPELLCAST_CHANNEL_START",
+        },
+        focus = {
+            active = false,
+            hostile = false,
+            isChannel = false,
+            niState = "none",
+            castBarID = nil,
+            channelSuppressed = true,
+            lastEvent = "UNIT_SPELLCAST_CHANNEL_STOP",
+        },
     },
     Data = {
         interface = 120100,
@@ -32,27 +49,77 @@ InterruptGlow = {
         sourceCommit = "027d26c",
         activeInterrupts = { [15487] = true },
     },
-    Debug = {
-        ProfilerReport = function()
-            return "PeakTime 0.1\nCountTimeOver5Ms 0"
-        end,
-        ShowText = function(_, title, text)
-            assert(title == "Interrupt Glow Runtime Probe")
-            assert(text:find("%[build%]"))
-        end,
+    Buttons = {
+        nativeAttached = true,
+        dominosAttached = true,
+        buttonForgeAttached = false,
     },
+    CDM = { attached = false },
     modules = {},
 }
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:IsInCombat() return false end
-function InterruptGlow:Now() return 100 end
-function InterruptGlow:StartProfileCounters() self.Stats = {} end
+function InterruptGlow:IsAddOnFullyLoaded(name) return name == "Dominos" end
+function InterruptGlow:Now() return _G.mockNow end
+function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
+function InterruptGlow:StartProfileCounters() self:WipeMap(self.Stats) end
 function InterruptGlow:StopProfileCounters() end
 function InterruptGlow:Print(message) printed[#printed + 1] = message end
 function InterruptGlow.Data:GetActiveInterrupts() return pairs(self.activeInterrupts) end
 
+UIParent = {}
+ChatFontNormal = {}
+function CreateFrame()
+    local frame = { scripts = {}, TitleText = { SetText = function() end } }
+    function frame:SetSize() end
+    function frame:SetPoint() end
+    function frame:SetFrameStrata() end
+    function frame:Hide() end
+    function frame:Show() end
+    function frame:SetScript(name, fn) self.scripts[name] = fn end
+    function frame:CreateFontString() return { SetText = function() end } end
+    function frame:SetScrollChild() end
+    function frame:SetMultiLine() end
+    function frame:SetAutoFocus() end
+    function frame:SetFontObject() end
+    function frame:SetWidth() end
+    function frame:SetTextInsets() end
+    function frame:SetHeight() end
+    function frame:SetText() end
+    function frame:HighlightText() end
+    return frame
+end
+
+local metricValues = {}
+Enum = {
+    SecrecyLevel = { NeverSecret = 1, AlwaysSecret = 2, ContextuallySecret = 3 },
+    AddOnProfilerMetric = {
+        SessionAverageTime = 0,
+        RecentAverageTime = 1,
+        EncounterAverageTime = 2,
+        LastTime = 3,
+        PeakTime = 4,
+        CountTimeOver1Ms = 5,
+        CountTimeOver5Ms = 6,
+        CountTimeOver10Ms = 7,
+        CountTimeOver50Ms = 8,
+        CountTimeOver100Ms = 9,
+        CountTimeOver500Ms = 10,
+        CountTimeOver1000Ms = 11,
+    },
+}
+for index = 0, 11 do metricValues[index] = 0 end
+metricValues[Enum.AddOnProfilerMetric.PeakTime] = 0.4
+metricValues[Enum.AddOnProfilerMetric.CountTimeOver1Ms] = 10
+metricValues[Enum.AddOnProfilerMetric.CountTimeOver5Ms] = 2
+
+C_AddOnProfiler = {
+    IsEnabled = function() return true end,
+    GetTicksPerSecond = function() return 1000 end,
+    GetAddOnMetric = function(_, metric) return metricValues[metric] end,
+}
 C_Secrets = {
     HasSecretRestrictions = function() return true end,
     ShouldCooldownsBeSecret = function() return false end,
@@ -61,25 +128,60 @@ C_Secrets = {
     ShouldSpellCooldownBeSecret = function(_) return false end,
     ShouldActionCooldownBeSecret = function(_) return false end,
 }
-Enum = { SecrecyLevel = { NeverSecret = 1, AlwaysSecret = 2, ContextuallySecret = 3 } }
 function GetBuildInfo() return "12.1.0", "69497", "Aug 25 2026", 120100 end
 function GetInstanceInfo() return "Test", "party", 8, "Mythic Keystone", 5, 0, false, 123, 5, 456 end
 function date() return "2026-08-27T00:00:00Z" end
+mockNow = 100
 
-local loader, loadError = loadfile(ROOT .. "/core/RuntimeProbe.lua")
-assert(loader, loadError)
-loader()
+local debugLoader, debugError = loadfile(ROOT .. "/core/Debug.lua")
+assert(debugLoader, debugError)
+debugLoader()
+
+local shownReport
+InterruptGlow.Debug.ShowText = function(_, title, text)
+    assert(title == "Interrupt Glow Runtime Probe")
+    shownReport = text
+end
+
+local probeLoader, probeError = loadfile(ROOT .. "/core/RuntimeProbe.lua")
+assert(probeLoader, probeError)
+probeLoader()
 
 local probe = InterruptGlow.RuntimeProbe
-local report = probe:BuildReport()
-assert(report:find("cooldownPolicy=NeverSecret"))
-assert(report:find("repository=UnknownAlienHuman/interrupt%-glow"))
+local initialReport = probe:BuildReport()
+assert(initialReport:find("cooldownPolicy=NeverSecret"))
+assert(initialReport:find("repository=UnknownAlienHuman/interrupt%-glow"))
+assert(initialReport:find("kbCommit=e45366cb0ca56dfe49664daa9f2579e629af0cb3"))
+assert(initialReport:find("Dominos.loaded=true"))
+assert(initialReport:find("focus.channelSuppressed=true"))
+assert(initialReport:find("upstream.WOWUI%-2026%-005=ACTIVE_UPSTREAM"))
 
-probe:Start("test")
-probe:Mark("step")
+assert(probe:Start("quick-heal-mouseover") == true)
+metricValues[Enum.AddOnProfilerMetric.PeakTime] = 2.5
+metricValues[Enum.AddOnProfilerMetric.CountTimeOver1Ms] = 14
+metricValues[Enum.AddOnProfilerMetric.CountTimeOver5Ms] = 4
+metricValues[Enum.AddOnProfilerMetric.CountTimeOver10Ms] = 1
+mockNow = 110
+assert(probe:Mark("friendly-hover") == true)
+
+metricValues[Enum.AddOnProfilerMetric.PeakTime] = 7.5
+metricValues[Enum.AddOnProfilerMetric.CountTimeOver1Ms] = 20
+metricValues[Enum.AddOnProfilerMetric.CountTimeOver5Ms] = 7
+metricValues[Enum.AddOnProfilerMetric.CountTimeOver10Ms] = 3
+mockNow = 120
 probe:OnRestrictionStateChanged(1, 2)
-probe:Stop()
+assert(probe:Stop() == true)
 probe:Show()
 
+assert(shownReport)
+assert(shownReport:find("start.PeakTime=0.4", 1, true))
+assert(shownReport:find("end.PeakTime=7.5", 1, true))
+assert(shownReport:find("delta.CountTimeOver1Ms=10", 1, true))
+assert(shownReport:find("delta.CountTimeOver5Ms=5", 1, true))
+assert(shownReport:find("delta.CountTimeOver10Ms=3", 1, true))
+assert(shownReport:find("delta.PeakTimeIncrease=7.1", 1, true))
+assert(shownReport:find("marker.1.label=friendly-hover", 1, true))
+assert(shownReport:find("restriction.1=20.000 type=1 state=2", 1, true))
 assert(#printed >= 4)
+
 print("RUNTIME PROBE MOCK PASSED")
