@@ -3,16 +3,21 @@ local ROOT = arg[1] or "."
 _G = _G or _ENV
 
 local observed = {}
+local cooldownDirtyCalls = 0
 
 InterruptGlow = {
     modules = {},
     Stats = {},
     Cooldown = {},
+    Buttons = {},
 }
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:BumpStat(key, amount)
     self.Stats[key] = (self.Stats[key] or 0) + (amount or 1)
+end
+function InterruptGlow:MarkCooldownDirty()
+    cooldownDirtyCalls = cooldownDirtyCalls + 1
 end
 
 function InterruptGlow.Cooldown:RefreshAbility(ability)
@@ -75,12 +80,13 @@ local ability = {
     },
 }
 
--- A newly available stronger source must upgrade immediately even while the old
--- spell/CDM source remains bound. This is the regression that the previous
--- HasCurrentSource early-return missed.
+-- Button binding must upgrade immediately even while the lower-priority spell
+-- source remains bound. Waiting for a later cooldown event would leave stale CDM
+-- or direct-spell readiness active on the newly visible action button.
 ability.records[pet3] = true
-InterruptGlow.Cooldown:RefreshAbility(ability)
+assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "pet" and ability.sourceID == 3)
+assert(cooldownDirtyCalls == 1)
 assert(ability.ready == false and ability.deadline == nil)
 assert(ability.restricted == false and ability.hardRestricted == false)
 assert(ability.needsPoll == false)
@@ -88,43 +94,51 @@ assert(ability.hasEvaluation == false and ability.evaluatedGeneration == nil)
 assert(ability.readinessPending == true)
 assert(pet3.readinessPending == true and spell.readinessPending == true)
 
--- Action outranks pet as soon as it appears; the pet record does not have to
--- disappear first.
-ability.hasEvaluation = true
-ability.ready = true
 ability.records[action5] = true
-InterruptGlow.Cooldown:RefreshAbility(ability)
+assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "action" and ability.sourceID == 5)
-assert(ability.hasEvaluation == false and ability.ready == false)
+assert(cooldownDirtyCalls == 2)
 
--- Among duplicate action sources, choose the deterministic lowest current slot.
+-- A lower action slot is the deterministic source among duplicate action records.
 ability.records[action2] = true
-InterruptGlow.Cooldown:RefreshAbility(ability)
+assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "action" and ability.sourceID == 2)
+assert(cooldownDirtyCalls == 3)
 
--- Removing the selected action falls back to the remaining action before pet.
+-- Removing records must immediately fall back through action -> pet -> spell.
 ability.records[action2] = nil
-InterruptGlow.Cooldown:RefreshAbility(ability)
+assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "action" and ability.sourceID == 5)
 
--- Removing all action records falls back to pet, then direct spell/CDM.
 ability.records[action5] = nil
-InterruptGlow.Cooldown:RefreshAbility(ability)
+assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "pet" and ability.sourceID == 3)
 
 ability.records[pet3] = nil
-InterruptGlow.Cooldown:RefreshAbility(ability)
+assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "spell" and ability.sourceID == 15487)
+assert(cooldownDirtyCalls == 6)
 
--- No live records means no source and no pending readiness work.
-ability.records[spell] = nil
+-- RefreshAbility is a final defensive boundary: if external code corrupts or
+-- clears the selected source, it restores authority before the base evaluator.
+ability.sourceKind = nil
+ability.sourceID = nil
 InterruptGlow.Cooldown:RefreshAbility(ability)
-assert(ability.sourceKind == nil and ability.sourceID == nil)
-assert(ability.readinessPending == false)
+assert(observed[#observed].sourceKind == "spell")
+assert(observed[#observed].sourceID == 15487)
+
+-- A fully dormant ability keeps its last source/evaluation for same-generation
+-- macro churn and queues no pointless refresh.
+ability.records[spell] = nil
+local dirtyBeforeDormant = cooldownDirtyCalls
+assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == false)
+assert(ability.dormant == true)
+assert(cooldownDirtyCalls == dirtyBeforeDormant)
 
 local policy = assert(InterruptGlow.modules.AbilitySourcePolicy)
 assert(policy.sharedReadinessRequiresBoundSource == true)
 assert(policy.upgradesToHigherPrioritySource == true)
+assert(policy.ownsButtonSourceRebuild == true)
 assert(policy.priority.action > policy.priority.pet)
 assert(policy.priority.pet > policy.priority.spell)
 assert((InterruptGlow.Stats["cooldown.abilitySourceChanged"] or 0) == 7)
