@@ -60,8 +60,8 @@ local inactive = {
 }
 
 local ability = {
-    sourceKind = "action",
-    sourceID = 5,
+    sourceKind = "spell",
+    sourceID = 15487,
     ready = true,
     deadline = 120,
     restricted = true,
@@ -70,21 +70,15 @@ local ability = {
     hasEvaluation = true,
     evaluatedGeneration = 9,
     records = {
-        [action5] = true,
-        [pet3] = true,
         [spell] = true,
         [inactive] = true,
     },
 }
 
--- Existing source remains stable while a current record owns it.
-InterruptGlow.Cooldown:RefreshAbility(ability)
-assert(observed[#observed].sourceKind == "action" and observed[#observed].sourceID == 5)
-assert(ability.hasEvaluation == true)
-
--- Removing the selected action must not leave a stale slot as the readiness
--- source. Pet outranks the direct spell fallback.
-ability.records[action5] = nil
+-- A newly available stronger source must upgrade immediately even while the old
+-- spell/CDM source remains bound. This is the regression that the previous
+-- HasCurrentSource early-return missed.
+ability.records[pet3] = true
 InterruptGlow.Cooldown:RefreshAbility(ability)
 assert(ability.sourceKind == "pet" and ability.sourceID == 3)
 assert(ability.ready == false and ability.deadline == nil)
@@ -94,16 +88,31 @@ assert(ability.hasEvaluation == false and ability.evaluatedGeneration == nil)
 assert(ability.readinessPending == true)
 assert(pet3.readinessPending == true and spell.readinessPending == true)
 
--- A newly-bound action is more authoritative than pet/spell. Among duplicate
--- action slots, the deterministic lowest slot is selected only after the old
--- source disappears.
+-- Action outranks pet as soon as it appears; the pet record does not have to
+-- disappear first.
+ability.hasEvaluation = true
+ability.ready = true
+ability.records[action5] = true
+InterruptGlow.Cooldown:RefreshAbility(ability)
+assert(ability.sourceKind == "action" and ability.sourceID == 5)
+assert(ability.hasEvaluation == false and ability.ready == false)
+
+-- Among duplicate action sources, choose the deterministic lowest current slot.
 ability.records[action2] = true
-ability.records[pet3] = nil
 InterruptGlow.Cooldown:RefreshAbility(ability)
 assert(ability.sourceKind == "action" and ability.sourceID == 2)
 
--- Direct spell/CDM remains a valid fallback after all action/pet records leave.
+-- Removing the selected action falls back to the remaining action before pet.
 ability.records[action2] = nil
+InterruptGlow.Cooldown:RefreshAbility(ability)
+assert(ability.sourceKind == "action" and ability.sourceID == 5)
+
+-- Removing all action records falls back to pet, then direct spell/CDM.
+ability.records[action5] = nil
+InterruptGlow.Cooldown:RefreshAbility(ability)
+assert(ability.sourceKind == "pet" and ability.sourceID == 3)
+
+ability.records[pet3] = nil
 InterruptGlow.Cooldown:RefreshAbility(ability)
 assert(ability.sourceKind == "spell" and ability.sourceID == 15487)
 
@@ -115,8 +124,9 @@ assert(ability.readinessPending == false)
 
 local policy = assert(InterruptGlow.modules.AbilitySourcePolicy)
 assert(policy.sharedReadinessRequiresBoundSource == true)
+assert(policy.upgradesToHigherPrioritySource == true)
 assert(policy.priority.action > policy.priority.pet)
 assert(policy.priority.pet > policy.priority.spell)
-assert((InterruptGlow.Stats["cooldown.abilitySourceChanged"] or 0) == 4)
+assert((InterruptGlow.Stats["cooldown.abilitySourceChanged"] or 0) == 7)
 
 print("ABILITY SOURCE POLICY TEST PASSED")
