@@ -3,124 +3,147 @@
 ```text
 InterruptGlow.toc
   -> Core.lua
+  -> core/Worker.lua
+       Disabled / RunOnce / RunAlways OnUpdate policy
   -> core/Shared.lua
-       DB migration, access gates, dirty queues and one-frame flush
+       strict SavedVariables schema + dirty RunOnce flush
   -> core/DiagnosticsPolicy.lua
-       dormant production counters and safe chat boundary
+       dormant counters and safe chat boundary
   -> core/Data.lua
-       generated ordinary spec map + reviewed PvP/pet extras + category cache
+       spec/PvP/pet interrupt identities + event-category filter
   -> core/Debug.lua
-       normalized log, copyable report and native profiler snapshots/deltas
+       copyable report + native profiler snapshots/deltas
   -> core/RuntimeProbe.lua
-       build/context/provider/secrecy/cast/readiness/profiler evidence
+       build/context/provider/worker/policy/secrecy/readiness evidence
   -> core/Glow.lua
-       precreated target/focus alpha gates and relevant-cast-only time driver
+       target/focus alpha gates + RunOnce prewarm + active timing worker
   -> core/Buttons.lua
-       provider registries, canonical ability records and custom/pet/CDM adapters
+       provider registries + canonical ability records
   -> core/NativeCallbackPolicy.lua
-       EventRegistry handle-container lifecycle for native action feedback
+       managed native EventRegistry callback lifecycle
   -> core/LABAdapter.lua
-       exact LAB UpdateAction hooks + changed-slot diff index
+       exact LAB action hooks + changed-slot diff index
   -> core/ActionResolver.lua
-       current slot feedback snapshot, dedupe and interrupt classification
+       current action snapshot + interrupt classification
   -> core/Cooldown.lua
-       per-source readiness, event-time GCD hints, charges and LoC
+       duration/charge/LoC readiness primitives
   -> core/ReadinessPolicy.lua
-       hard pet/LoC gates and one visual pass per frame
+       hard pet/LoC restrictions + batched visual scheduling
   -> core/Usability.lua
-       action/spell usability policy and targeted invalidation
+       action/spell usability policy
+  -> core/GCDSafetyPolicy.lua
+       discard legacy GCD hints; never use isOnGCD as ready proof
+  -> core/CachePolicy.lua
+       prune dormant abilities and reset readiness caches on spec change
   -> core/CastTracking.lua
-       event-authoritative target/focus lifecycle + raw secret visual bridge
+       event-authoritative target/focus lifecycle + raw secret sink path
   -> core/CDM.lua
-       Cooldown Viewer pooled-item lifecycle
+       pooled identity changes -> one dirty record
   -> core/Events.lua
-       PLAYER_LOGIN gating, unit-identity resets, restriction evidence and bounded invalidation
+       login gating, identity resets and bounded invalidation
   -> core/Slash.lua
        user controls and runtime capture commands
   -> Options.lua
-       bare Settings canvas; controls built on first show
+       controls built on first show
 ```
 
-## Action/readiness flow
+## Action and readiness flow
 
 ```text
-Blizzard native callback
-  -> ActionResolver reads one current slot snapshot
+native/LAB/provider action signal
+  -> compare current resolved identity
   -> unchanged: stop
-  -> changed: one dirty button
+  -> changed: dirty one observed button
 
-LAB conditional macro
-  -> ACTIONBAR_SLOT_CHANGED(slot)
-  -> LABAdapter buttonsBySlot[slot]
-  -> dirty only existing buttons for that slot
+RunOnce dirty flush
+  -> reconcile physical button
+  -> bind/unbind canonical AbilityState
+  -> mark readiness pending when required
+  -> evaluate each active source once
+  -> refresh ordinary candidate gates
+```
 
-Dirty button
-  -> Buttons:ReconcileRecord
-  -> shared AbilityState
-  -> generation-valid readiness reused or one bounded evaluation queued
-  -> Glow:RefreshRecord
+## GCD flow
+
+```text
+SPELL_UPDATE_COOLDOWN
+  -> exact/shared-category filter
+  -> dirty readiness without GCD hint
+  -> Get*CooldownDuration(..., ignoreGlobalCooldown=true)
+
+legacy isOnGCD hint
+  -> GCDSafetyPolicy forces false before final resolver
+  -> cannot produce ready=true
 ```
 
 ## Cast flow
 
 ```text
-START / INTERRUPTIBILITY event
+START / INTERRUPTIBILITY
   -> fixed target/focus watcher
-  -> UnitCastingInfo / permitted UnitChannelInfo snapshot
-  -> NeverSecret presence/castBarID normalization
-  -> raw notInterruptible remains local
-  -> childTexture:SetAlphaFromBoolean(raw, 0, 255)
+  -> accessible presence/castBarID normalization
+  -> raw notInterruptible stays local
+  -> child:SetAlphaFromBoolean(raw, 0, 255)
 
-CHANNEL_STOP / EMPOWER_STOP
-  -> read only NeverSecret event castBarID
-  -> ignore stale stop for an older cast
-  -> set channel snapshot suppression
+CHANNEL/EMPOWER STOP
+  -> compare NeverSecret event castBarID
+  -> ignore stale old stop
+  -> suppress later UnitChannelInfo snapshots
   -> clear normalized state synchronously
 
-later unit-state event while suppressed
-  -> UnitCastingInfo remains permitted
-  -> UnitChannelInfo skipped
-
-unit identity change or real channel start
+unit identity change or real new start
   -> clear suppression
-  -> permit one fresh snapshot
+  -> permit fresh snapshot
+```
+
+## Cooldown Viewer flow
+
+```text
+Blizzard pool acquire/set/reset hook
+  -> read latest ordinary canonical identity
+  -> store identity only
+  -> dirty one item record
+
+addon RunOnce flush
+  -> canonical bind/unbind
+  -> addon-owned visual update
+```
+
+## Worker states
+
+```text
+flush clean             -> Disabled
+flush dirty             -> RunOnce
+prewarm queue nonempty  -> RunOnce slices
+prewarm queue empty     -> Disabled
+active deadline/poll    -> RunAlways
+no visible timing work  -> Disabled
+```
+
+## Persistence flow
+
+```text
+raw InterruptGlowDB
+  -> read known typed preferences only
+  -> clamp debugKeep
+  -> add schema/producer/interface metadata
+  -> replace SavedVariables root
+  -> no runtime caches survive reload
 ```
 
 ## Runtime evidence flow
 
 ```text
-/iglow capture start
-  -> clear addon-owned counters
-  -> native profiler baseline
-
-capture marks
-  -> elapsed marker + native profiler snapshot
-
-restriction transition
-  -> record accessible event payload
-  -> marker snapshot
-
-/iglow capture stop
-  -> native profiler final snapshot
-  -> subtract cumulative threshold counters
-  -> preserve PeakTime start/end/increase
-  -> copyable report with no raw SecretValue
-```
-
-## Callback lifecycle
-
-```text
-Buttons:AttachNative
-  -> NativeCallbackPolicy
-  -> EventUtil.CreateCallbackHandleContainer when supported
-  -> exact unregister on Detach
-  -> owner-based fallback otherwise
-
-Permanent hooksecurefunc integrations
-  -> attach once
-  -> cheap attached guard after detach
+capture start
+  -> addon counter reset + native profiler baseline
+capture mark
+  -> marker + profiler snapshot
+capture stop
+  -> final snapshot + cumulative threshold deltas
+report
+  -> build/provider/worker/policy/cast/readiness/secrecy evidence
 ```
 
 ## Validation boundary
 
-Local scripts catch syntax, source drift and modeled state-machine errors. GitHub Actions workflows remain absent. WoW FPS, taint, protected execution, contextual SecretValue behavior, provider attribution and upstream channel-fix retirement require explicit live-client captures.
+Local scripts catch syntax and modeled state-machine errors. GitHub Actions workflows remain absent. WoW FPS, taint, protected execution, GCD overlap, contextual SecretValue behavior, provider attribution and upstream workaround retirement require live-client captures.
