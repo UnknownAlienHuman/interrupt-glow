@@ -2,57 +2,84 @@
 
 ## Static implementation
 
-- [x] Remove automatic full action-slot scan.
-- [x] Remove automatic frame enumeration.
-- [x] Remove nameplate traversal from cast/glow paths.
-- [x] Remove macro-body parsing from slot-backed actions.
-- [x] Use `C_ActionBar.IsInterruptAction` and current resolved action feedback.
-- [x] Deduplicate native action feedback before frame-batched reconcile.
-- [x] Route LAB conditional-macro feedback through the changed action slot only.
-- [x] Remove broad LAB visual-update work for hookable providers.
-- [x] Add exact 12.1.0 ordinary per-spec interrupt snapshot and generator.
-- [x] Keep verified PvP-talent interrupts outside the generated block (`212619` Call Felhunter).
-- [x] Add current Warlock pet aliases; exclude obsolete Optical Blast.
-- [x] Match Blizzard Cooldown Viewer talent/spec/PvP invalidation surfaces.
-- [x] Defer gameplay events/provider discovery to `PLAYER_LOGIN`.
-- [x] Use fully-loaded add-on lifecycle gates and late-provider callbacks.
-- [x] Keep GitHub Actions workflows absent; acceptance is live-client only.
-- [x] Add fixed target/focus unit-event watchers.
-- [x] Detect cast presence through NeverSecret fields.
-- [x] Route secret `notInterruptible` directly to `SetAlphaFromBoolean(..., 0, 255)` without storage, logging, readback or a `pcall` result lane.
-- [x] Share readiness per canonical ability and cache one source result per pass.
-- [x] Preserve dormant ability readiness across rapid heal/interrupt macro transitions.
-- [x] Normalize `isOnGCD` only during `SPELL_UPDATE_COOLDOWN` dispatch.
-- [x] Learn interrupt cooldown/recovery categories and ignore idle unrelated events.
-- [x] Add charge, pet, LoC and restricted-timing handling.
-- [x] Fail closed on inaccessible LoC and intrinsic pet usability.
-- [x] Prevent optimistic cooldown compatibility from bypassing hard restrictions.
-- [x] Stop restricted timing polling when no relevant cast exists.
-- [x] Skip cooldown/charge/LoC evaluation while the addon is disabled.
-- [x] Add immediate player/pet interrupt-success invalidation.
-- [x] Add Cooldown Viewer pool lifecycle, duplicate suppression and off/on rebinding.
-- [x] Incrementally prewarm lightweight overlays outside combat.
-- [x] Keep internal counters disabled outside explicit debug/profile sessions.
-- [x] Make diagnostics inaccessible-safe and combat-lazy.
-- [x] Retain optional local syntax/source/mock scripts as development aids only.
+- [x] Remove automatic full action-slot, frame, nameplate, macro-body and Cooldown Viewer tree scans.
+- [x] Use current action feedback and `C_ActionBar.IsInterruptAction` for slot-backed classification.
+- [x] Deduplicate native and LibActionButton conditional-macro feedback before frame-batched reconciliation.
+- [x] Use callback-handle lifecycle for native EventRegistry registration when supported.
+- [x] Add current 12.1.0 per-spec interrupt data, reviewed PvP exceptions and direct pet aliases.
+- [x] Defer gameplay/provider startup to `PLAYER_LOGIN` and verified late-load surfaces.
+- [x] Keep GitHub Actions workflows absent; live-client acceptance remains authoritative.
+- [x] Track only fixed `target` and `focus` cast units.
+- [x] Route inaccessible `notInterruptible` directly to `SetAlphaFromBoolean(..., 0, 255)` without storage, logging, readback or a `pcall` result lane.
+- [x] Share readiness per canonical ability and make cooldown/usability/LoC evaluation on-demand.
+- [x] Fail closed on inaccessible LoC and action/spell/pet usability.
+- [x] Normalize GCD state only inside `SPELL_UPDATE_COOLDOWN` dispatch.
+- [x] Prevent stale readiness and countdown display with `readinessPending`.
+- [x] Add Cooldown Viewer pool lifecycle, duplicate suppression and active-item off/on rebinding.
+- [x] Incrementally prewarm addon-owned visual shells outside combat.
+- [x] Keep internal counters dormant outside explicit debug/capture sessions.
+- [x] Add build/context/provider/secrecy/readiness runtime evidence capture.
+- [x] Capture all native profiler metrics through the 1000 ms threshold.
+- [x] Record native profiler baselines and threshold-count deltas instead of claiming a counter reset.
+- [x] Track active upstream `WOWUI-2026-005` and implement event-authoritative channel/empower stop handling.
+- [x] Suppress stale `UnitChannelInfo` snapshots after stop until a real start or unit-identity reset.
+- [x] Ignore delayed stop events whose NeverSecret `castBarID` belongs to an older cast.
+- [x] Add focused runtime-probe, callback-handle, CDM toggle and phantom-channel regression tests.
+- [x] Keep unconfirmed `SPELL_SECRECY_CHANGED` out of runtime registrations.
 
-## Required live tests
+## Fresh local/manual checks before merge
 
-- [ ] Quick Heal `[@mouseover,help][]` regression reproduction.
+- [ ] `texlua tests/check_syntax.lua .`
+- [ ] `python tests/static_checks.py`
+- [ ] `texlua tests/mock_wow.lua .`
+- [ ] `texlua tests/cdm_toggle.lua .`
+- [ ] `texlua tests/runtime_probe.lua .`
+- [ ] `texlua tests/native_callback_handles.lua .`
+- [ ] `texlua tests/channel_guard.lua .`
+- [ ] Confirm `.github/workflows` remains absent.
+- [ ] Inspect final PR patch after all fixes; do not rely on an older committed report.
+
+## Required live-client attribution matrix
+
+Run equal-duration/equal-input captures for:
+
+- [ ] default Blizzard UI with third-party addons disabled;
+- [ ] Interrupt Glow only;
+- [ ] Interrupt Glow plus the required action-bar provider;
+- [ ] normal full addon stack.
+
+For every run record build, location/instance, combat/restriction state, visible nameplate count, macro, provider versions, FPS, taint/errors and the complete `/iglow capture show` report.
+
+## Required functional live tests
+
+- [ ] Quick Heal `[@mouseover,help][]` reproduction: friendly hover and hostile/nameplate hover.
 - [ ] Conditional heal/interrupt macro changes in combat.
 - [ ] No interrupt currently on bars.
-- [ ] 40–60 visible nameplates.
 - [ ] Target and focus acquired mid-cast.
-- [ ] Restricted Mythic+, raid and PvP.
+- [ ] Restricted Mythic+, raid, arena and battleground contexts.
 - [ ] Page, stance, form, stealth, vehicle and override changes.
 - [ ] Bartender, ElvUI and Dominos current releases.
 - [ ] ButtonForge direct, cleared and conditional macro buttons.
 - [ ] Warlock Felhunter/Felguard, sacrifice, Command Demon and Call Felhunter.
-- [ ] Protection Warrior Pummel + Disrupting Shout.
-- [ ] Cooldown Viewer layout, settings changes, disable/enable and pool reuse.
+- [ ] Protection Warrior Pummel plus Disrupting Shout.
+- [ ] Cooldown Viewer layout/settings changes, disable/enable and pool reuse.
 - [ ] Charges, intrinsic pet usability and Loss of Control under restrictions.
 - [ ] Enable/disable during an existing relevant cast.
 - [ ] `/reload` with each optional provider already loaded and not loaded yet.
 - [ ] `/console taintLog 2`: no blocked/forbidden action.
-- [ ] `C_AddOnProfiler`: no new >5 ms ticks during 60-second mouseover stress.
-- [ ] Compare enable/disable and `/reload` attach counts for duplicate callbacks.
+
+## Active upstream channel regression tests
+
+- [ ] Target death/invalid unit during an active channel: no resurrected glow after stop.
+- [ ] Lightning Lasso phantom second channel reproduction.
+- [ ] Ray of Frost phantom second channel reproduction over repeated/long-duration testing.
+- [ ] Confirm report contains `channelSuppressed`, `lastEvent`, and `WOWUI-2026-005` evidence.
+- [ ] Retire mitigation only after a named live build fixes all three scenarios without the guard.
+
+## Performance acceptance
+
+- [ ] Native profiler is enabled and reports tick frequency.
+- [ ] Compare start/end/delta threshold counters for every attribution run.
+- [ ] No new >5 ms threshold crossings attributable to Interrupt Glow in the fixed-duration primary scenario.
+- [ ] Resolve the first repeating Lua/secret/taint/forbidden error before interpreting later profiler/watchdog output.
+- [ ] Confirm no duplicate callback/provider attach after enable/disable and `/reload`.
