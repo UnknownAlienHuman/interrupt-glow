@@ -116,10 +116,26 @@ function Cooldown:RefreshAbility(ability)
     return originalRefreshAbility(self, ability)
 end
 
+local originalRefreshAll = Cooldown.RefreshAll
+if type(originalRefreshAll) == "function" then
+    function Cooldown:RefreshAll()
+        -- The base batched evaluator filters sourceKind=nil before calling
+        -- RefreshAbility. Reconcile sources first so a temporarily cleared but
+        -- still-bound ability cannot be skipped for the entire generation.
+        for _, ability in pairs(IG.AbilityStates) do
+            if ability and next(ability.records or {}) ~= nil then
+                EnsureCurrentSource(ability)
+            end
+        end
+        return originalRefreshAll(self)
+    end
+end
+
 IG:RegisterModule("AbilitySourcePolicy", {
     priority = SOURCE_PRIORITY,
     EnsureCurrentSource = EnsureCurrentSource,
     sharedReadinessRequiresBoundSource = true,
     upgradesToHigherPrioritySource = true,
     ownsButtonSourceRebuild = true,
+    reconcilesBeforeRefreshFilter = true,
 })
