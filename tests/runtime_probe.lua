@@ -88,6 +88,10 @@ function InterruptGlow.Data:GetActiveInterrupts() return pairs(self.activeInterr
 InterruptGlow.Worker = {
     SupportsOnUpdateMode = function(_, frame) return frame ~= nil end,
 }
+InterruptGlow:RegisterModule("GCDSafetyPolicy", {
+    ignoresGlobalCooldownInDurationAPI = true,
+    treatsIsOnGCDAsReadinessProof = false,
+})
 
 UIParent = {}
 ChatFontNormal = {}
@@ -171,11 +175,13 @@ local probe = InterruptGlow.RuntimeProbe
 local initialReport = probe:BuildReport()
 assert(initialReport:find("cooldownPolicy=NeverSecret"))
 assert(initialReport:find("repository=UnknownAlienHuman/interrupt%-glow"))
-assert(initialReport:find("kbCommit=071e6a755f4613908d019b23e8e121b0bf91ce5d"))
+assert(initialReport:find("kbCommit=312085aa8d23dfe283b416ba0f394fef1cae22dd"))
 assert(initialReport:find("savedSchema=3", 1, true))
 assert(initialReport:find("Dominos.loaded=true"))
 assert(initialReport:find("focus.channelSuppressed=true"))
 assert(initialReport:find("runtime.enabled=false", 1, true))
+assert(initialReport:find("gcd.ignoreGlobalCooldownDuration=true", 1, true))
+assert(initialReport:find("gcd.isOnGCDReadinessProof=false", 1, true))
 assert(initialReport:find("upstream.WOWUI%-2026%-005=ACTIVE_UPSTREAM"))
 
 assert(probe:Start("quick-heal-mouseover") == true)
