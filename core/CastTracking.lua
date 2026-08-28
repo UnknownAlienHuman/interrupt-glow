@@ -27,9 +27,6 @@ local UNITS = { "target", "focus" }
 local function SafeUnitBoolean(fn, ...)
     if type(fn) ~= "function" then return nil end
 
-    -- Fixed, valid unit tokens are used throughout this module. Calling the API
-    -- directly avoids routing potentially secret returns through pcall. The
-    -- access predicate is the first operation on the returned value.
     local value = fn(...)
     if not IG.CanAccess(value) then return nil end
     if value == true then return true end
@@ -80,6 +77,13 @@ local function GetEventCastBarID(event, ...)
         return SafeEventCastBarID(castBarID)
     end
     return nil
+end
+
+local function IsStaleCastEvent(state, eventCastBarID)
+    return state ~= nil
+        and type(eventCastBarID) == "number"
+        and type(state.castBarID) == "number"
+        and eventCastBarID ~= state.castBarID
 end
 
 function CastTracking:SetChannelSuppressed(unit, suppressed, reason)
@@ -180,12 +184,7 @@ function CastTracking:ClearUnit(unit, reason, eventCastBarID)
     local state = IG.CastState[unit]
     if not state then return false end
 
-    -- A delayed stop for an older cast must not clear a newer cast already
-    -- established by a different NeverSecret castBarID.
-    if type(eventCastBarID) == "number"
-        and type(state.castBarID) == "number"
-        and eventCastBarID ~= state.castBarID
-    then
+    if IsStaleCastEvent(state, eventCastBarID) then
         IG:BumpStat("cast.staleStopIgnored")
         return false
     end
@@ -317,11 +316,7 @@ function CastTracking:OnUnitEvent(unit, event, ...)
     then
         local eventCastBarID = GetEventCastBarID(event, ...)
         local state = IG.CastState[unit]
-        if state
-            and type(eventCastBarID) == "number"
-            and type(state.castBarID) == "number"
-            and eventCastBarID ~= state.castBarID
-        then
+        if IsStaleCastEvent(state, eventCastBarID) then
             IG:BumpStat("cast.staleStopIgnored")
             return
         end
@@ -338,6 +333,10 @@ function CastTracking:OnUnitEvent(unit, event, ...)
     then
         local state = IG.CastState[unit]
         local eventCastBarID = GetEventCastBarID(event, ...)
+        if IsStaleCastEvent(state, eventCastBarID) then
+            IG:BumpStat("cast.staleStopIgnored")
+            return
+        end
         if state and state.isChannel == true then
             self:SetChannelSuppressed(unit, true, event)
         end
