@@ -121,8 +121,14 @@ local function ReadChargeInfo(info, durationGetter, sourceID)
 end
 
 local function ReadLossOfControlState(info)
-    if not IG.CanAccess(info) or info == nil then
+    if info == nil then
         return "clear"
+    end
+    if not IG.CanAccess(info) then
+        -- LoC cooldown data is SecretWhenCooldownsRestricted. Inaccessibility is
+        -- not proof that the action is free to use; optimistic cooldown mode must
+        -- never bypass an unknown control-loss gate.
+        return "restricted"
     end
 
     local isActive, activeKnown = IG:ReadMember(info, "isActive")
