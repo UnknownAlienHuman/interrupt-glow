@@ -8,6 +8,7 @@ local cooldownDirtyCalls = 0
 InterruptGlow = {
     modules = {},
     Stats = {},
+    AbilityStates = {},
     Cooldown = {},
     Buttons = {},
 }
@@ -28,6 +29,13 @@ function InterruptGlow.Cooldown:RefreshAbility(ability)
         hasEvaluation = ability.hasEvaluation,
     }
     return true
+end
+function InterruptGlow.Cooldown:RefreshAll()
+    for _, ability in pairs(InterruptGlow.AbilityStates) do
+        if ability.sourceKind ~= nil and next(ability.records) ~= nil then
+            self:RefreshAbility(ability)
+        end
+    end
 end
 
 local loader, loadError = loadfile(ROOT .. "/core/AbilitySourcePolicy.lua")
@@ -79,6 +87,7 @@ local ability = {
         [inactive] = true,
     },
 }
+InterruptGlow.AbilityStates.test = ability
 
 -- Button binding must upgrade immediately even while the lower-priority spell
 -- source remains bound. Waiting for a later cooldown event would leave stale CDM
@@ -127,6 +136,16 @@ InterruptGlow.Cooldown:RefreshAbility(ability)
 assert(observed[#observed].sourceKind == "spell")
 assert(observed[#observed].sourceID == 15487)
 
+-- More importantly, RefreshAll must reconcile before its base sourceKind filter;
+-- otherwise a bound ability with a temporarily nil source is skipped entirely.
+ability.sourceKind = nil
+ability.sourceID = nil
+local observedBefore = #observed
+InterruptGlow.Cooldown:RefreshAll()
+assert(#observed == observedBefore + 1)
+assert(observed[#observed].sourceKind == "spell")
+assert(observed[#observed].sourceID == 15487)
+
 -- A fully dormant ability keeps its last source/evaluation for same-generation
 -- macro churn and queues no pointless refresh.
 ability.records[spell] = nil
@@ -139,8 +158,9 @@ local policy = assert(InterruptGlow.modules.AbilitySourcePolicy)
 assert(policy.sharedReadinessRequiresBoundSource == true)
 assert(policy.upgradesToHigherPrioritySource == true)
 assert(policy.ownsButtonSourceRebuild == true)
+assert(policy.reconcilesBeforeRefreshFilter == true)
 assert(policy.priority.action > policy.priority.pet)
 assert(policy.priority.pet > policy.priority.spell)
-assert((InterruptGlow.Stats["cooldown.abilitySourceChanged"] or 0) == 7)
+assert((InterruptGlow.Stats["cooldown.abilitySourceChanged"] or 0) == 8)
 
 print("ABILITY SOURCE POLICY TEST PASSED")
