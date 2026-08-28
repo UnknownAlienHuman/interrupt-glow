@@ -46,6 +46,8 @@ function UnitIsDeadOrGhost(_) return false end
 function CreateFrame()
     local frame = { scripts = {} }
     function frame:RegisterUnitEvent(event, unit)
+        assert(type(unit) == "string", "RegisterUnitEvent requires unit varargs, not a table")
+        assert(unit == "target" or unit == "focus")
         registeredEvents[event] = registeredEvents[event] or {}
         registeredEvents[event][unit] = true
     end
