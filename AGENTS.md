@@ -8,7 +8,7 @@
 - Interface: `120100`
 - Verified Blizzard source: `12.1.0.69497`
 - `wow-ui-source` commit: `027d26c3406d3de2cbd2b1f67d468fe033a1bcd4`
-- Shared engineering KB: `UnknownAlienHuman/wow-addon-engineering-kb@071e6a755f4613908d019b23e8e121b0bf91ce5d`
+- Shared engineering KB: `UnknownAlienHuman/wow-addon-engineering-kb@312085aa8d23dfe283b416ba0f394fef1cae22dd`
 
 Read this repository first. Then follow the current-first KB router and pinned Blizzard source. Historical documents are evidence, not current implementation authority.
 
@@ -37,7 +37,7 @@ Read this repository first. Then follow the current-first KB router and pinned B
 8. Do not pass a secret `LuaDurationObject` into addon-owned cooldown/statusbar/text bindings.
 9. Do not create overlays in combat.
 10. Keep provider integration callback-first, idempotent, bounded, and behaviorally guarded after detach.
-11. `isOnGCD` may be normalized only during `SPELL_UPDATE_COOLDOWN` dispatch.
+11. Ignore the global cooldown through `GetActionCooldownDuration(slot, true)` / `GetSpellCooldownDuration(spellID, true)`. Never treat `isOnGCD=true` or `UNIT_SPELLCAST_SUCCEEDED` as positive readiness proof.
 12. Restricted Loss of Control and inaccessible action/spell/pet usability are hard fail-closed gates.
 13. A synchronous cast/channel stop is authoritative over a later `UnitChannelInfo` snapshot until a real start or unit-identity reset.
 14. `RegisterUnitEvent` filters must be unit varargs, never a unit-token table.
@@ -55,6 +55,22 @@ Read this repository first. Then follow the current-first KB router and pinned B
 - `core/Worker.lua` maps one-shot work to `Enum.OnUpdateMode.RunOnce`, continuous active timing to `RunAlways`, and idle state to `Disabled`; Show/Hide exists only as a compatibility/test fallback.
 - Target/focus identity changes reset channel-snapshot suppression; generic unit-state events do not.
 - Specialization changes prune dormant canonical abilities and reset source-readiness caches after all buttons reconcile. Same-spec macro churn retains dormant state to avoid GC churn.
+
+## GCD contract
+
+Interrupt Glow is a readiness consumer, not a GCD analyzer. The current KB's GCD observation protocol for analyzers uses explicit GCD spell `61304`, accessibility gating, deduplication, and bounded segment polling. That protocol must not be partially copied into interrupt readiness.
+
+For Interrupt Glow:
+
+```text
+accessible ignore-GCD duration == zero  -> ready candidate
+accessible ignore-GCD duration > zero   -> not ready
+restricted duration + isActive=true     -> fail closed
+isOnGCD=true                            -> never proves ready
+UNIT_SPELLCAST_SUCCEEDED                -> invalidation only for a confirmed interrupt source
+```
+
+`core/GCDSafetyPolicy.lua` forces every wrapped readiness resolver to ignore legacy `gcdOnlyHint` inputs and replaces the collector with a no-op/clear boundary.
 
 ## Active upstream issue contract
 
@@ -108,4 +124,4 @@ ref/tree tested
 observed result
 ```
 
-Missing tooling is `skipped`, never `pass`. Offline/mock checks do not prove WoW behavior. Required in-client validation includes Quick Heal mouseover, equal-input attribution runs, restricted content, `taintLog 2`, provider load order, Warlock/PWarrior variants, CDM pool reuse, phantom-channel repros, unit-event filtering, worker idle state, SavedVariables migration, and native profiler baseline/deltas.
+Missing tooling is `skipped`, never `pass`. Offline/mock checks do not prove WoW behavior. Required in-client validation includes Quick Heal mouseover, equal-input attribution runs, restricted content, `taintLog 2`, provider load order, Warlock/PWarrior variants, CDM pool reuse, phantom-channel repros, unit-event filtering, worker idle state, SavedVariables migration, GCD-overlap readiness, and native profiler baseline/deltas.
