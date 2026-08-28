@@ -1,7 +1,8 @@
 local IG = _G.InterruptGlow
-if not IG or not IG.Cooldown then return end
+if not IG or not IG.Cooldown or not IG.Buttons then return end
 
 local Cooldown = IG.Cooldown
+local Buttons = IG.Buttons
 local pairs = pairs
 local type = type
 local next = next
@@ -61,27 +62,52 @@ local function InvalidateForSourceChange(ability)
         record.ready = false
         record.deadline = nil
         record.restrictedCooldown = false
+        record.hardRestrictedCooldown = false
         record.readinessPending = ability.readinessPending
     end
 end
 
-local function EnsureCurrentSource(ability)
-    if not ability then return false end
-
-    -- Recompute the best source from currently bound records every time. Keeping
-    -- a still-valid lower-priority source would violate action > pet > spell
-    -- authority when a stronger source appears later (for example after a
-    -- conditional macro switches back to the interrupt branch).
-    local sourceKind, sourceID = SelectBestSource(ability)
+local function ApplySource(ability, sourceKind, sourceID, scheduleRefresh)
     if ability.sourceKind == sourceKind and ability.sourceID == sourceID then
         return false
     end
 
     ability.sourceKind = sourceKind
     ability.sourceID = sourceID
+    ability.sourceChanged = true
     InvalidateForSourceChange(ability)
     IG:BumpStat("cooldown.abilitySourceChanged")
+
+    if scheduleRefresh and sourceKind ~= nil then
+        IG:MarkCooldownDirty(false)
+    end
     return true
+end
+
+local function EnsureCurrentSource(ability)
+    if not ability then return false end
+
+    local sourceKind, sourceID = SelectBestSource(ability)
+    return ApplySource(ability, sourceKind, sourceID, false)
+end
+
+-- Replace the earlier keep-current shortcut in Buttons.lua. A still-bound spell
+-- or pet source must not block an immediate upgrade when a current action source
+-- appears. Conversely, removing the chosen action must fall back immediately.
+function Buttons:RebuildAbilitySource(ability)
+    if not ability then return false end
+
+    local sourceKind, sourceID = SelectBestSource(ability)
+    if sourceKind == nil then
+        -- Preserve the last source/evaluation only while the canonical ability is
+        -- fully dormant. Rapid macro unbind/rebind can then reuse state within the
+        -- same cooldown generation without allocation or API churn.
+        ability.dormant = true
+        return false
+    end
+
+    ability.dormant = false
+    return ApplySource(ability, sourceKind, sourceID, true)
 end
 
 local originalRefreshAbility = Cooldown.RefreshAbility
@@ -95,4 +121,5 @@ IG:RegisterModule("AbilitySourcePolicy", {
     EnsureCurrentSource = EnsureCurrentSource,
     sharedReadinessRequiresBoundSource = true,
     upgradesToHigherPrioritySource = true,
+    ownsButtonSourceRebuild = true,
 })
