@@ -520,8 +520,12 @@ function RuntimeProbe:Stop()
     self.stoppedAt = IG:Now()
     self.profilerStop = CaptureProfiler()
     self.active = false
-    IG:StopProfileCounters("capture")
+
+    -- Freeze the report while capture still owns the counter window, then
+    -- release ownership. This preserves unambiguous evidence without letting the
+    -- report-building step contaminate the measured profiler endpoint.
     self.lastReport = self:BuildReport()
+    IG:StopProfileCounters("capture")
     IG:Print("Runtime capture stopped. Use /iglow capture show.")
     return true
 end
