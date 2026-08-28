@@ -7,6 +7,9 @@ local RuntimeProbe = {
     startedAt = nil,
     stoppedAt = nil,
     marks = {},
+    restrictionTransitions = {},
+    profilerStart = nil,
+    profilerStop = nil,
     lastReport = nil,
     lastRestrictionType = nil,
     lastRestrictionState = nil,
@@ -28,6 +31,15 @@ local sort = table.sort
 local concat = table.concat
 local format = string.format
 
+local KB_COMMIT = "e45366cb0ca56dfe49664daa9f2579e629af0cb3"
+local PROVIDERS = {
+    "Bartender4",
+    "ElvUI",
+    "Dominos",
+    "ButtonForge",
+    "Blizzard_CooldownViewer",
+}
+
 local function SafeScalar(value, fallback)
     if not IG.CanAccess(value) then return "<inaccessible>" end
     if value == nil then return fallback or "nil" end
@@ -42,6 +54,8 @@ end
 local function SafeCall(fn, ...)
     if type(fn) ~= "function" then return false, "<unavailable>" end
 
+    -- Runtime probes are explicit diagnostics. pcall contains an API error but
+    -- never declassifies a value; accessibility is still checked immediately.
     local ok, value = pcall(fn, ...)
     if not ok then return false, "<error>" end
     if not IG.CanAccess(value) then return false, "<inaccessible>" end
@@ -72,6 +86,13 @@ local function FormatSecrecyCall(fn, spellID)
     local ok, value = SafeCall(fn, spellID)
     if not ok then return SafeScalar(value) end
     return GetSecrecyName(value)
+end
+
+local function NormalizeLabel(value, fallback)
+    if type(value) ~= "string" then return fallback or "" end
+    value = value:gsub("[%c]", " ")
+    if #value > 96 then value = value:sub(1, 96) end
+    return value
 end
 
 local function AddLine(lines, text)
@@ -117,6 +138,13 @@ local function CollectActionSlots()
     return SortedKeys(set)
 end
 
+local function CaptureProfiler()
+    if IG.Debug and type(IG.Debug.ProfilerSnapshot) == "function" then
+        return IG.Debug:ProfilerSnapshot()
+    end
+    return nil
+end
+
 local function AppendBuildSection(lines)
     AddLine(lines, "[build]")
 
@@ -136,7 +164,7 @@ local function AppendBuildSection(lines)
     AddLine(lines, "expectedInterface=" .. SafeScalar(IG.Data and IG.Data.interface))
     AddLine(lines, "sourceBuild=" .. SafeScalar(IG.Data and IG.Data.wowBuild))
     AddLine(lines, "sourceCommit=" .. SafeScalar(IG.Data and IG.Data.sourceCommit))
-    AddLine(lines, "kbCommit=bb13f191903ca4ff63a4c93535edb9eacab9630d")
+    AddLine(lines, "kbCommit=" .. KB_COMMIT)
     AddLine(lines, "capturedAt=" .. SafeScalar(type(date) == "function" and date("!%Y-%m-%dT%H:%M:%SZ") or nil))
 end
 
@@ -165,6 +193,32 @@ local function AppendContextSection(lines)
 
     AddLine(lines, "lastRestrictionType=" .. SafeScalar(RuntimeProbe.lastRestrictionType, "unobserved"))
     AddLine(lines, "lastRestrictionState=" .. SafeScalar(RuntimeProbe.lastRestrictionState, "unobserved"))
+    for index = 1, #RuntimeProbe.restrictionTransitions do
+        local transition = RuntimeProbe.restrictionTransitions[index]
+        AddLine(lines, format(
+            "restriction.%d=%.3f type=%s state=%s",
+            index,
+            transition.elapsed,
+            SafeScalar(transition.restrictionType),
+            SafeScalar(transition.state)
+        ))
+    end
+end
+
+local function AppendProviderSection(lines)
+    AddLine(lines, "")
+    AddLine(lines, "[providers]")
+
+    for index = 1, #PROVIDERS do
+        local name = PROVIDERS[index]
+        AddLine(lines, name .. ".loaded=" .. tostring(IG:IsAddOnFullyLoaded(name)))
+    end
+
+    local buttons = IG.Buttons
+    AddLine(lines, "native.attached=" .. SafeScalar(buttons and buttons.nativeAttached))
+    AddLine(lines, "dominos.attached=" .. SafeScalar(buttons and buttons.dominosAttached))
+    AddLine(lines, "buttonForge.attached=" .. SafeScalar(buttons and buttons.buttonForgeAttached))
+    AddLine(lines, "cooldownViewer.attached=" .. SafeScalar(IG.CDM and IG.CDM.attached))
 end
 
 local function AppendCaptureSection(lines)
@@ -182,7 +236,7 @@ local function AppendCaptureSection(lines)
 
     for index = 1, #RuntimeProbe.marks do
         local mark = RuntimeProbe.marks[index]
-        AddLine(lines, format("mark.%d=%.3f %s", index, mark.elapsed, mark.label))
+        AddLine(lines, format("mark.%d=%.3f %s", index, mark.elapsed, SafeScalar(mark.label)))
     end
 end
 
@@ -196,9 +250,15 @@ local function AppendCastSection(lines)
         local state = IG.CastState and IG.CastState[unit] or nil
         AddLine(lines, unit .. ".active=" .. SafeScalar(state and state.active))
         AddLine(lines, unit .. ".hostile=" .. SafeScalar(state and state.hostile))
+        AddLine(lines, unit .. ".isChannel=" .. SafeScalar(state and state.isChannel))
         AddLine(lines, unit .. ".niState=" .. SafeScalar(state and state.niState))
         AddLine(lines, unit .. ".castBarID=" .. SafeScalar(state and state.castBarID))
+        AddLine(lines, unit .. ".channelSuppressed=" .. SafeScalar(state and state.channelSuppressed))
+        AddLine(lines, unit .. ".lastEvent=" .. SafeScalar(state and state.lastEvent, "unobserved"))
     end
+
+    AddLine(lines, "upstream.WOWUI-2026-005=ACTIVE_UPSTREAM")
+    AddLine(lines, "mitigation.WOWUI-2026-005=event-authoritative-channel-stop-guard")
 end
 
 local function AppendSecrecySection(lines)
@@ -279,14 +339,59 @@ local function AppendCountersSection(lines)
     end
 end
 
+local function AppendSnapshot(lines, prefix, snapshot)
+    if not snapshot then
+        AddLine(lines, prefix .. ".available=false")
+        return
+    end
+
+    AddLine(lines, prefix .. ".available=" .. SafeScalar(snapshot.available))
+    AddLine(lines, prefix .. ".enabled=" .. SafeScalar(snapshot.enabled, "unknown"))
+    AddLine(lines, prefix .. ".ticksPerSecond=" .. SafeScalar(snapshot.ticksPerSecond, "unknown"))
+
+    local metrics = IG.Debug and IG.Debug.profilerMetrics or {}
+    for index = 1, #metrics do
+        local name = metrics[index][1]
+        local value = snapshot.metrics and snapshot.metrics[name]
+        if value ~= nil then AddLine(lines, prefix .. "." .. name .. "=" .. SafeScalar(value)) end
+    end
+end
+
+local function AppendProfilerDeltas(lines, prefix, startSnapshot, endSnapshot)
+    if not IG.Debug or type(IG.Debug.ProfilerDelta) ~= "function" then return end
+    local delta = IG.Debug:ProfilerDelta(startSnapshot, endSnapshot)
+    AddLine(lines, prefix .. ".PeakTimeIncrease=" .. SafeScalar(delta.peakIncrease, "unknown"))
+
+    local metrics = IG.Debug.profilerMetrics or {}
+    for index = 1, #metrics do
+        local name = metrics[index][1]
+        if metrics[index][3] == true and delta.metrics[name] ~= nil then
+            AddLine(lines, prefix .. "." .. name .. "=" .. SafeScalar(delta.metrics[name]))
+        end
+    end
+end
+
 local function AppendProfilerSection(lines)
     AddLine(lines, "")
     AddLine(lines, "[profiler]")
-    if IG.Debug and type(IG.Debug.ProfilerReport) == "function" then
-        local report = IG.Debug:ProfilerReport()
-        for line in report:gmatch("[^\n]+") do AddLine(lines, line) end
-    else
-        AddLine(lines, "C_AddOnProfiler=<unavailable>")
+
+    local finish = RuntimeProbe.active and CaptureProfiler()
+        or RuntimeProbe.profilerStop
+        or CaptureProfiler()
+    local start = RuntimeProbe.profilerStart or finish
+
+    AppendSnapshot(lines, "start", start)
+    AppendSnapshot(lines, "end", finish)
+    AppendProfilerDeltas(lines, "delta", start, finish)
+
+    for index = 1, #RuntimeProbe.marks do
+        local mark = RuntimeProbe.marks[index]
+        if mark.profiler then
+            AddLine(lines, "marker." .. index .. ".label=" .. SafeScalar(mark.label))
+            AddLine(lines, "marker." .. index .. ".elapsed=" .. SafeScalar(mark.elapsed))
+            AppendSnapshot(lines, "marker." .. index, mark.profiler)
+            AppendProfilerDeltas(lines, "marker." .. index .. ".delta", start, mark.profiler)
+        end
     end
 end
 
@@ -294,6 +399,7 @@ function RuntimeProbe:BuildReport()
     local lines = {}
     AppendBuildSection(lines)
     AppendContextSection(lines)
+    AppendProviderSection(lines)
     AppendCaptureSection(lines)
     AppendCastSection(lines)
     AppendSecrecySection(lines)
@@ -304,40 +410,53 @@ function RuntimeProbe:BuildReport()
 end
 
 function RuntimeProbe:Start(label)
+    if self.active then
+        IG:Print("A runtime capture is already active.")
+        return false
+    end
+
     self.active = true
-    self.label = type(label) == "string" and label or ""
+    self.label = NormalizeLabel(label, "")
     self.startedAt = IG:Now()
     self.stoppedAt = nil
     self.marks = {}
+    self.restrictionTransitions = {}
+    self.profilerStop = nil
     self.lastReport = nil
     IG:StartProfileCounters()
+    self.profilerStart = CaptureProfiler()
     IG:Print("Runtime capture started.")
+    return true
 end
 
 function RuntimeProbe:Mark(label)
     if not self.active then
         IG:Print("No active capture. Use /iglow capture start.")
-        return
+        return false
     end
 
     self.marks[#self.marks + 1] = {
         elapsed = IG:Now() - self.startedAt,
-        label = type(label) == "string" and label or "mark",
+        label = NormalizeLabel(label, "mark"),
+        profiler = CaptureProfiler(),
     }
     IG:Print("Capture marker added.")
+    return true
 end
 
 function RuntimeProbe:Stop()
     if not self.active then
         IG:Print("No active capture.")
-        return
+        return false
     end
 
     self.stoppedAt = IG:Now()
+    self.profilerStop = CaptureProfiler()
     self.active = false
     IG:StopProfileCounters()
     self.lastReport = self:BuildReport()
     IG:Print("Runtime capture stopped. Use /iglow capture show.")
+    return true
 end
 
 function RuntimeProbe:Show()
@@ -352,11 +471,18 @@ end
 function RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
     if not self.active then return end
 
-    if IG.CanAccess(restrictionType) then self.lastRestrictionType = restrictionType end
-    if IG.CanAccess(state) then self.lastRestrictionState = state end
+    local safeType = IG.CanAccess(restrictionType) and restrictionType or nil
+    local safeState = IG.CanAccess(state) and state or nil
+    self.lastRestrictionType = safeType
+    self.lastRestrictionState = safeState
 
+    self.restrictionTransitions[#self.restrictionTransitions + 1] = {
+        elapsed = IG:Now() - self.startedAt,
+        restrictionType = safeType,
+        state = safeState,
+    }
     self:Mark("restriction type="
-        .. SafeScalar(self.lastRestrictionType, "unknown")
+        .. SafeScalar(safeType, "unknown")
         .. " state="
-        .. SafeScalar(self.lastRestrictionState, "unknown"))
+        .. SafeScalar(safeState, "unknown"))
 end
