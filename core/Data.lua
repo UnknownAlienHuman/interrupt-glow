@@ -151,6 +151,15 @@ local function FindOverrideSpell(spellID)
     return SafeNumberCall(C_SpellBook.FindSpellOverrideByID, spellID)
 end
 
+local function IsRuntimeFamilyKnown(canonicalSpellID, observedSpellID)
+    if IsKnownOrInSpellBook(observedSpellID) or IsKnownOrInSpellBook(canonicalSpellID) then
+        return true
+    end
+
+    local overrideSpellID = FindOverrideSpell(canonicalSpellID)
+    return overrideSpellID ~= nil and IsKnownOrInSpellBook(overrideSpellID)
+end
+
 local function AddSpecList(self, list)
     if type(list) ~= "table" then return end
     for index = 1, #list do
@@ -242,7 +251,7 @@ function Data:GetCanonicalSpellID(spellID, sourceKind)
     end
 
     local runtimeCanonical = self.runtimeInterrupts[spellID]
-    if runtimeCanonical and IsKnownOrInSpellBook(runtimeCanonical) then
+    if runtimeCanonical and IsRuntimeFamilyKnown(runtimeCanonical, spellID) then
         return runtimeCanonical
     end
 
@@ -252,7 +261,9 @@ function Data:GetCanonicalSpellID(spellID, sourceKind)
             return baseSpellID
         end
         runtimeCanonical = self.runtimeInterrupts[baseSpellID]
-        if runtimeCanonical and IsKnownOrInSpellBook(runtimeCanonical) then return runtimeCanonical end
+        if runtimeCanonical and IsRuntimeFamilyKnown(runtimeCanonical, spellID) then
+            return runtimeCanonical
+        end
     end
 
     local overrideSpellID = FindOverrideSpell(spellID)
@@ -261,7 +272,9 @@ function Data:GetCanonicalSpellID(spellID, sourceKind)
             return overrideSpellID
         end
         runtimeCanonical = self.runtimeInterrupts[overrideSpellID]
-        if runtimeCanonical and IsKnownOrInSpellBook(runtimeCanonical) then return runtimeCanonical end
+        if runtimeCanonical and IsRuntimeFamilyKnown(runtimeCanonical, overrideSpellID) then
+            return runtimeCanonical
+        end
     end
 
     return nil
