@@ -2,10 +2,20 @@ local IG = _G.InterruptGlow
 if not IG or not IG.RuntimeProbe then return end
 
 local Probe = IG.RuntimeProbe
+local _G = _G
+local C_AddOns = _G.C_AddOns
 local type = type
+local pcall = pcall
 
 local MAX_MARKS = 256
 local MAX_RESTRICTIONS = 128
+local PROVIDERS = {
+    "Bartender4",
+    "ElvUI",
+    "Dominos",
+    "ButtonForge",
+    "Blizzard_CooldownViewer",
+}
 
 local function CaptureScalar(value)
     if not IG.CanAccess(value) then return nil end
@@ -14,6 +24,23 @@ local function CaptureScalar(value)
         return value
     end
     return nil
+end
+
+local function ReportScalar(value, fallback)
+    local captured = CaptureScalar(value)
+    if captured == nil then return fallback or "unknown" end
+    return tostring(captured)
+end
+
+local function GetProviderVersion(addOnName)
+    if not C_AddOns or type(C_AddOns.GetAddOnMetadata) ~= "function" then
+        return "<unavailable>"
+    end
+
+    local ok, value = pcall(C_AddOns.GetAddOnMetadata, addOnName, "Version")
+    if not ok or not IG.CanAccess(value) then return "<inaccessible>" end
+    if type(value) ~= "string" and type(value) ~= "number" then return "<unknown>" end
+    return tostring(value)
 end
 
 local originalStart = Probe.Start
@@ -70,6 +97,25 @@ end
 local originalBuildReport = Probe.BuildReport
 function Probe:BuildReport()
     local report = originalBuildReport(self)
+    local DB = IG.DB or {}
+
+    report = report
+        .. "\n\n[configuration]"
+        .. "\nenabled=" .. ReportScalar(DB.enabled)
+        .. "\ncdText=" .. ReportScalar(DB.cdText)
+        .. "\ncdm=" .. ReportScalar(DB.cdm)
+        .. "\nstrictNI=" .. ReportScalar(DB.strictNI)
+        .. "\noptimisticRestrictedCooldown=" .. ReportScalar(DB.optimisticRestrictedCooldown)
+        .. "\ndebug=" .. ReportScalar(DB.debug)
+        .. "\ndebugChat=" .. ReportScalar(DB.debugChat)
+        .. "\ndebugKeep=" .. ReportScalar(DB.debugKeep)
+        .. "\n\n[providerVersions]"
+
+    for index = 1, #PROVIDERS do
+        local name = PROVIDERS[index]
+        report = report .. "\n" .. name .. "=" .. GetProviderVersion(name)
+    end
+
     return report
         .. "\n\n[probeBounds]"
         .. "\nmaxMarks=" .. tostring(MAX_MARKS)
@@ -95,4 +141,6 @@ IG:RegisterModule("RuntimeProbePolicy", {
     maxRestrictions = MAX_RESTRICTIONS,
     buildsReportsOutOfCombatOnly = true,
     automaticRestrictionProfilerSnapshots = false,
+    includesConfiguration = true,
+    includesProviderVersions = true,
 })
