@@ -7,6 +7,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 TOC = ROOT / "InterruptGlow.toc"
 CURRENT_VERSION = "1.1.0-beta.4"
+CURRENT_INTERFACE = "120100"
 CURRENT_KB_COMMIT = "312085aa8d23dfe283b416ba0f394fef1cae22dd"
 
 
@@ -29,6 +30,7 @@ RUNTIME_FILES = [ROOT / entry for entry in TOC_ENTRIES]
 FORBIDDEN_RUNTIME_PATTERNS = {
     "EnumerateFrames": re.compile(r"\bEnumerateFrames\b"),
     "nameplate traversal": re.compile(r"\bGetNamePlates\b"),
+    "C_NamePlate traversal": re.compile(r"\bC_NamePlate\b"),
     "540-slot scan": re.compile(r"\b540\b"),
     "macro-body GetMacroInfo": re.compile(r"\bGetMacroInfo\b"),
     "macro-body GetMacroSpell": re.compile(r"\bGetMacroSpell\b"),
@@ -50,6 +52,7 @@ FORBIDDEN_RUNTIME_PATTERNS = {
     "unverified GCD classification API": re.compile(
         r"\bDoesSpellTriggerGlobalCooldown\b"
     ),
+    "legacy scriptProfile": re.compile(r"\bscriptProfile\b"),
 }
 
 EXPECTED_SPEC_SNIPPETS = {
@@ -74,7 +77,15 @@ def require(text: str, symbols: tuple[str, ...], scope: str) -> list[str]:
     return [f"{scope} is missing {symbol}" for symbol in symbols if symbol not in text]
 
 
-def check_toc() -> list[str]:
+def between(text: str, start: str, end: str) -> str:
+    start_index = text.find(start)
+    end_index = text.find(end, start_index + len(start)) if start_index >= 0 else -1
+    if start_index < 0 or end_index < 0:
+        return ""
+    return text[start_index:end_index]
+
+
+def check_toc_contract() -> list[str]:
     errors: list[str] = []
     toc = read(TOC)
     core = read(ROOT / "Core.lua")
@@ -85,8 +96,21 @@ def check_toc() -> list[str]:
         if not (ROOT / entry).exists():
             errors.append(f"TOC references missing file: {entry}")
 
-    if "## Interface: 120100" not in toc:
-        errors.append("TOC Interface is not 120100")
+    # Every Lua file under core/ is runtime code. This catches the critical class
+    # of errors where a policy exists and its focused test passes, but WoW never
+    # loads the policy because it was omitted from the TOC.
+    core_files = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "core").glob("*.lua")
+    }
+    toc_core_files = {entry for entry in TOC_ENTRIES if entry.startswith("core/")}
+    for path in sorted(core_files - toc_core_files):
+        errors.append(f"Runtime core file is not loaded by TOC: {path}")
+    for path in sorted(toc_core_files - core_files):
+        errors.append(f"TOC core entry has no matching runtime file: {path}")
+
+    if f"## Interface: {CURRENT_INTERFACE}" not in toc:
+        errors.append(f"TOC Interface is not {CURRENT_INTERFACE}")
     if f"## Version: {CURRENT_VERSION}" not in toc:
         errors.append(f"TOC version is not {CURRENT_VERSION}")
     if CURRENT_VERSION not in core:
@@ -95,11 +119,16 @@ def check_toc() -> list[str]:
         errors.append("Interrupt Glow itself must not be LoadOnDemand")
 
     required_order = [
+        "Core.lua",
         "core/Worker.lua",
         "core/Shared.lua",
+        "core/DiagnosticsPolicy.lua",
+        "core/Data.lua",
         "core/Debug.lua",
         "core/RuntimeProbe.lua",
+        "core/RuntimeProbePolicy.lua",
         "core/Glow.lua",
+        "core/PrewarmPolicy.lua",
         "core/Buttons.lua",
         "core/NativeCallbackPolicy.lua",
         "core/LABAdapter.lua",
@@ -109,17 +138,21 @@ def check_toc() -> list[str]:
         "core/Usability.lua",
         "core/GCDSafetyPolicy.lua",
         "core/CachePolicy.lua",
+        "core/AbilitySourcePolicy.lua",
         "core/CastTracking.lua",
         "core/CDM.lua",
         "core/CDMPolicy.lua",
         "core/Events.lua",
+        "core/Slash.lua",
+        "Options.lua",
     ]
     try:
         positions = [TOC_ENTRIES.index(entry) for entry in required_order]
         if positions != sorted(positions):
             errors.append("Runtime policy modules are loaded in the wrong order")
     except ValueError as exc:
-        errors.append(f"TOC is missing a required module: {exc}")
+        errors.append(f"TOC is missing a required runtime module: {exc}")
+
     return errors
 
 
@@ -149,11 +182,12 @@ def check_forbidden_patterns() -> list[str]:
     return errors
 
 
-def check_saved_variables_and_workers() -> list[str]:
+def check_saved_variables_workers_and_prewarm() -> list[str]:
     errors: list[str] = []
     shared = read(ROOT / "core" / "Shared.lua")
     worker = read(ROOT / "core" / "Worker.lua")
     glow = read(ROOT / "core" / "Glow.lua")
+    prewarm = read(ROOT / "core" / "PrewarmPolicy.lua")
 
     errors += require(
         shared,
@@ -188,22 +222,67 @@ def check_saved_variables_and_workers() -> list[str]:
         ),
         "Glow worker policy",
     )
+    errors += require(
+        prewarm,
+        (
+            "processed < self.prewarmBudgetPerFrame",
+            "processed = processed + 1",
+            "budgetCountsInspectedRecords = true",
+        ),
+        "Strict prewarm budget",
+    )
     return errors
 
 
 def check_secret_boundary() -> list[str]:
     errors: list[str] = []
     cast = read(ROOT / "core" / "CastTracking.lua")
+    events = read(ROOT / "core" / "Events.lua")
     glow = read(ROOT / "core" / "Glow.lua")
 
     errors += require(
         cast,
-        ("rawNotInterruptible", "ApplyUnitInterruptibility", "IsStaleCastEvent"),
+        (
+            "rawNotInterruptible",
+            "ApplyUnitInterruptibility",
+            "IsStaleCastEvent",
+            "return SafeEventCastBarID(select(4, ...))",
+            "return SafeEventCastBarID(select(5, ...))",
+            "return SafeEventCastBarID(select(6, ...))",
+        ),
         "CastTracking secret/lifecycle boundary",
     )
+    event_selector = between(cast, "local function GetEventCastBarID", "local function IsStaleCastEvent")
+    for forbidden_local in ("_castGUID", "_spellID", "_interruptedBy", "_complete"):
+        if forbidden_local in event_selector:
+            errors.append(f"Event castBarID selector binds secret-capable field {forbidden_local}")
+
+    errors += require(
+        events,
+        (
+            "not IG.CanAccess(unit)",
+            "not IG.CanAccess(spellID)",
+            "events.restrictedSpellSucceeded",
+        ),
+        "Restricted UNIT_SPELLCAST_SUCCEEDED boundary",
+    )
+    success_handler = between(
+        events,
+        'if event == "UNIT_SPELLCAST_SUCCEEDED" then',
+        'if event == "SPELL_UPDATE_COOLDOWN" then',
+    )
+    compare_index = success_handler.find('unit == "pet"')
+    access_index = success_handler.find("not IG.CanAccess(unit)")
+    if compare_index >= 0 and (access_index < 0 or compare_index < access_index):
+        errors.append("Restricted spell-success unit is compared before canaccessvalue")
+
     errors += require(
         glow,
-        ("SetAlphaFromBoolean", "ALPHA_VISIBLE = 255", "CreatePulseAnimation(overlay.target.plainGate)"),
+        (
+            "SetAlphaFromBoolean",
+            "ALPHA_VISIBLE = 255",
+            "CreatePulseAnimation(overlay.target.plainGate)",
+        ),
         "Glow secret boundary",
     )
     if "pcall(UnitCastingInfo" in cast or "pcall(UnitChannelInfo" in cast:
@@ -217,7 +296,7 @@ def check_secret_boundary() -> list[str]:
     return errors
 
 
-def check_lifecycle_and_hot_paths() -> list[str]:
+def check_lifecycle_actionbars_and_settings() -> list[str]:
     errors: list[str] = []
     events = read(ROOT / "core" / "Events.lua")
     shared = read(ROOT / "core" / "Shared.lua")
@@ -234,8 +313,17 @@ def check_lifecycle_and_hot_paths() -> list[str]:
     errors += require(shared, ("_loadedOrLoading, loaded",), "Fully-loaded add-on gate")
     errors += require(
         options,
-        ('function Options:Build()', 'panel:SetScript("OnShow"'),
-        "Lazy options UI",
+        (
+            "function Options:Build()",
+            'panel:SetScript("OnShow"',
+            "panel.OnRefresh = RefreshPanel",
+            "panel.OnDefault = ResetDefaults",
+            "panel.OnCommit = CommitPanel",
+            "panel.refresh = RefreshPanel",
+            "panel.default = ResetDefaults",
+            "panel.okay = CommitPanel",
+        ),
+        "Current/legacy Settings canvas lifecycle",
     )
     errors += require(
         native,
@@ -260,8 +348,15 @@ def check_lifecycle_and_hot_paths() -> list[str]:
         errors.append("LAB changed-slot subscription is missing or duplicated")
     errors += require(
         lab,
-        ("buttonsBySlot", "for button in pairs(set)", 'UnregisterCallback(self, "OnButtonUpdate")'),
-        "LAB targeted diff policy",
+        (
+            "buttonsBySlot",
+            "for button in pairs(set)",
+            "DisableBroadUpdateIfFullyHooked",
+            "TryDisableBroadUpdates",
+            "ForEachButtonTable",
+            'library.UnregisterCallback(Buttons, "OnButtonUpdate")',
+        ),
+        "LAB targeted diff/callback policy",
     )
 
     if "ability.readinessPending = true" not in shared:
@@ -311,7 +406,7 @@ def check_channel_lifecycle() -> list[str]:
     return errors
 
 
-def check_readiness_gcd_cache_and_cdm() -> list[str]:
+def check_readiness_sources_gcd_cache_and_cdm() -> list[str]:
     errors: list[str] = []
     events = read(ROOT / "core" / "Events.lua")
     cooldown = read(ROOT / "core" / "Cooldown.lua")
@@ -319,6 +414,7 @@ def check_readiness_gcd_cache_and_cdm() -> list[str]:
     usability = read(ROOT / "core" / "Usability.lua")
     gcd = read(ROOT / "core" / "GCDSafetyPolicy.lua")
     cache = read(ROOT / "core" / "CachePolicy.lua")
+    source = read(ROOT / "core" / "AbilitySourcePolicy.lua")
     cdm = read(ROOT / "core" / "CDM.lua")
     cdm_policy = read(ROOT / "core" / "CDMPolicy.lua")
 
@@ -327,6 +423,7 @@ def check_readiness_gcd_cache_and_cdm() -> list[str]:
         (
             "GetActionCooldownDuration, slot, true",
             "GetSpellCooldownDuration, spellID, true",
+            "return nil, nil, true, true, false, true",
             "hardRestricted",
         ),
         "Cooldown readiness",
@@ -357,6 +454,22 @@ def check_readiness_gcd_cache_and_cdm() -> list[str]:
         ("PruneDormantAbilities", "ResetCaches", "generation = 0"),
         "Specialization cache policy",
     )
+    errors += require(
+        source,
+        (
+            "SOURCE_PRIORITY",
+            "action = 300",
+            "pet = 200",
+            "spell = 100",
+            "function Buttons:RebuildAbilitySource",
+            "upgradesToHigherPrioritySource = true",
+            "ownsButtonSourceRebuild = true",
+            "record.hardRestrictedCooldown = false",
+        ),
+        "Canonical ability source policy",
+    )
+    if "HasCurrentSource" in source:
+        errors.append("Ability source policy retains the obsolete keep-current shortcut")
 
     errors += require(
         cdm,
@@ -385,16 +498,90 @@ def check_readiness_gcd_cache_and_cdm() -> list[str]:
     return errors
 
 
-def check_runtime_probe_and_docs() -> list[str]:
+def check_data_and_interrupt_ids() -> list[str]:
     errors: list[str] = []
+    data = read(ROOT / "core" / "Data.lua")
+
+    errors += require(
+        data,
+        (
+            "-- BEGIN GENERATED INTERRUPTS_BY_SPEC",
+            "-- END GENERATED INTERRUPTS_BY_SPEC",
+            "EXTRA_INTERRUPTS_BY_SPEC",
+            "PET_ACTION_ALIASES",
+            "IsRuntimeFamilyKnown",
+            "IsKnownOrInSpellBook(observedSpellID)",
+            "IsKnownOrInSpellBook(canonicalSpellID)",
+        ),
+        "Interrupt data/runtime family policy",
+    )
+    for spec_id, snippet in EXPECTED_SPEC_SNIPPETS.items():
+        if snippet not in data:
+            errors.append(f"Missing Blizzard interrupt mapping for spec {spec_id}: {snippet}")
+    if re.search(r"\[115781\]\s*=|\{[^\n}]*\b115781\b", data):
+        errors.append("Removed Optical Blast ID returned")
+    if data.count("212619") < 3:
+        errors.append("Call Felhunter PvP coverage is missing")
+    if "[19647] = 119910" not in data or "[89766] = 119914" not in data:
+        errors.append("Warlock pet aliases are incomplete")
+    return errors
+
+
+def check_diagnostics_and_runtime_probe() -> list[str]:
+    errors: list[str] = []
+    diagnostics = read(ROOT / "core" / "DiagnosticsPolicy.lua")
     debug = read(ROOT / "core" / "Debug.lua")
     probe = read(ROOT / "core" / "RuntimeProbe.lua")
+    probe_policy = read(ROOT / "core" / "RuntimeProbePolicy.lua")
+    slash = read(ROOT / "core" / "Slash.lua")
     agents = read(ROOT / "AGENTS.md")
     guide = read(ROOT / "AGENT_GUIDE.md")
 
-    for path_name, text in (("RuntimeProbe", probe), ("AGENTS", agents), ("AGENT_GUIDE", guide)):
+    for scope, text in (
+        ("RuntimeProbe", probe),
+        ("AGENTS", agents),
+        ("AGENT_GUIDE", guide),
+    ):
         if CURRENT_KB_COMMIT not in text:
-            errors.append(f"{path_name} is not pinned to the current KB commit")
+            errors.append(f"{scope} is not pinned to the current KB commit")
+
+    errors += require(
+        diagnostics,
+        (
+            "profileCounterOwner",
+            "StartProfileCounters(owner)",
+            "StopProfileCounters(owner)",
+            "ResetProfileCounters(owner)",
+            "currentOwner ~= owner",
+        ),
+        "Diagnostic counter ownership",
+    )
+    errors += require(
+        probe,
+        (
+            'StartProfileCounters("capture")',
+            'StopProfileCounters("capture")',
+            "counterOwner=",
+            "ProfilerSnapshot",
+            "PeakTimeIncrease",
+            "[workers]",
+            "[policies]",
+        ),
+        "Runtime probe",
+    )
+    errors += require(
+        probe_policy,
+        (
+            "MAX_MARKS = 256",
+            "MAX_RESTRICTIONS = 128",
+            "[configuration]",
+            "[providerVersions]",
+            "GetAddOnMetadata",
+            "buildsReportsOutOfCombatOnly = true",
+            "automaticRestrictionProfilerSnapshots = false",
+        ),
+        "Bounded runtime probe policy",
+    )
     errors += require(
         debug,
         (
@@ -408,107 +595,91 @@ def check_runtime_probe_and_docs() -> list[str]:
         "Native profiler diagnostics",
     )
     errors += require(
-        probe,
+        slash,
         (
-            "[providers]",
-            "[workers]",
-            "[policies]",
-            "savedSchema",
-            "restrictionTransitions",
-            "PeakTimeIncrease",
-            "WOWUI-2026-005",
-            "gcd.isOnGCDReadinessProof",
+            'StartProfileCounters("manual")',
+            'StopProfileCounters("manual")',
+            'ResetProfileCounters("manual")',
+            "profileCounterOwner",
         ),
-        "Runtime evidence report",
+        "Slash diagnostic ownership routing",
     )
-    if "scriptProfile" in debug or "scriptProfile" in probe:
-        errors.append("Runtime diagnostics enable legacy scriptProfile")
     return errors
 
 
-def check_interrupt_data() -> list[str]:
-    errors: list[str] = []
-    data = read(ROOT / "core" / "Data.lua")
-    if "-- BEGIN GENERATED INTERRUPTS_BY_SPEC" not in data or "-- END GENERATED INTERRUPTS_BY_SPEC" not in data:
-        errors.append("Generated interrupt block markers are missing")
-    for spec_id, snippet in EXPECTED_SPEC_SNIPPETS.items():
-        if snippet not in data:
-            errors.append(f"Missing Blizzard interrupt mapping for spec {spec_id}: {snippet}")
-    if re.search(r"\[115781\]\s*=|\{[^\n}]*\b115781\b", data):
-        errors.append("Removed Optical Blast ID returned")
-    if "EXTRA_INTERRUPTS_BY_SPEC" not in data or data.count("212619") < 3:
-        errors.append("Call Felhunter PvP coverage is missing")
-    if "[19647] = 119910" not in data or "[89766] = 119914" not in data:
-        errors.append("Warlock pet aliases are incomplete")
-    return errors
-
-
-def check_local_tests() -> list[str]:
+def check_local_test_manifest() -> list[str]:
     errors: list[str] = []
     syntax = read(ROOT / "tests" / "check_syntax.lua")
-    required = (
-        "tests/mock_wow.lua",
-        "tests/cdm_toggle.lua",
-        "tests/cdm_policy.lua",
-        "tests/runtime_probe.lua",
-        "tests/native_callback_handles.lua",
-        "tests/channel_guard.lua",
-        "tests/shared_worker.lua",
-        "tests/cache_policy.lua",
-        "tests/glow_worker.lua",
-        "tests/gcd_safety.lua",
-    )
-    for path in required:
-        if path not in syntax:
+
+    expected_tests = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "tests").glob("*.lua")
+        if path.name != "check_syntax.lua"
+    }
+    for path in sorted(expected_tests):
+        if f'"{path}"' not in syntax:
             errors.append(f"Syntax checker does not include {path}")
 
-    probe_test = read(ROOT / "tests" / "runtime_probe.lua")
-    errors += require(
-        probe_test,
-        (
-            f"kbCommit={CURRENT_KB_COMMIT}",
-            "gcd.ignoreGlobalCooldownDuration=true",
-            "gcd.isOnGCDReadinessProof=false",
-            "delta.CountTimeOver5Ms=5",
+    critical_assertions = {
+        "tests/toc_contract.lua": (
+            "core/AbilitySourcePolicy.lua",
+            "core/CDMPolicy.lua",
+            "core/RuntimeProbePolicy.lua",
+            "core/PrewarmPolicy.lua",
         ),
-        "Runtime probe test",
-    )
-    gcd_test = read(ROOT / "tests" / "gcd_safety.lua")
-    if "isOnGCD hint reached the readiness resolver" not in gcd_test:
-        errors.append("Focused GCD safety test is incomplete")
-
-    cdm_policy_test = read(ROOT / "tests" / "cdm_policy.lua")
-    errors += require(
-        cdm_policy_test,
-        (
-            "frameReads == 0",
-            "cached CDM identity crossed spec policy",
-            "refreshesActiveItemsAfterSpecData == true",
+        "tests/ability_source_policy.lua": (
+            "newly available stronger source must upgrade immediately",
+            "ownsButtonSourceRebuild",
         ),
-        "Focused CDM policy test",
-    )
+        "tests/lab_callback_policy.lua": (
+            "late-created LAB button did not retire broad callback",
+            "numeric LAB array index was treated as a button",
+        ),
+        "tests/restricted_success_event.lua": (
+            "restricted spell payload reached canonical classification",
+        ),
+        "tests/runtime_interrupt_family.lua": (
+            "override is known while the canonical base is not",
+        ),
+        "tests/invalid_source_readiness.lua": (
+            "optimistic mode made a missing source ready",
+        ),
+        "tests/diagnostic_ownership.lua": (
+            "failed acquisition cleared another owner's counters",
+        ),
+        "tests/options_lifecycle.lua": (
+            "panel.OnRefresh",
+            "panel.OnDefault",
+            "panel.OnCommit",
+        ),
+    }
+    for relative_path, symbols in critical_assertions.items():
+        text = read(ROOT / relative_path)
+        errors += require(text, symbols, relative_path)
     return errors
 
 
 def main() -> int:
     errors = (
-        check_toc()
+        check_toc_contract()
         + check_no_ci_workflows()
         + check_forbidden_patterns()
-        + check_saved_variables_and_workers()
+        + check_saved_variables_workers_and_prewarm()
         + check_secret_boundary()
-        + check_lifecycle_and_hot_paths()
+        + check_lifecycle_actionbars_and_settings()
         + check_channel_lifecycle()
-        + check_readiness_gcd_cache_and_cdm()
-        + check_runtime_probe_and_docs()
-        + check_interrupt_data()
-        + check_local_tests()
+        + check_readiness_sources_gcd_cache_and_cdm()
+        + check_data_and_interrupt_ids()
+        + check_diagnostics_and_runtime_probe()
+        + check_local_test_manifest()
     )
+
     if errors:
         print("STATIC CHECKS FAILED")
         for error in errors:
             print(f"- {error}")
         return 1
+
     print("STATIC CHECKS PASSED")
     return 0
 
