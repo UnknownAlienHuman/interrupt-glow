@@ -106,6 +106,9 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "PLAYER_REGEN_ENABLED" then
         if IG.Glow then IG.Glow:CreatePendingOverlays() end
+        if IG.Options and type(IG.Options.OnCombatEnded) == "function" then
+            IG.Options:OnCombatEnded()
+        end
         return
     end
 
