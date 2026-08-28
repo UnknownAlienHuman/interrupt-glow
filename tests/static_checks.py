@@ -28,10 +28,10 @@ RUNTIME_FILES = [ROOT / entry for entry in TOC_ENTRIES]
 
 FORBIDDEN_RUNTIME_PATTERNS = {
     "EnumerateFrames": re.compile(r"\bEnumerateFrames\b"),
-    "GetNamePlates": re.compile(r"\bGetNamePlates\b"),
+    "nameplate traversal": re.compile(r"\bGetNamePlates\b"),
     "540-slot scan": re.compile(r"\b540\b"),
-    "GetMacroInfo": re.compile(r"\bGetMacroInfo\b"),
-    "GetMacroSpell": re.compile(r"\bGetMacroSpell\b"),
+    "macro-body GetMacroInfo": re.compile(r"\bGetMacroInfo\b"),
+    "macro-body GetMacroSpell": re.compile(r"\bGetMacroSpell\b"),
     "ACTIONBAR_UPDATE_COOLDOWN subscription": re.compile(
         r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_UPDATE_COOLDOWN"
     ),
@@ -41,11 +41,15 @@ FORBIDDEN_RUNTIME_PATTERNS = {
     "generic ADDON_LOADED subscription": re.compile(
         r"RegisterEvent\s*\(\s*[\"']ADDON_LOADED"
     ),
-    "Blizzard spell-alert manager mutation": re.compile(r"\bActionButtonSpellAlertManager\b"),
+    "Blizzard spell-alert manager mutation": re.compile(
+        r"\bActionButtonSpellAlertManager\b"
+    ),
     "castbar frame inspection": re.compile(
         r"\b(TargetFrameSpellBar|FocusFrameSpellBar|CastingBarMixin)\b"
     ),
-    "unverified GCD classification API": re.compile(r"\bDoesSpellTriggerGlobalCooldown\b"),
+    "unverified GCD classification API": re.compile(
+        r"\bDoesSpellTriggerGlobalCooldown\b"
+    ),
 }
 
 EXPECTED_SPEC_SNIPPETS = {
@@ -66,9 +70,13 @@ EXPECTED_SPEC_SNIPPETS = {
 }
 
 
+def require(text: str, symbols: tuple[str, ...], scope: str) -> list[str]:
+    return [f"{scope} is missing {symbol}" for symbol in symbols if symbol not in text]
+
+
 def check_toc() -> list[str]:
     errors: list[str] = []
-    text = read(TOC)
+    toc = read(TOC)
     core = read(ROOT / "Core.lua")
 
     if len(TOC_ENTRIES) != len(set(TOC_ENTRIES)):
@@ -77,13 +85,13 @@ def check_toc() -> list[str]:
         if not (ROOT / entry).exists():
             errors.append(f"TOC references missing file: {entry}")
 
-    if "## Interface: 120100" not in text:
+    if "## Interface: 120100" not in toc:
         errors.append("TOC Interface is not 120100")
-    if f"## Version: {CURRENT_VERSION}" not in text:
+    if f"## Version: {CURRENT_VERSION}" not in toc:
         errors.append(f"TOC version is not {CURRENT_VERSION}")
     if CURRENT_VERSION not in core:
-        errors.append("Core fallback version does not match TOC")
-    if "## LoadOnDemand:" in text:
+        errors.append("Core fallback version does not match the TOC")
+    if "## LoadOnDemand:" in toc:
         errors.append("Interrupt Glow itself must not be LoadOnDemand")
 
     required_order = [
@@ -103,6 +111,7 @@ def check_toc() -> list[str]:
         "core/CachePolicy.lua",
         "core/CastTracking.lua",
         "core/CDM.lua",
+        "core/CDMPolicy.lua",
         "core/Events.lua",
     ]
     try:
@@ -110,8 +119,7 @@ def check_toc() -> list[str]:
         if positions != sorted(positions):
             errors.append("Runtime policy modules are loaded in the wrong order")
     except ValueError as exc:
-        errors.append(f"TOC is missing required module: {exc}")
-
+        errors.append(f"TOC is missing a required module: {exc}")
     return errors
 
 
@@ -135,48 +143,51 @@ def check_forbidden_patterns() -> list[str]:
         text = read(path)
         for label, pattern in FORBIDDEN_RUNTIME_PATTERNS.items():
             if pattern.search(text):
-                errors.append(f"{path.relative_to(ROOT)} contains forbidden runtime pattern: {label}")
+                errors.append(
+                    f"{path.relative_to(ROOT)} contains forbidden runtime pattern: {label}"
+                )
     return errors
 
 
-def check_saved_variables() -> list[str]:
+def check_saved_variables_and_workers() -> list[str]:
     errors: list[str] = []
     shared = read(ROOT / "core" / "Shared.lua")
-    for symbol in (
-        "CURRENT_SCHEMA = 3",
-        "CURRENT_INTERFACE = 120100",
-        "producerVersion",
-        "ReadBoolean",
-        "ReadDebugKeep",
-        "InterruptGlowDB = DB",
-    ):
-        if symbol not in shared:
-            errors.append(f"SavedVariables sanitation is missing {symbol}")
-    for obsolete in ("debugAutoShow", "slots =", "localCD ="):
-        if obsolete in shared:
-            errors.append(f"SavedVariables runtime schema retains obsolete data: {obsolete}")
-    if "if value > 2000 then return 2000 end" not in shared:
-        errors.append("debugKeep upper bound is missing")
-    return errors
-
-
-def check_worker_policy() -> list[str]:
-    errors: list[str] = []
     worker = read(ROOT / "core" / "Worker.lua")
-    shared = read(ROOT / "core" / "Shared.lua")
     glow = read(ROOT / "core" / "Glow.lua")
 
-    for symbol in ("SetOnUpdateMode", "modes.Disabled", "modes.RunOnce", "modes.RunAlways"):
-        if symbol not in worker:
-            errors.append(f"OnUpdate worker policy is missing {symbol}")
-    if "Worker:RunOnce(flushFrame)" not in shared:
-        errors.append("Dirty queue does not use RunOnce")
-    if "Worker:RunOnce(self.prewarmFrame)" not in glow:
-        errors.append("Prewarm queue does not use RunOnce")
-    if "Worker:SetContinuous(self.runtimeFrame, enabled)" not in glow:
-        errors.append("Runtime timer does not use explicit continuous mode")
-    if "runtimeWorkerEnabled = nil" not in glow:
-        errors.append("Initial runtime worker disable can be skipped")
+    errors += require(
+        shared,
+        (
+            "CURRENT_SCHEMA = 3",
+            "CURRENT_INTERFACE = 120100",
+            "producerVersion",
+            "ReadBoolean",
+            "ReadDebugKeep",
+            "InterruptGlowDB = DB",
+            "Worker:RunOnce(flushFrame)",
+        ),
+        "Shared/SavedVariables policy",
+    )
+    for obsolete in ("debugAutoShow", "slots =", "localCD ="):
+        if obsolete in shared:
+            errors.append(f"SavedVariables schema retains obsolete data: {obsolete}")
+    if "if value > 2000 then return 2000 end" not in shared:
+        errors.append("debugKeep upper bound is missing")
+
+    errors += require(
+        worker,
+        ("SetOnUpdateMode", "modes.Disabled", "modes.RunOnce", "modes.RunAlways"),
+        "OnUpdate worker policy",
+    )
+    errors += require(
+        glow,
+        (
+            "Worker:RunOnce(self.prewarmFrame)",
+            "Worker:SetContinuous(self.runtimeFrame, enabled)",
+            "runtimeWorkerEnabled = nil",
+        ),
+        "Glow worker policy",
+    )
     return errors
 
 
@@ -185,20 +196,24 @@ def check_secret_boundary() -> list[str]:
     cast = read(ROOT / "core" / "CastTracking.lua")
     glow = read(ROOT / "core" / "Glow.lua")
 
-    if "rawNotInterruptible" not in cast or "ApplyUnitInterruptibility" not in cast:
-        errors.append("Cast secret bridge is missing")
-    if "SetAlphaFromBoolean" not in glow or "ALPHA_VISIBLE = 255" not in glow:
-        errors.append("Secret alpha sink is incomplete")
+    errors += require(
+        cast,
+        ("rawNotInterruptible", "ApplyUnitInterruptibility", "IsStaleCastEvent"),
+        "CastTracking secret/lifecycle boundary",
+    )
+    errors += require(
+        glow,
+        ("SetAlphaFromBoolean", "ALPHA_VISIBLE = 255", "CreatePulseAnimation(overlay.target.plainGate)"),
+        "Glow secret boundary",
+    )
     if "pcall(UnitCastingInfo" in cast or "pcall(UnitChannelInfo" in cast:
-        errors.append("Raw cast returns travel through pcall")
+        errors.append("Raw cast returns travel through a pcall result lane")
     if "pcall(method, region, value" in glow or "pcall(region.SetAlphaFromBoolean" in glow:
         errors.append("Secret visual sink travels through pcall")
     if re.search(r"niRaw\s*=|notInterruptibleRaw\s*=", cast + glow):
         errors.append("Potential raw interruptibility storage detected")
     if "CreatePulseAnimation(overlay.target.niGate)" in glow:
-        errors.append("Secret-alpha region is animated")
-    if "CreatePulseAnimation(overlay.target.plainGate)" not in glow:
-        errors.append("Ordinary parent animation is missing")
+        errors.append("The secret-alpha child region is animated")
     return errors
 
 
@@ -215,18 +230,23 @@ def check_lifecycle_and_hot_paths() -> list[str]:
 
     if events.count("Buttons:Attach(true)") != 1:
         errors.append("Startup attach/discovery is not exactly once")
-    if "ContinueOnPlayerLogin" not in events:
-        errors.append("Runtime initialization is not player-login gated")
-    if "_loadedOrLoading, loaded" not in shared:
-        errors.append("AddOn fully-loaded gate ignores the second return")
-    if "function Options:Build()" not in options or 'panel:SetScript("OnShow"' not in options:
-        errors.append("Options UI is not lazy")
-    if "CreateCallbackHandleContainer" not in native or "nativeCallbackHandles:Unregister" not in native:
-        errors.append("Native callback handle lifecycle is incomplete")
-    if "actionSnapshotFresh" not in resolver:
-        errors.append("Native resolved action snapshot is not reused")
-    if "IsInterruptAction" not in resolver or "IsAssistedCombatAction" not in resolver:
-        errors.append("Native current-action classification is incomplete")
+    errors += require(events, ("ContinueOnPlayerLogin",), "Runtime startup")
+    errors += require(shared, ("_loadedOrLoading, loaded",), "Fully-loaded add-on gate")
+    errors += require(
+        options,
+        ('function Options:Build()', 'panel:SetScript("OnShow"'),
+        "Lazy options UI",
+    )
+    errors += require(
+        native,
+        ("CreateCallbackHandleContainer", "nativeCallbackHandles:Unregister"),
+        "Native callback lifecycle",
+    )
+    errors += require(
+        resolver,
+        ("actionSnapshotFresh", "IsInterruptAction", "IsAssistedCombatAction"),
+        "Native action resolver",
+    )
     if buttons.count('WaitForKnownLABProvider("ElvUI")') != 1:
         errors.append("ElvUI load-order waiter is missing or duplicated")
     if 'hooksecurefunc(BFButton, "ClearCommand"' not in buttons:
@@ -238,10 +258,11 @@ def check_lifecycle_and_hot_paths() -> list[str]:
             errors.append(f"{path.relative_to(ROOT)} has a non-targeted slot subscription")
     if lab.count('RegisterEvent("ACTIONBAR_SLOT_CHANGED")') != 1:
         errors.append("LAB changed-slot subscription is missing or duplicated")
-    if "buttonsBySlot" not in lab or "for button in pairs(set)" not in lab:
-        errors.append("LAB slot event is not bounded to indexed buttons")
-    if 'UnregisterCallback(self, "OnButtonUpdate")' not in lab:
-        errors.append("Broad LAB visual callback is retained")
+    errors += require(
+        lab,
+        ("buttonsBySlot", "for button in pairs(set)", 'UnregisterCallback(self, "OnButtonUpdate")'),
+        "LAB targeted diff policy",
+    )
 
     if "ability.readinessPending = true" not in shared:
         errors.append("Readiness invalidation is not fail-closed")
@@ -256,35 +277,41 @@ def check_channel_lifecycle() -> list[str]:
     events = read(ROOT / "core" / "Events.lua")
     test = read(ROOT / "tests" / "channel_guard.lua")
 
-    for symbol in (
-        "channelSuppressed",
-        "IsStaleCastEvent",
-        "UNIT_SPELLCAST_CHANNEL_UPDATE",
-        "UNIT_SPELLCAST_EMPOWER_UPDATE",
-        "ResetUnitIdentity",
-        "ResetAllIdentities",
-        "cast.channelSnapshotSuppressed",
-    ):
-        if symbol not in cast:
-            errors.append(f"Channel lifecycle is missing {symbol}")
-    for snippet in (
-        'ResetUnitIdentity("target", event)',
-        'ResetUnitIdentity("focus", event)',
-        "ResetAllIdentities(event)",
-    ):
-        if snippet not in events:
-            errors.append(f"Unit identity reset is missing: {snippet}")
-    for assertion in (
-        "stale UnitChannelInfo resurrected after CHANNEL_STOP",
-        "cast.staleStopIgnored",
-        "RegisterUnitEvent requires unit varargs",
-    ):
-        if assertion not in test:
-            errors.append(f"Channel regression test does not prove {assertion}")
+    errors += require(
+        cast,
+        (
+            "channelSuppressed",
+            "IsStaleCastEvent",
+            "UNIT_SPELLCAST_CHANNEL_UPDATE",
+            "UNIT_SPELLCAST_EMPOWER_UPDATE",
+            "ResetUnitIdentity",
+            "ResetAllIdentities",
+            "cast.channelSnapshotSuppressed",
+        ),
+        "Event-authoritative channel lifecycle",
+    )
+    errors += require(
+        events,
+        (
+            'ResetUnitIdentity("target", event)',
+            'ResetUnitIdentity("focus", event)',
+            "ResetAllIdentities(event)",
+        ),
+        "Unit identity reset routing",
+    )
+    errors += require(
+        test,
+        (
+            "stale UnitChannelInfo resurrected after CHANNEL_STOP",
+            "cast.staleStopIgnored",
+            "RegisterUnitEvent requires unit varargs",
+        ),
+        "Channel regression test",
+    )
     return errors
 
 
-def check_readiness_and_gcd() -> list[str]:
+def check_readiness_gcd_cache_and_cdm() -> list[str]:
     errors: list[str] = []
     events = read(ROOT / "core" / "Events.lua")
     cooldown = read(ROOT / "core" / "Cooldown.lua")
@@ -293,41 +320,72 @@ def check_readiness_and_gcd() -> list[str]:
     gcd = read(ROOT / "core" / "GCDSafetyPolicy.lua")
     cache = read(ROOT / "core" / "CachePolicy.lua")
     cdm = read(ROOT / "core" / "CDM.lua")
+    cdm_policy = read(ROOT / "core" / "CDMPolicy.lua")
 
-    if "GetActionCooldownDuration, slot, true" not in cooldown:
-        errors.append("Action duration does not explicitly ignore GCD")
-    if "GetSpellCooldownDuration, spellID, true" not in cooldown:
-        errors.append("Spell duration does not explicitly ignore GCD")
+    errors += require(
+        cooldown,
+        (
+            "GetActionCooldownDuration, slot, true",
+            "GetSpellCooldownDuration, spellID, true",
+            "hardRestricted",
+        ),
+        "Cooldown readiness",
+    )
     if "CaptureGCDHints()" in events or "MarkCooldownDirty(true)" in events:
         errors.append("Events still collect or propagate positive GCD readiness hints")
-    for symbol in (
-        "originalGetCachedReadiness(self, sourceKind, sourceID, false)",
-        "treatsIsOnGCDAsReadinessProof = false",
-        "function Cooldown:CaptureGCDHints()",
-    ):
-        if symbol not in gcd:
-            errors.append(f"Conservative GCD policy is missing {symbol}")
-    if "hardRestricted" not in cooldown:
-        errors.append("Hard restrictions are not represented")
-    if "ability.hardRestricted == true and ability.needsPoll == true" not in readiness:
-        errors.append("Hard restrictions can enter periodic polling")
-    if "GetPetActionSlotUsable" not in readiness:
-        errors.append("Pet usability gate is missing")
-    for symbol in ("IsUsableAction", "IsSpellUsable", "OnActionUsableChanged"):
-        if symbol not in usability:
-            errors.append(f"Usability policy is missing {symbol}")
-    for symbol in ("PruneDormantAbilities", "ResetCaches", "generation = 0"):
-        if symbol not in cache:
-            errors.append(f"Spec cache policy is missing {symbol}")
-    if "QueueIdentityChange" not in cdm or "IG:MarkButtonDirty(itemFrame)" not in cdm:
-        errors.append("CDM pool changes are not deferred")
-    reset = cdm[cdm.find("function CDM:ResetItem"):cdm.find("local function OnAcquireItemFrame")]
-    if "UnbindRecord" in reset:
-        errors.append("CDM reset mutates binding synchronously in Blizzard hook stack")
+    errors += require(
+        gcd,
+        (
+            "originalGetCachedReadiness(self, sourceKind, sourceID, false)",
+            "treatsIsOnGCDAsReadinessProof = false",
+            "function Cooldown:CaptureGCDHints()",
+        ),
+        "Conservative GCD policy",
+    )
+    errors += require(
+        readiness,
+        ("ability.hardRestricted == true and ability.needsPoll == true", "GetPetActionSlotUsable"),
+        "Hard readiness policy",
+    )
+    errors += require(
+        usability,
+        ("IsUsableAction", "IsSpellUsable", "OnActionUsableChanged"),
+        "Usability policy",
+    )
+    errors += require(
+        cache,
+        ("PruneDormantAbilities", "ResetCaches", "generation = 0"),
+        "Specialization cache policy",
+    )
+
+    errors += require(
+        cdm,
+        ("QueueIdentityChange", "IG:MarkButtonDirty(itemFrame)"),
+        "Deferred CDM hook policy",
+    )
+    reset_start = cdm.find("function CDM:ResetItem")
+    reset_end = cdm.find("local function OnAcquireItemFrame")
+    if reset_start >= 0 and reset_end > reset_start:
+        if "UnbindRecord" in cdm[reset_start:reset_end]:
+            errors.append("CDM reset mutates binding synchronously inside Blizzard hook stack")
+
+    errors += require(
+        cdm_policy,
+        (
+            "record.cdmCanonicalSpellID",
+            'Data:GetCanonicalSpellID(observedSpellID, "spell")',
+            "usesCapturedPoolIdentity = true",
+            "refreshesActiveItemsAfterSpecData = true",
+            "CDM:ObserveExistingItems()",
+        ),
+        "Captured CDM identity policy",
+    )
+    if "GetBaseSpellID" in cdm_policy:
+        errors.append("CDM reconcile re-reads the pooled frame instead of captured identity")
     return errors
 
 
-def check_runtime_probe() -> list[str]:
+def check_runtime_probe_and_docs() -> list[str]:
     errors: list[str] = []
     debug = read(ROOT / "core" / "Debug.lua")
     probe = read(ROOT / "core" / "RuntimeProbe.lua")
@@ -336,29 +394,33 @@ def check_runtime_probe() -> list[str]:
 
     for path_name, text in (("RuntimeProbe", probe), ("AGENTS", agents), ("AGENT_GUIDE", guide)):
         if CURRENT_KB_COMMIT not in text:
-            errors.append(f"{path_name} is not pinned to current KB")
-    for symbol in (
-        "ProfilerSnapshot",
-        "ProfilerDelta",
-        "SessionAverageTime",
-        "CountTimeOver1000Ms",
-        "GetTicksPerSecond",
-        "IsEnabled",
-    ):
-        if symbol not in debug:
-            errors.append(f"Profiler diagnostics are missing {symbol}")
-    for symbol in (
-        "[providers]",
-        "[workers]",
-        "[policies]",
-        "savedSchema",
-        "restrictionTransitions",
-        "PeakTimeIncrease",
-        "WOWUI-2026-005",
-        "gcd.isOnGCDReadinessProof",
-    ):
-        if symbol not in probe:
-            errors.append(f"Runtime report is missing {symbol}")
+            errors.append(f"{path_name} is not pinned to the current KB commit")
+    errors += require(
+        debug,
+        (
+            "ProfilerSnapshot",
+            "ProfilerDelta",
+            "SessionAverageTime",
+            "CountTimeOver1000Ms",
+            "GetTicksPerSecond",
+            "IsEnabled",
+        ),
+        "Native profiler diagnostics",
+    )
+    errors += require(
+        probe,
+        (
+            "[providers]",
+            "[workers]",
+            "[policies]",
+            "savedSchema",
+            "restrictionTransitions",
+            "PeakTimeIncrease",
+            "WOWUI-2026-005",
+            "gcd.isOnGCDReadinessProof",
+        ),
+        "Runtime evidence report",
+    )
     if "scriptProfile" in debug or "scriptProfile" in probe:
         errors.append("Runtime diagnostics enable legacy scriptProfile")
     return errors
@@ -387,6 +449,7 @@ def check_local_tests() -> list[str]:
     required = (
         "tests/mock_wow.lua",
         "tests/cdm_toggle.lua",
+        "tests/cdm_policy.lua",
         "tests/runtime_probe.lua",
         "tests/native_callback_handles.lua",
         "tests/channel_guard.lua",
@@ -400,18 +463,30 @@ def check_local_tests() -> list[str]:
             errors.append(f"Syntax checker does not include {path}")
 
     probe_test = read(ROOT / "tests" / "runtime_probe.lua")
-    for assertion in (
-        f"kbCommit={CURRENT_KB_COMMIT}",
-        "gcd.ignoreGlobalCooldownDuration=true",
-        "gcd.isOnGCDReadinessProof=false",
-        "delta.CountTimeOver5Ms=5",
-    ):
-        if assertion not in probe_test:
-            errors.append(f"Runtime probe test does not prove {assertion}")
-
+    errors += require(
+        probe_test,
+        (
+            f"kbCommit={CURRENT_KB_COMMIT}",
+            "gcd.ignoreGlobalCooldownDuration=true",
+            "gcd.isOnGCDReadinessProof=false",
+            "delta.CountTimeOver5Ms=5",
+        ),
+        "Runtime probe test",
+    )
     gcd_test = read(ROOT / "tests" / "gcd_safety.lua")
     if "isOnGCD hint reached the readiness resolver" not in gcd_test:
         errors.append("Focused GCD safety test is incomplete")
+
+    cdm_policy_test = read(ROOT / "tests" / "cdm_policy.lua")
+    errors += require(
+        cdm_policy_test,
+        (
+            "frameReads == 0",
+            "cached CDM identity crossed spec policy",
+            "refreshesActiveItemsAfterSpecData == true",
+        ),
+        "Focused CDM policy test",
+    )
     return errors
 
 
@@ -420,13 +495,12 @@ def main() -> int:
         check_toc()
         + check_no_ci_workflows()
         + check_forbidden_patterns()
-        + check_saved_variables()
-        + check_worker_policy()
+        + check_saved_variables_and_workers()
         + check_secret_boundary()
         + check_lifecycle_and_hot_paths()
         + check_channel_lifecycle()
-        + check_readiness_and_gcd()
-        + check_runtime_probe()
+        + check_readiness_gcd_cache_and_cdm()
+        + check_runtime_probe_and_docs()
         + check_interrupt_data()
         + check_local_tests()
     )
