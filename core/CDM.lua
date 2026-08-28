@@ -26,39 +26,48 @@ local function GetInterruptIdentity(itemFrame)
     return IG.Data:GetCanonicalSpellID(spellID, "spell")
 end
 
+local function QueueIdentityChange(itemFrame, canonicalSpellID)
+    local record = itemFrame and IG.ObservedButtons[itemFrame]
+    if not record or record.adapter ~= "cdm" then return false end
+    if record.cdmCanonicalSpellID == canonicalSpellID then return false end
+
+    record.cdmCanonicalSpellID = canonicalSpellID
+    IG:MarkButtonDirty(itemFrame)
+    return true
+end
+
 function CDM:ObserveItem(itemFrame)
     if not self.attached or not IG.playerLoginSeen or not IG.DB.cdm or not itemFrame or not IG.Buttons then return end
 
-    -- CDM items have stable base-spell identity and no conditional-macro role.
-    -- Do not allocate addon regions for unrelated Essential/Utility entries.
+    -- Pool hooks may run inside Blizzard layout/reset stacks. They update only
+    -- ordinary identity and queue one record; visual/canonical reconciliation is
+    -- performed by the addon-owned next-frame dirty worker.
     local canonicalSpellID = GetInterruptIdentity(itemFrame)
     local record = IG.ObservedButtons[itemFrame]
     if not canonicalSpellID then
-        if record and record.adapter == "cdm" then
-            record.cdmCanonicalSpellID = nil
-            IG.Buttons:UnbindRecord(record)
+        if QueueIdentityChange(itemFrame, nil) then
+            IG:BumpStat("cdm.identityCleared")
         end
         return
     end
 
-    -- OnAcquireItemFrame and OnCooldownIDSet can both observe the same pool
-    -- acquisition. Suppress the duplicate before it reaches the dirty queue.
-    if record and record.adapter == "cdm" and record.cdmCanonicalSpellID == canonicalSpellID then
+    if record and record.adapter == "cdm" then
+        if QueueIdentityChange(itemFrame, canonicalSpellID) then
+            IG:BumpStat("cdm.identityChanged")
+        end
         return
     end
 
-    record = IG.Buttons:ObserveButton(itemFrame, "cdm")
+    record = IG.Buttons:ObserveButton(itemFrame, "cdm", { skipDirty = true })
     if record then
         record.cdmCanonicalSpellID = canonicalSpellID
+        IG:MarkButtonDirty(itemFrame)
         IG:BumpStat("cdm.interruptItemsObserved")
     end
 end
 
 function CDM:ResetItem(itemFrame)
-    local record = itemFrame and IG.ObservedButtons[itemFrame]
-    if record and IG.Buttons then
-        record.cdmCanonicalSpellID = nil
-        IG.Buttons:UnbindRecord(record)
+    if QueueIdentityChange(itemFrame, nil) then
         IG:BumpStat("cdm.itemsReset")
     end
 end
@@ -103,9 +112,6 @@ function CDM:SetEnabled(enabled)
     if not IG.Buttons then return end
     for _, record in pairs(IG.ObservedButtons) do
         if record.adapter == "cdm" then
-            -- ObserveItem deduplicates acquire/set callbacks by this identity.
-            -- Clear it when the feature is disabled so re-enabling can bind the
-            -- still-active pooled item immediately without waiting for pool reuse.
             record.cdmCanonicalSpellID = nil
             IG.Buttons:UnbindRecord(record)
         end
