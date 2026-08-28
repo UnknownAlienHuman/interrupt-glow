@@ -20,6 +20,7 @@ core/ActionResolver.lua
 core/Cooldown.lua
 core/ReadinessPolicy.lua
 core/Usability.lua
+core/GCDSafetyPolicy.lua
 core/CachePolicy.lua
 core/CastTracking.lua
 core/CDM.lua
