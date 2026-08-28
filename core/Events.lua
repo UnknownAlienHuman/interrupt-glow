@@ -7,6 +7,7 @@ local EventUtil = _G.EventUtil
 local IsLoggedIn = _G.IsLoggedIn
 local type = type
 local pcall = pcall
+local select = select
 
 local frame = CreateFrame("Frame")
 IG.EventFrame = frame
@@ -151,8 +152,24 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
         if not RuntimeNeedsReadiness() then return end
 
-        local unit, _castGUID, spellID = ...
-        if IG.CanAccess(spellID) and type(spellID) == "number" and IG.Data then
+        -- This event is SecretWhenUnitSpellCastRestricted. RegisterUnitEvent
+        -- narrows dispatch to player/pet, but does not make its payload ordinary.
+        -- Read only access-confirmed fields; an inaccessible payload still
+        -- invalidates the tiny active interrupt set so stale ready state cannot
+        -- survive a successful secret interrupt cast.
+        local unit = select(1, ...)
+        local spellID = select(3, ...)
+        if not IG.CanAccess(unit)
+            or not IG.CanAccess(spellID)
+            or type(unit) ~= "string"
+            or type(spellID) ~= "number"
+        then
+            IG:BumpStat("events.restrictedSpellSucceeded")
+            IG:MarkCooldownDirty(false)
+            return
+        end
+
+        if IG.Data then
             local sourceKind = unit == "pet" and "pet" or "spell"
             if IG.Data:GetCanonicalSpellID(spellID, sourceKind) then
                 -- This is only an interrupt-source invalidation signal. It is
