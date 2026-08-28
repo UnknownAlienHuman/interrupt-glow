@@ -21,6 +21,8 @@ local requiredOrder = {
     "core/Worker.lua",
     "core/Shared.lua",
     "core/Data.lua",
+    "core/RuntimeProbe.lua",
+    "core/RuntimeProbePolicy.lua",
     "core/Glow.lua",
     "core/Buttons.lua",
     "core/ActionResolver.lua",
@@ -45,6 +47,8 @@ for index = 1, #requiredOrder do
     previousPosition = position
 end
 
+assert(positions["core/RuntimeProbe.lua"] < positions["core/RuntimeProbePolicy.lua"])
+assert(positions["core/RuntimeProbePolicy.lua"] < positions["core/Glow.lua"])
 assert(positions["core/AbilitySourcePolicy.lua"] < positions["core/CastTracking.lua"])
 assert(positions["core/CDM.lua"] < positions["core/CDMPolicy.lua"])
 assert(positions["core/CDMPolicy.lua"] < positions["core/Events.lua"])
