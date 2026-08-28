@@ -6,6 +6,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TOC = ROOT / "InterruptGlow.toc"
+CURRENT_VERSION = "1.1.0-beta.3"
+CURRENT_KB_COMMIT = "e45366cb0ca56dfe49664daa9f2579e629af0cb3"
 
 
 def read(path: Path) -> str:
@@ -32,6 +34,9 @@ FORBIDDEN_RUNTIME_PATTERNS = {
     "GetMacroSpell": re.compile(r"\bGetMacroSpell\b"),
     "ACTIONBAR_UPDATE_COOLDOWN subscription": re.compile(
         r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_UPDATE_COOLDOWN"
+    ),
+    "unconfirmed SPELL_SECRECY_CHANGED subscription": re.compile(
+        r"RegisterEvent\s*\(\s*[\"']SPELL_SECRECY_CHANGED"
     ),
     "generic ADDON_LOADED subscription": re.compile(
         r"RegisterEvent\s*\(\s*[\"']ADDON_LOADED"
@@ -63,6 +68,7 @@ EXPECTED_SPEC_SNIPPETS = {
 def check_toc() -> list[str]:
     errors: list[str] = []
     text = read(TOC)
+    core = read(ROOT / "Core.lua")
 
     if len(TOC_ENTRIES) != len(set(TOC_ENTRIES)):
         errors.append("TOC contains duplicate file entries")
@@ -72,24 +78,31 @@ def check_toc() -> list[str]:
 
     if "## Interface: 120100" not in text:
         errors.append("TOC Interface is not 120100")
-    if "## Version: 1.1.0-beta.2" not in text:
-        errors.append("TOC version is not 1.1.0-beta.2")
+    if f"## Version: {CURRENT_VERSION}" not in text:
+        errors.append(f"TOC version is not {CURRENT_VERSION}")
+    if CURRENT_VERSION not in core:
+        errors.append("Core fallback version does not match the TOC")
     if "## LoadOnDemand:" in text:
         errors.append("Interrupt Glow itself must not be LoadOnDemand")
 
     required_order = [
+        "core/Debug.lua",
+        "core/RuntimeProbe.lua",
+        "core/Glow.lua",
         "core/Buttons.lua",
+        "core/NativeCallbackPolicy.lua",
         "core/LABAdapter.lua",
         "core/ActionResolver.lua",
         "core/Cooldown.lua",
         "core/ReadinessPolicy.lua",
         "core/Usability.lua",
         "core/CastTracking.lua",
+        "core/Events.lua",
     ]
     try:
         positions = [TOC_ENTRIES.index(entry) for entry in required_order]
         if positions != sorted(positions):
-            errors.append("Resolver/readiness policy modules are loaded in the wrong order")
+            errors.append("Runtime integration/policy modules are loaded in the wrong order")
     except ValueError as exc:
         errors.append(f"TOC is missing a required runtime module: {exc}")
 
@@ -150,6 +163,7 @@ def check_startup_and_hot_paths() -> list[str]:
     events = read(ROOT / "core" / "Events.lua")
     shared = read(ROOT / "core" / "Shared.lua")
     buttons = read(ROOT / "core" / "Buttons.lua")
+    native = read(ROOT / "core" / "NativeCallbackPolicy.lua")
     lab = read(ROOT / "core" / "LABAdapter.lua")
     action_resolver = read(ROOT / "core" / "ActionResolver.lua")
     options = read(ROOT / "Options.lua")
@@ -176,6 +190,8 @@ def check_startup_and_hot_paths() -> list[str]:
     if 'hooksecurefunc(BFButton, "ClearCommand"' not in buttons:
         errors.append("ButtonForge ClearCommand lifecycle hook is missing")
 
+    if "CreateCallbackHandleContainer" not in native or "nativeCallbackHandles:Unregister" not in native:
+        errors.append("Native callback registration lacks managed handle lifecycle")
     if "actionSnapshotFresh" not in action_resolver:
         errors.append("Native action snapshots are not reused by the reconcile pass")
     if "IsInterruptAction" not in action_resolver or "IsAssistedCombatAction" not in action_resolver:
@@ -214,6 +230,48 @@ def check_startup_and_hot_paths() -> list[str]:
     if not cd_text_order.search(options):
         errors.append("Enabling cooldown text does not queue readiness before UI refresh")
 
+    return errors
+
+
+def check_channel_lifecycle() -> list[str]:
+    errors: list[str] = []
+    cast = read(ROOT / "core" / "CastTracking.lua")
+    events = read(ROOT / "core" / "Events.lua")
+    focused_test = ROOT / "tests" / "channel_guard.lua"
+
+    required_cast_symbols = (
+        "channelSuppressed",
+        "IsStaleCastEvent",
+        "UNIT_SPELLCAST_CHANNEL_UPDATE",
+        "UNIT_SPELLCAST_EMPOWER_UPDATE",
+        "ResetUnitIdentity",
+        "ResetAllIdentities",
+        "cast.channelSnapshotSuppressed",
+    )
+    for symbol in required_cast_symbols:
+        if symbol not in cast:
+            errors.append(f"Channel lifecycle mitigation is missing {symbol}")
+
+    if 'SetChannelSuppressed(unit, true, event)' not in cast:
+        errors.append("Channel/empower stop does not establish a phantom-snapshot guard")
+    if 'ResetUnitIdentity("target", event)' not in events:
+        errors.append("Target identity changes do not clear channel suppression")
+    if 'ResetUnitIdentity("focus", event)' not in events:
+        errors.append("Focus identity changes do not clear channel suppression")
+    if "ResetAllIdentities(event)" not in events:
+        errors.append("World transitions do not reset unit channel identities")
+
+    if not focused_test.exists():
+        errors.append("Focused UnitChannelInfo phantom regression test is missing")
+    else:
+        test_text = read(focused_test)
+        for assertion in (
+            "stale UnitChannelInfo resurrected after CHANNEL_STOP",
+            "cast.staleStopIgnored",
+            "PLAYER_TARGET_CHANGED",
+        ):
+            if assertion not in test_text:
+                errors.append(f"Channel regression test does not prove {assertion}")
     return errors
 
 
@@ -272,6 +330,39 @@ def check_readiness_policy() -> list[str]:
     return errors
 
 
+def check_runtime_probe() -> list[str]:
+    errors: list[str] = []
+    debug = read(ROOT / "core" / "Debug.lua")
+    probe = read(ROOT / "core" / "RuntimeProbe.lua")
+
+    if CURRENT_KB_COMMIT not in probe:
+        errors.append("Runtime probe is not pinned to the current KB commit")
+    for symbol in (
+        "ProfilerSnapshot",
+        "ProfilerDelta",
+        "SessionAverageTime",
+        "CountTimeOver1000Ms",
+        "GetTicksPerSecond",
+        "IsEnabled",
+    ):
+        if symbol not in debug:
+            errors.append(f"Native profiler diagnostics are missing {symbol}")
+    for symbol in (
+        "profilerStart",
+        "profilerStop",
+        "PeakTimeIncrease",
+        "restrictionTransitions",
+        "[providers]",
+        "WOWUI-2026-005",
+        "channelSuppressed",
+    ):
+        if symbol not in probe:
+            errors.append(f"Runtime evidence report is missing {symbol}")
+    if "scriptProfile" in debug or "scriptProfile" in probe:
+        errors.append("Runtime diagnostics must not enable legacy scriptProfile")
+    return errors
+
+
 def check_interrupt_data() -> list[str]:
     errors: list[str] = []
     data = read(ROOT / "core" / "Data.lua")
@@ -297,12 +388,24 @@ def check_local_test_harness() -> list[str]:
 
     if "InterruptGlow.toc" not in syntax or "toc:lines()" not in syntax:
         errors.append("Syntax checker does not derive runtime coverage from the TOC")
+    for test_file in (
+        "tests/mock_wow.lua",
+        "tests/cdm_toggle.lua",
+        "tests/runtime_probe.lua",
+        "tests/native_callback_handles.lua",
+        "tests/channel_guard.lua",
+    ):
+        if test_file not in syntax:
+            errors.append(f"Syntax checker does not include {test_file}")
+
     for module in (
         "core/DiagnosticsPolicy.lua",
         "core/LABAdapter.lua",
         "core/ActionResolver.lua",
         "core/ReadinessPolicy.lua",
         "core/Usability.lua",
+        "core/RuntimeProbe.lua",
+        "core/NativeCallbackPolicy.lua",
     ):
         if module not in mock and "InterruptGlow.toc" not in mock:
             errors.append(f"Mock harness does not load {module}")
@@ -312,6 +415,15 @@ def check_local_test_harness() -> list[str]:
         errors.append("Mock harness lacks action-usability invalidation coverage")
     if "readinessPending" not in mock:
         errors.append("Mock harness lacks pending-readiness regression coverage")
+
+    runtime_probe_test = read(ROOT / "tests" / "runtime_probe.lua")
+    for assertion in (
+        "delta.CountTimeOver5Ms=5",
+        "kbCommit=e45366cb0ca56dfe49664daa9f2579e629af0cb3",
+        "focus.channelSuppressed=true",
+    ):
+        if assertion not in runtime_probe_test:
+            errors.append(f"Runtime probe test does not prove {assertion}")
     return errors
 
 
@@ -322,7 +434,9 @@ def main() -> int:
         + check_forbidden_patterns()
         + check_secret_sink()
         + check_startup_and_hot_paths()
+        + check_channel_lifecycle()
         + check_readiness_policy()
+        + check_runtime_probe()
         + check_interrupt_data()
         + check_local_test_harness()
     )
