@@ -18,6 +18,7 @@ local tonumber = tonumber
 local hookedButtons = setmetatable({}, { __mode = "k" })
 local buttonSlots = setmetatable({}, { __mode = "k" })
 local buttonsBySlot = {}
+local broadUpdateDisabled = setmetatable({}, { __mode = "k" })
 
 local slotEventFrame = CreateFrame("Frame")
 slotEventFrame:Hide()
@@ -139,11 +140,9 @@ local function ForEachLibraryButton(library, callback)
     return count
 end
 
-local originalAttachLABLibrary = Buttons.AttachLABLibrary
-function Buttons:AttachLABLibrary(library, discoverExisting, forceDiscovery)
-    if type(library) ~= "table" then return end
-
-    originalAttachLABLibrary(self, library, discoverExisting, forceDiscovery)
+local function DisableBroadUpdateIfFullyHooked(library)
+    if not library or broadUpdateDisabled[library] then return true end
+    if type(library.UnregisterCallback) ~= "function" then return false end
 
     local allHooked = true
     local buttonCount = ForEachLibraryButton(library, function(button)
@@ -152,12 +151,28 @@ function Buttons:AttachLABLibrary(library, discoverExisting, forceDiscovery)
         if not HookButton(button) then allHooked = false end
     end)
 
-    -- Remove the broad callback only after proving that this current provider's
-    -- existing buttons expose an exact UpdateAction hook surface. Empty or
-    -- nonstandard providers retain the identity-deduped fallback below.
-    if buttonCount > 0 and allHooked and type(library.UnregisterCallback) == "function" then
-        library.UnregisterCallback(self, "OnButtonUpdate")
+    if buttonCount <= 0 or not allHooked then return false end
+
+    library.UnregisterCallback(Buttons, "OnButtonUpdate")
+    broadUpdateDisabled[library] = true
+    IG:BumpStat("lab.broadUpdateCallbacksRemoved")
+    return true
+end
+
+local function TryDisableBroadUpdates()
+    for library in pairs(Buttons.labLibraries) do
+        if not broadUpdateDisabled[library] then
+            DisableBroadUpdateIfFullyHooked(library)
+        end
     end
+end
+
+local originalAttachLABLibrary = Buttons.AttachLABLibrary
+function Buttons:AttachLABLibrary(library, discoverExisting, forceDiscovery)
+    if type(library) ~= "table" then return end
+
+    originalAttachLABLibrary(self, library, discoverExisting, forceDiscovery)
+    DisableBroadUpdateIfFullyHooked(library)
 end
 
 function Buttons:OnLABButtonCreated(_, button)
@@ -169,6 +184,11 @@ function Buttons:OnLABButtonCreated(_, button)
     CacheIdentity(record, button)
     HookButton(button)
     IG:MarkButtonDirty(button)
+
+    -- A LAB provider can attach before it creates any buttons. Once creation has
+    -- populated its registry, remove the broad visual-update callback if every
+    -- current button exposes the exact UpdateAction hook surface.
+    TryDisableBroadUpdates()
 end
 
 function Buttons:OnLABButtonContentsChanged(_, button)
@@ -180,6 +200,7 @@ function Buttons:OnLABButtonContentsChanged(_, button)
     CacheIdentity(record, button)
     HookButton(button)
     IG:MarkButtonDirty(button)
+    TryDisableBroadUpdates()
 end
 
 -- Fallback for an empty-at-attach or nonstandard LAB provider. Even if LAB calls
@@ -228,5 +249,6 @@ end
 local originalDetach = Buttons.Detach
 function Buttons:Detach()
     if self.attached then slotEventFrame:UnregisterEvent("ACTIONBAR_SLOT_CHANGED") end
+    for library in pairs(broadUpdateDisabled) do broadUpdateDisabled[library] = nil end
     originalDetach(self)
 end
