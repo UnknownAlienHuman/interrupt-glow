@@ -12,6 +12,7 @@ core/DiagnosticsPolicy.lua
 core/Data.lua
 core/Debug.lua
 core/RuntimeProbe.lua
+core/RuntimeProbePolicy.lua
 core/Glow.lua
 core/Buttons.lua
 core/NativeCallbackPolicy.lua
