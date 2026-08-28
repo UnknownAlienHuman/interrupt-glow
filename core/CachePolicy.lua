@@ -13,7 +13,7 @@ local next = next
 function Buttons:PruneDormantAbilities()
     local removed = 0
     for key, ability in pairs(IG.AbilityStates) do
-        if not ability or next(ability.records) == nil then
+        if not ability or not ability.records or next(ability.records) == nil then
             IG.AbilityStates[key] = nil
             removed = removed + 1
         end
@@ -24,10 +24,12 @@ function Buttons:PruneDormantAbilities()
 end
 
 function Cooldown:ResetCaches()
-    IG:WipeMap(self.cache.action)
-    IG:WipeMap(self.cache.spell)
-    IG:WipeMap(self.cache.pet)
-    IG:WipeMap(self.gcdHints)
+    if self.cache then
+        if self.cache.action then IG:WipeMap(self.cache.action) end
+        if self.cache.spell then IG:WipeMap(self.cache.spell) end
+        if self.cache.pet then IG:WipeMap(self.cache.pet) end
+    end
+    if self.gcdHints then IG:WipeMap(self.gcdHints) end
     self.generation = 0
     IG:BumpStat("cooldown.cacheResets")
 end
