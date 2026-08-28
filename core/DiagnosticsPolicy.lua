@@ -6,9 +6,14 @@ local type = type
 local tostring = tostring
 
 -- Internal per-path counters are diagnostic instrumentation, not production
--- logic. Keep them completely dormant unless debug logging or an explicit
--- session profile is enabled.
+-- logic. Keep them completely dormant unless debug logging or one explicit
+-- diagnostic owner has acquired the counter window.
 IG.profileCountersEnabled = false
+IG.profileCounterOwner = nil
+
+local function NormalizeOwner(owner)
+    return type(owner) == "string" and owner ~= "" and owner or "manual"
+end
 
 function IG:BumpStat(key, amount)
     if self.DB.debug ~= true and self.profileCountersEnabled ~= true then return end
@@ -18,13 +23,40 @@ function IG:BumpStat(key, amount)
     self.Stats[key] = (self.Stats[key] or 0) + amount
 end
 
-function IG:StartProfileCounters()
+function IG:StartProfileCounters(owner)
+    owner = NormalizeOwner(owner)
+    local currentOwner = self.profileCounterOwner
+    if currentOwner ~= nil and currentOwner ~= owner then
+        return false, currentOwner
+    end
+
     self:WipeMap(self.Stats)
+    self.profileCounterOwner = owner
     self.profileCountersEnabled = true
+    return true, owner
 end
 
-function IG:StopProfileCounters()
+function IG:StopProfileCounters(owner)
+    owner = NormalizeOwner(owner)
+    local currentOwner = self.profileCounterOwner
+    if currentOwner ~= nil and currentOwner ~= owner then
+        return false, currentOwner
+    end
+
+    self.profileCounterOwner = nil
     self.profileCountersEnabled = false
+    return true, nil
+end
+
+function IG:ResetProfileCounters(owner)
+    owner = NormalizeOwner(owner)
+    local currentOwner = self.profileCounterOwner
+    if currentOwner ~= nil and currentOwner ~= owner then
+        return false, currentOwner
+    end
+
+    self:WipeMap(self.Stats)
+    return true, currentOwner
 end
 
 function IG:Print(message)
