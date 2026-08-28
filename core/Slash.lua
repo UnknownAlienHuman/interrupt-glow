@@ -27,11 +27,12 @@ local function PrintState()
     local target = IG.CastState.target
     local focus = IG.CastState.focus
 
-    IG:Print(format("version=%s enabled=%s spec=%s counters=%s observed=%d interrupts=%d overlays=%d combat=%s",
+    IG:Print(format("version=%s enabled=%s spec=%s counters=%s owner=%s observed=%d interrupts=%d overlays=%d combat=%s",
         tostring(IG.version),
         tostring(IG.DB.enabled),
         tostring(IG.Data and IG.Data.activeSpecID),
         tostring(IG.profileCountersEnabled == true or IG.DB.debug == true),
+        tostring(IG.profileCounterOwner or "none"),
         observed,
         interrupts,
         overlays,
@@ -47,6 +48,7 @@ local function PrintStats()
     for key in pairs(IG.Stats) do keys[#keys + 1] = key end
     sort(keys)
 
+    IG:Print("Counter owner: " .. tostring(IG.profileCounterOwner or "none") .. ".")
     if #keys == 0 then
         IG:Print("No internal counters recorded. Use /iglow stats start for a profiling window.")
     else
@@ -63,9 +65,36 @@ local function PrintStats()
     end
 end
 
+local function PrintCounterOwnershipFailure(action, owner)
+    IG:Print(("Cannot %s manual counters while they are owned by %s.")
+        :format(action, tostring(owner or "another diagnostic session")))
+end
+
 local function ResetStats()
-    IG:WipeMap(IG.Stats)
+    local ok, owner = IG:ResetProfileCounters("manual")
+    if not ok then
+        PrintCounterOwnershipFailure("reset", owner)
+        return
+    end
     IG:Print("Counters reset.")
+end
+
+local function StartStats()
+    local ok, owner = IG:StartProfileCounters("manual")
+    if not ok then
+        PrintCounterOwnershipFailure("start", owner)
+        return
+    end
+    IG:Print("Session-only internal counters enabled.")
+end
+
+local function StopStats()
+    local ok, owner = IG:StopProfileCounters("manual")
+    if not ok then
+        PrintCounterOwnershipFailure("stop", owner)
+        return
+    end
+    IG:Print("Internal counters disabled.")
 end
 
 local function SetTestMode()
@@ -119,9 +148,9 @@ local function PrintHelp()
     IG:Print("  /iglow capture mark [label]")
     IG:Print("  /iglow capture stop|show")
     IG:Print("  /iglow stats         - show counters and Blizzard profiler metrics")
-    IG:Print("  /iglow stats start   - reset and enable session-only internal counters")
-    IG:Print("  /iglow stats stop    - disable internal counters")
-    IG:Print("  /iglow stats reset   - reset counters")
+    IG:Print("  /iglow stats start   - reset and enable manual session counters")
+    IG:Print("  /iglow stats stop    - disable manual counters")
+    IG:Print("  /iglow stats reset   - reset manual counters")
     IG:Print("  /iglow rescan        - targeted OOC discovery; no global frame scan")
     IG:Print("  /iglow log show      - open copyable debug log")
     IG:Print("  /iglow log clear     - clear debug log")
@@ -144,11 +173,9 @@ function Slash:Handle(message)
         HandleCapture(rest)
     elseif command == "stats" then
         if restLower == "start" then
-            IG:StartProfileCounters()
-            IG:Print("Session-only internal counters enabled.")
+            StartStats()
         elseif restLower == "stop" then
-            IG:StopProfileCounters()
-            IG:Print("Internal counters disabled.")
+            StopStats()
         elseif restLower == "reset" then
             ResetStats()
         else
