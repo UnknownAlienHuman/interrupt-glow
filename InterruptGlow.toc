@@ -14,6 +14,7 @@ core/Debug.lua
 core/RuntimeProbe.lua
 core/RuntimeProbePolicy.lua
 core/Glow.lua
+core/PrewarmPolicy.lua
 core/Buttons.lua
 core/NativeCallbackPolicy.lua
 core/LABAdapter.lua
