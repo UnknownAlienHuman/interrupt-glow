@@ -278,6 +278,7 @@ local function AppendCaptureSection(lines)
     AddLine(lines, "[capture]")
     AddLine(lines, "active=" .. tostring(RuntimeProbe.active))
     AddLine(lines, "label=" .. SafeScalar(RuntimeProbe.label, ""))
+    AddLine(lines, "counterOwner=" .. SafeScalar(IG.profileCounterOwner, "none"))
 
     local endTime = RuntimeProbe.active and IG:Now() or RuntimeProbe.stoppedAt
     if type(RuntimeProbe.startedAt) == "number" and type(endTime) == "number" then
@@ -481,6 +482,12 @@ function RuntimeProbe:Start(label)
         return false
     end
 
+    local acquired, owner = IG:StartProfileCounters("capture")
+    if not acquired then
+        IG:Print("Cannot start capture while diagnostic counters are owned by " .. tostring(owner) .. ".")
+        return false
+    end
+
     self.active = true
     self.label = NormalizeLabel(label, "")
     self.startedAt = IG:Now()
@@ -491,7 +498,6 @@ function RuntimeProbe:Start(label)
     self.lastRestrictionState = nil
     self.profilerStop = nil
     self.lastReport = nil
-    IG:StartProfileCounters()
     self.profilerStart = CaptureProfiler()
     IG:Print("Runtime capture started.")
     return true
@@ -514,7 +520,7 @@ function RuntimeProbe:Stop()
     self.stoppedAt = IG:Now()
     self.profilerStop = CaptureProfiler()
     self.active = false
-    IG:StopProfileCounters()
+    IG:StopProfileCounters("capture")
     self.lastReport = self:BuildReport()
     IG:Print("Runtime capture stopped. Use /iglow capture show.")
     return true
