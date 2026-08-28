@@ -1,15 +1,22 @@
 # Changelog
 
-## Unreleased — KB/runtime probe hardening
+## 1.1.0-beta.3
 
-- Adopt `wow-addon-engineering-kb@bb13f191903ca4ff63a4c93535edb9eacab9630d` as the shared project workflow and add repository-local `AGENTS.md`.
-- Add an explicit in-client runtime probe for build/interface, instance context, observed restriction transitions, active spell/action cooldown secrecy, normalized cast/readiness state, session counters, and `C_AddOnProfiler` metrics.
-- Add `/iglow probe` and `/iglow capture start|mark|stop|show` commands.
+- Adopt `wow-addon-engineering-kb@e45366cb0ca56dfe49664daa9f2579e629af0cb3` as the current shared project workflow and field-issue router.
+- Add an explicit in-client runtime probe for build/interface, provider attribution, instance context, restriction transitions, active cooldown secrecy, normalized cast/readiness state, session counters, and native profiler evidence.
+- Record `C_AddOnProfiler` start/end snapshots and subtract cumulative threshold counters for each capture window; report `PeakTime` as start/end/increase rather than pretending it can be reset.
+- Cover all native metrics through `CountTimeOver1000Ms`, plus profiler enabled state and tick frequency.
+- Add `/iglow probe` and `/iglow capture start|mark|stop|show` commands with marker-level profiler snapshots.
 - Keep runtime probe counters completely dormant until a capture is started.
+- Add provider loaded/attached state to reports for default UI, target-only, provider, and full-stack attribution runs.
 - Add a reusable copyable report surface to the debug window without allowing raw secret payloads into logs or reports.
-- Move the native `ActionButton.OnActionChanged` registration to `EventUtil.CreateCallbackHandleContainer()` when the current EventRegistry supports handles; retain the existing fallback for compatibility.
+- Move native `ActionButton.OnActionChanged` registration to `EventUtil.CreateCallbackHandleContainer()` when the current EventRegistry supports handles; retain the compatibility fallback.
 - Record restriction-state transition payloads in active captures without querying restriction state during event dispatch.
-- Document that `SPELL_SECRECY_CHANGED` is not confirmed in the pinned 12.1.0.69497 source and must not be registered until current source/client evidence exists.
+- Add an event-authoritative guard for active upstream `UnitChannelInfo` phantom/stale channels (`WOWUI-2026-005`, WoWUIBugs #777/#784/#834).
+- Treat synchronous channel/empower stop as authoritative until a real start event or target/focus identity reset; ignore delayed stop events whose NeverSecret `castBarID` belongs to an older cast.
+- Register channel/empower update events and suppress them while the stale-channel guard is active.
+- Add a focused regression test proving stale snapshots cannot resurrect a stopped channel and stale stop events cannot clear a newer channel.
+- Document that `SPELL_SECRECY_CHANGED` remains unconfirmed in the pinned 12.1.0.69497 generated docs/implementation and must not be registered without new source/client evidence.
 - Keep GitHub Actions workflows absent; live-client evidence remains the release gate.
 
 ## 1.1.0-beta.2
