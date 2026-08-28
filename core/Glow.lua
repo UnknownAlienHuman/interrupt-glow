@@ -7,6 +7,8 @@ local Glow = {
     prewarmTail = 0,
     prewarmQueued = setmetatable({}, { __mode = "k" }),
     prewarmBudgetPerFrame = 16,
+    prewarmScheduled = false,
+    runtimeWorkerEnabled = false,
     driverElapsed = 0,
     restrictedPollElapsed = 0,
     countdownTextElapsed = 0,
@@ -18,6 +20,7 @@ IG:RegisterModule("Glow", Glow)
 local _G = _G
 local CreateFrame = _G.CreateFrame
 local UnitIsUnit = _G.UnitIsUnit
+local Worker = IG.Worker
 local math_ceil = math.ceil
 local pairs = pairs
 local type = type
@@ -43,8 +46,7 @@ local function ApplySecretBoolean(region, value, alphaIfTrue, alphaIfFalse)
     end
 
     -- The only raw SecretValue sink in the addon. Do not compare, store,
-    -- format, return or wrap the value in pcall. Blizzard's API accepts secret
-    -- boolean arguments from addon code and carries the Alpha secret aspect.
+    -- format, return or wrap the value in pcall.
     method(region, value, alphaIfTrue, alphaIfFalse)
     return true
 end
@@ -73,8 +75,7 @@ local function ConfigureGlowTexture(texture, gate)
         texture:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
     end
 
-    -- Vertex color is configured once, before any secret alpha reaches the
-    -- region. Runtime candidate state is applied to the parent frame instead.
+    -- Configure visual constants before any secret alpha reaches the region.
     texture:SetVertexColor(1, 0.82, 0, 1)
     texture:SetAlpha(1)
     texture:Show()
@@ -98,12 +99,12 @@ local function CreateUnitBranch(button)
     }
 end
 
-local function CreatePulseAnimation(texture)
-    if not texture or type(texture.CreateAnimationGroup) ~= "function" then
+local function CreatePulseAnimation(region)
+    if not region or type(region.CreateAnimationGroup) ~= "function" then
         return nil
     end
 
-    local ok, group = pcall(texture.CreateAnimationGroup, texture)
+    local ok, group = pcall(region.CreateAnimationGroup, region)
     if not ok or not group or type(group.CreateAnimation) ~= "function" then
         return nil
     end
@@ -112,9 +113,7 @@ local function CreatePulseAnimation(texture)
     local scale = group:CreateAnimation("Scale")
     scale:SetDuration(0.55)
     scale:SetScale(1.06, 1.06)
-    if type(scale.SetSmoothing) == "function" then
-        scale:SetSmoothing("IN_OUT")
-    end
+    if type(scale.SetSmoothing) == "function" then scale:SetSmoothing("IN_OUT") end
     return group
 end
 
@@ -136,6 +135,43 @@ local function ReadinessPending(record)
     return record
         and record.ability
         and record.ability.readinessPending == true
+end
+
+function Glow:SchedulePrewarm()
+    if self.prewarmScheduled or IG:IsInCombat() or not self.prewarmFrame then return end
+    if self.prewarmHead > self.prewarmTail then return end
+
+    self.prewarmScheduled = true
+    if Worker then
+        Worker:RunOnce(self.prewarmFrame)
+    else
+        self.prewarmFrame:Show()
+    end
+end
+
+function Glow:DisablePrewarmWorker()
+    self.prewarmScheduled = false
+    if not self.prewarmFrame then return end
+
+    if Worker then
+        Worker:Disable(self.prewarmFrame)
+    else
+        self.prewarmFrame:Hide()
+    end
+end
+
+function Glow:SetRuntimeWorkerEnabled(enabled)
+    enabled = enabled == true
+    if self.runtimeWorkerEnabled == enabled then return end
+    self.runtimeWorkerEnabled = enabled
+
+    if Worker then
+        Worker:SetContinuous(self.runtimeFrame, enabled)
+    elseif enabled then
+        self.runtimeFrame:Show()
+    else
+        self.runtimeFrame:Hide()
+    end
 end
 
 function Glow:CreateShell(record)
@@ -185,16 +221,14 @@ function Glow:QueueShell(record, urgent)
         self.prewarmQueue[self.prewarmTail] = record
     end
 
-    if not IG:IsInCombat() then
-        self.prewarmFrame:Show()
-    end
+    self:SchedulePrewarm()
 end
 
 function Glow:ProcessPrewarmBudget()
-    if IG:IsInCombat() then
-        self.prewarmFrame:Hide()
-        return
-    end
+    -- RunOnce is already disabled before this callback; the fallback worker is
+    -- explicitly hidden so no idle OnUpdate remains resident.
+    self:DisablePrewarmWorker()
+    if IG:IsInCombat() then return end
 
     local created = 0
     while created < self.prewarmBudgetPerFrame and self.prewarmHead <= self.prewarmTail do
@@ -216,7 +250,8 @@ function Glow:ProcessPrewarmBudget()
         self.prewarmQueue = {}
         self.prewarmHead = 1
         self.prewarmTail = 0
-        self.prewarmFrame:Hide()
+    else
+        self:SchedulePrewarm()
     end
 end
 
@@ -252,8 +287,8 @@ function Glow:EnsureInterruptVisuals(record)
             return false
         end
 
-        -- Animate the ordinary parent gate, never the child texture that may
-        -- carry Blizzard's Alpha secret aspect after restricted cast feedback.
+        -- Animate the ordinary parent gate, never the child texture carrying a
+        -- possible Alpha secret aspect.
         overlay.target.animation = CreatePulseAnimation(overlay.target.plainGate)
         overlay.focus.animation = CreatePulseAnimation(overlay.focus.plainGate)
         overlay.enhanced = true
@@ -284,16 +319,14 @@ function Glow:CreatePendingOverlays()
         end
     end
 
-    if self.prewarmHead <= self.prewarmTail then self.prewarmFrame:Show() end
+    self:SchedulePrewarm()
     if changed and IG.CastTracking then IG:MarkCastDirty() end
     IG:MarkVisualDirty()
 end
 
 function Glow:EnsureCooldownTexts()
     if not IG.DB.cdText or IG:IsInCombat() then return end
-    for record in pairs(IG.InterruptRecords) do
-        self:EnsureCooldownText(record)
-    end
+    for record in pairs(IG.InterruptRecords) do self:EnsureCooldownText(record) end
     self:RefreshAll()
 end
 
@@ -370,17 +403,14 @@ function Glow:RefreshUnitRelation()
     if type(UnitIsUnit) ~= "function" then return end
 
     local ok, same = pcall(UnitIsUnit, "target", "focus")
-    if ok and IG.CanAccess(same) and same == true then
-        self.sameTrackedUnit = true
-    end
+    if ok and IG.CanAccess(same) and same == true then self.sameTrackedUnit = true end
 end
 
 function Glow:HasRelevantCast()
     if IG.DB.enabled ~= true then return false end
 
     for index = 1, #UNITS do
-        local unit = UNITS[index]
-        local state = IG.CastState[unit]
+        local state = IG.CastState[UNITS[index]]
         if state
             and state.active == true
             and state.hostile == true
@@ -427,17 +457,13 @@ end
 function Glow:RefreshUnit(unit)
     if unit ~= "target" and unit ~= "focus" then return end
     for record in pairs(IG.InterruptRecords) do
-        if record.overlay then
-            SetCandidate(record.overlay[unit], CandidateFor(record, unit))
-        end
+        if record.overlay then SetCandidate(record.overlay[unit], CandidateFor(record, unit)) end
     end
     self:UpdateRuntimeDriver()
 end
 
 function Glow:RefreshAll()
-    for record in pairs(IG.InterruptRecords) do
-        self:RefreshRecord(record)
-    end
+    for record in pairs(IG.InterruptRecords) do self:RefreshRecord(record) end
     self:UpdateRuntimeDriver()
 end
 
@@ -488,20 +514,19 @@ function Glow:RefreshCooldownText(record, now)
 end
 
 local prewarmFrame = CreateFrame("Frame")
-prewarmFrame:Hide()
 Glow.prewarmFrame = prewarmFrame
 prewarmFrame:SetScript("OnUpdate", function()
     Glow:ProcessPrewarmBudget()
 end)
+Glow:DisablePrewarmWorker()
 
 local runtimeFrame = CreateFrame("Frame")
-runtimeFrame:Hide()
 Glow.runtimeFrame = runtimeFrame
-runtimeFrame:SetScript("OnUpdate", function(self, elapsed)
+runtimeFrame:SetScript("OnUpdate", function(_, elapsed)
     local relevantCast = Glow:HasRelevantCast()
     local allowCountdown = IG.DB.enabled == true and IG.DB.cdText == true
     if not relevantCast and not allowCountdown then
-        self:Hide()
+        Glow:SetRuntimeWorkerEnabled(false)
         return
     end
 
@@ -541,39 +566,38 @@ runtimeFrame:SetScript("OnUpdate", function(self, elapsed)
     end
 
     if runCountdownText and allowCountdown then
-        for record in pairs(IG.InterruptRecords) do
-            Glow:RefreshCooldownText(record, now)
-        end
+        for record in pairs(IG.InterruptRecords) do Glow:RefreshCooldownText(record, now) end
     end
 
     if expired or (runRestrictedPoll and needsPoll) then
         if runRestrictedPoll and needsPoll then IG:BumpStat("cooldown.restrictedPolls") end
         IG:MarkCooldownDirty(false)
     end
-    if not keepRunning then self:Hide() end
+    if not keepRunning then Glow:SetRuntimeWorkerEnabled(false) end
 end)
+Glow:SetRuntimeWorkerEnabled(false)
 
 function Glow:UpdateRuntimeDriver()
     local relevantCast = self:HasRelevantCast()
     local allowCountdown = IG.DB.enabled == true and IG.DB.cdText == true
     if not relevantCast and not allowCountdown then
-        runtimeFrame:Hide()
+        self:SetRuntimeWorkerEnabled(false)
         return
     end
 
     for _, ability in pairs(IG.AbilityStates) do
         if next(ability.records) ~= nil then
             if type(ability.deadline) == "number" and (relevantCast or allowCountdown) then
-                runtimeFrame:Show()
+                self:SetRuntimeWorkerEnabled(true)
                 return
             end
             if relevantCast and ability.needsPoll then
-                runtimeFrame:Show()
+                self:SetRuntimeWorkerEnabled(true)
                 return
             end
         end
     end
-    runtimeFrame:Hide()
+    self:SetRuntimeWorkerEnabled(false)
 end
 
 function Glow:SetTestMode(enabled)
