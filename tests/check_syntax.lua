@@ -18,15 +18,24 @@ toc:close()
 
 -- These files are not loaded by WoW, but must remain valid Lua as part of the
 -- local development suite.
-files[#files + 1] = "tests/mock_wow.lua"
-files[#files + 1] = "tests/cdm_toggle.lua"
-files[#files + 1] = "tests/runtime_probe.lua"
-files[#files + 1] = "tests/native_callback_handles.lua"
-files[#files + 1] = "tests/channel_guard.lua"
-files[#files + 1] = "tests/shared_worker.lua"
-files[#files + 1] = "tests/cache_policy.lua"
-files[#files + 1] = "tests/glow_worker.lua"
-files[#files + 1] = "tests/gcd_safety.lua"
+local localTests = {
+    "tests/mock_wow.lua",
+    "tests/cdm_toggle.lua",
+    "tests/cdm_policy.lua",
+    "tests/ability_source_policy.lua",
+    "tests/runtime_probe.lua",
+    "tests/native_callback_handles.lua",
+    "tests/channel_guard.lua",
+    "tests/shared_worker.lua",
+    "tests/cache_policy.lua",
+    "tests/glow_worker.lua",
+    "tests/gcd_safety.lua",
+    "tests/toc_contract.lua",
+}
+
+for index = 1, #localTests do
+    files[#files + 1] = localTests[index]
+end
 
 for index = 1, #files do
     local path = root .. "/" .. files[index]
