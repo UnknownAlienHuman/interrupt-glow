@@ -16,9 +16,7 @@ IG:RegisterModule("Cooldown", Cooldown)
 local _G = _G
 local C_ActionBar = _G.C_ActionBar
 local C_Spell = _G.C_Spell
-local C_SpellBook = _G.C_SpellBook
 local GetPetActionCooldown = _G.GetPetActionCooldown
-local GetPetActionInfo = _G.GetPetActionInfo
 local GetSpellLossOfControlCooldown = _G.GetSpellLossOfControlCooldown
 local pcall = pcall
 local type = type
@@ -81,25 +79,44 @@ local function ReadCooldownStatus(info, gcdOnlyHint)
     return nil, true
 end
 
+-- Returns ready, remaining, readinessRestricted, timingRestricted, isCharge,
+-- hardRestricted. Accessible nil is the documented non-charge result for the
+-- spell API. An inaccessible charge payload is fundamentally different: the
+-- addon cannot know whether the last charge is available, so ordinary cooldown
+-- fallback must not be allowed to produce ready=true.
 local function ReadChargeInfo(info, durationGetter, sourceID)
-    if not IG.CanAccess(info) or info == nil then
-        return nil, nil, true, true, false
+    if info == nil then
+        return nil, nil, false, false, false, false
+    end
+    if not IG.CanAccess(info) then
+        return nil, nil, true, true, true, true
     end
 
     local currentCharges, currentKnown = IG:ReadMember(info, "currentCharges")
     local maxCharges, maxKnown = IG:ReadMember(info, "maxCharges")
     local hasChargeShape = currentKnown or maxKnown
     if not hasChargeShape then
-        return nil, nil, false, false, false
+        return nil, nil, true, true, true, true
     end
 
     currentCharges = IG:AsNumber(currentCharges)
     maxCharges = IG:AsNumber(maxCharges)
+
     if currentCharges and currentCharges > 0 then
-        return true, 0, false, false, true
+        return true, 0, false, false, true, false
     end
 
-    local readinessRestricted = currentCharges == nil
+    if currentCharges == nil then
+        return nil, nil, true, true, true, true
+    end
+
+    -- A structurally charge-shaped object with zero/invalid max charges is not a
+    -- trustworthy non-charge sentinel. Fail closed rather than falling through
+    -- to a normal cooldown that may be zero.
+    if maxCharges == nil or maxCharges <= 0 then
+        return nil, nil, true, true, true, true
+    end
+
     local timingRestricted = false
     local remaining = nil
 
@@ -112,12 +129,13 @@ local function ReadChargeInfo(info, durationGetter, sourceID)
         else
             timingRestricted = true
         end
+    else
+        timingRestricted = true
     end
 
-    if currentCharges == 0 then
-        return false, remaining, false, timingRestricted, true
-    end
-    return nil, remaining, readinessRestricted, timingRestricted, true
+    -- currentCharges == 0 is exact not-ready evidence even when recharge timing
+    -- is inaccessible. Polling is needed only when no accessible deadline exists.
+    return false, remaining, false, timingRestricted, true, false
 end
 
 local function ReadLossOfControlState(info)
@@ -165,7 +183,7 @@ end
 
 local function GetActionReadiness(slot, gcdOnlyHint)
     if not C_ActionBar then
-        return nil, nil, true, true, true, false
+        return nil, nil, true, true, false, true
     end
 
     local locState = GetActionLossOfControlState(slot)
@@ -178,17 +196,19 @@ local function GetActionReadiness(slot, gcdOnlyHint)
 
     if type(C_ActionBar.GetActionCharges) == "function" then
         local ok, info = pcall(C_ActionBar.GetActionCharges, slot)
-        if ok then
-            local ready, remaining, readinessRestricted, timingRestricted, isCharge = ReadChargeInfo(
-                info,
-                C_ActionBar.GetActionChargeDuration,
-                slot
-            )
-            if isCharge then
-                local needsPoll = ready ~= true and remaining == nil
-                    and (readinessRestricted or timingRestricted)
-                return ready, remaining, readinessRestricted, timingRestricted, needsPoll, false
-            end
+        if not ok then
+            return nil, nil, true, true, false, true
+        end
+
+        local ready, remaining, readinessRestricted, timingRestricted, isCharge, hardRestricted =
+            ReadChargeInfo(info, C_ActionBar.GetActionChargeDuration, slot)
+        if hardRestricted then
+            return nil, nil, true, true, false, true
+        end
+        if isCharge then
+            local needsPoll = ready ~= true and remaining == nil
+                and (readinessRestricted or timingRestricted)
+            return ready, remaining, readinessRestricted, timingRestricted, needsPoll, false
         end
     end
 
@@ -202,6 +222,8 @@ local function GetActionReadiness(slot, gcdOnlyHint)
                 local needsPoll = ready == false and remaining == nil and timingRestricted
                 return ready, remaining, false, timingRestricted, needsPoll, false
             end
+        else
+            durationTimingRestricted = true
         end
     end
 
@@ -224,7 +246,7 @@ end
 
 local function GetSpellReadiness(spellID, gcdOnlyHint)
     if not C_Spell then
-        return nil, nil, true, true, true, false
+        return nil, nil, true, true, false, true
     end
 
     local locState = GetSpellLossOfControlState(spellID)
@@ -237,17 +259,19 @@ local function GetSpellReadiness(spellID, gcdOnlyHint)
 
     if type(C_Spell.GetSpellCharges) == "function" then
         local ok, info = pcall(C_Spell.GetSpellCharges, spellID)
-        if ok then
-            local ready, remaining, readinessRestricted, timingRestricted, isCharge = ReadChargeInfo(
-                info,
-                C_Spell.GetSpellChargeDuration,
-                spellID
-            )
-            if isCharge then
-                local needsPoll = ready ~= true and remaining == nil
-                    and (readinessRestricted or timingRestricted)
-                return ready, remaining, readinessRestricted, timingRestricted, needsPoll, false
-            end
+        if not ok then
+            return nil, nil, true, true, false, true
+        end
+
+        local ready, remaining, readinessRestricted, timingRestricted, isCharge, hardRestricted =
+            ReadChargeInfo(info, C_Spell.GetSpellChargeDuration, spellID)
+        if hardRestricted then
+            return nil, nil, true, true, false, true
+        end
+        if isCharge then
+            local needsPoll = ready ~= true and remaining == nil
+                and (readinessRestricted or timingRestricted)
+            return ready, remaining, readinessRestricted, timingRestricted, needsPoll, false
         end
     end
 
@@ -261,6 +285,8 @@ local function GetSpellReadiness(spellID, gcdOnlyHint)
                 local needsPoll = ready == false and remaining == nil and timingRestricted
                 return ready, remaining, false, timingRestricted, needsPoll, false
             end
+        else
+            durationTimingRestricted = true
         end
     end
 
@@ -283,7 +309,7 @@ end
 
 local function GetPetReadiness(slot)
     if type(GetPetActionCooldown) ~= "function" or type(slot) ~= "number" then
-        return nil, nil, true, true, true, false
+        return nil, nil, true, true, false, true
     end
 
     local ok, startTime, duration, enabled = pcall(GetPetActionCooldown, slot)
@@ -292,11 +318,11 @@ local function GetPetReadiness(slot)
         or not IG.CanAccess(duration)
         or not IG.CanAccess(enabled)
     then
-        return nil, nil, true, true, true, false
+        return nil, nil, true, true, false, true
     end
 
     if type(startTime) ~= "number" or type(duration) ~= "number" then
-        return nil, nil, true, true, true, false
+        return nil, nil, true, true, false, true
     end
     if enabled == 0 or enabled == false then
         return false, nil, false, false, false, false
@@ -438,6 +464,7 @@ function Cooldown:RefreshAbility(ability)
         record.restrictedCooldown = restricted
         record.hardRestrictedCooldown = hardRestricted
         record.deadline = newDeadline
+        record.readinessPending = false
     end
 
     return changed
@@ -449,31 +476,6 @@ end
 
 function Cooldown:CaptureGCDHints()
     self:ClearGCDHints()
-    for _, ability in pairs(IG.AbilityStates) do
-        if ability.sourceKind == "action" and next(ability.records) ~= nil then
-            local slot = ability.sourceID
-            if C_ActionBar and type(C_ActionBar.GetActionCooldown) == "function" then
-                local ok, info = pcall(C_ActionBar.GetActionCooldown, slot)
-                if ok then
-                    local isOnGCD, known = IG:ReadMember(info, "isOnGCD")
-                    if known and type(isOnGCD) == "boolean" then
-                        self.gcdHints[ability.key] = isOnGCD
-                    end
-                end
-            end
-        elseif ability.sourceKind == "spell" and next(ability.records) ~= nil then
-            local spellID = ability.sourceID
-            if C_Spell and type(C_Spell.GetSpellCooldown) == "function" then
-                local ok, info = pcall(C_Spell.GetSpellCooldown, spellID)
-                if ok then
-                    local isOnGCD, known = IG:ReadMember(info, "isOnGCD")
-                    if known and type(isOnGCD) == "boolean" then
-                        self.gcdHints[ability.key] = isOnGCD
-                    end
-                end
-            end
-        end
-    end
 end
 
 function Cooldown:RefreshAll()
@@ -485,7 +487,7 @@ function Cooldown:RefreshAll()
         IG:WipeMap(self.cache.pet)
     end
 
-    IG:BumpStat(next(self.gcdHints) ~= nil and "cooldown.spellEventPasses" or "cooldown.otherPasses")
+    IG:BumpStat("cooldown.otherPasses")
 
     local changed = false
     for _, ability in pairs(IG.AbilityStates) do
@@ -494,8 +496,6 @@ function Cooldown:RefreshAll()
             IG:BumpStat("cooldown.abilitiesEvaluated")
         end
     end
-
-    self:ClearGCDHints()
 
     if changed and IG.Glow then
         IG.Glow:RefreshAll()
