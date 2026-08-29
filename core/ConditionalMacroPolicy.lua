@@ -3,6 +3,8 @@ if not IG or not IG.Buttons or not IG.Usability then return end
 
 local Buttons = IG.Buttons
 local Usability = IG.Usability
+local _G = _G
+local hooksecurefunc = _G.hooksecurefunc
 local pairs = pairs
 local next = next
 local type = type
@@ -14,6 +16,7 @@ local tonumber = tonumber
 -- batch without scanning action slots or parsing macro bodies.
 local slotByButton = setmetatable({}, { __mode = "k" })
 local buttonsBySlot = {}
+local hookedDominosControllers = setmetatable({}, { __mode = "k" })
 
 local function RemoveButton(button)
     local oldSlot = slotByButton[button]
@@ -34,16 +37,24 @@ local function NormalizeSlot(value)
     return value
 end
 
+local function ReadGenericActionSlot(button)
+    local stateType, typeKnown = IG:ReadMember(button, "_state_type")
+    local stateAction, actionStateKnown = IG:ReadMember(button, "_state_action")
+    if typeKnown and actionStateKnown and stateType == "action" then
+        local slot = NormalizeSlot(stateAction)
+        if slot then return slot end
+    end
+
+    local action, actionKnown = IG:ReadMember(button, "action")
+    if actionKnown then return NormalizeSlot(action) end
+    return nil
+end
+
 local function ReadPhysicalSlot(button, record)
-    if not button then return nil end
+    if not button or not record then return nil end
 
-    local slot = record and NormalizeSlot(record.labSlot)
-    if slot then return slot end
-
-    slot = record and NormalizeSlot(record.dominosSlot)
-    if slot then return slot end
-
-    if record and record.adapter == "native" then
+    local adapter = record.adapter
+    if adapter == "native" then
         -- Native Blizzard action buttons expose an ordinary positive action
         -- field. Avoid protected generic member reads in the mouseover callback.
         local action = button.action
@@ -51,16 +62,22 @@ local function ReadPhysicalSlot(button, record)
         return NormalizeSlot(action)
     end
 
-    local stateType, typeKnown = IG:ReadMember(button, "_state_type")
-    local stateAction, actionStateKnown = IG:ReadMember(button, "_state_action")
-    if typeKnown and actionStateKnown and stateType == "action" then
-        slot = NormalizeSlot(stateAction)
-        if slot then return slot end
+    if adapter == "lab" then
+        return NormalizeSlot(record.labSlot) or ReadGenericActionSlot(button)
     end
 
-    local action, actionKnown = IG:ReadMember(button, "action")
-    if actionKnown then return NormalizeSlot(action) end
-    return nil
+    if adapter == "dominos" then
+        return NormalizeSlot(record.dominosSlot) or ReadGenericActionSlot(button)
+    end
+
+    -- Pet, Cooldown Viewer and ButtonForge records are not physical action-slot
+    -- consumers. Never retain an old native/LAB/Dominos slot after adapter
+    -- priority promotes the same frame to one of these providers.
+    if adapter == "pet" or adapter == "cdm" or adapter == "buttonforge" then
+        return nil
+    end
+
+    return ReadGenericActionSlot(button)
 end
 
 local function RefreshButtonSlot(button, record)
@@ -156,6 +173,51 @@ function Buttons:OnNativeActionChanged(button, ...)
     return result
 end
 
+-- Dominos updates record.dominosSlot after Buttons:ObserveButton has already
+-- run. Install a second, later post-hook on the exact provider callback so the
+-- conditional index observes the committed slot rather than the previous one.
+local function OnDominosActionChanged(_controller, buttonName)
+    if not Buttons.attached or not Buttons.dominosAttached then return end
+    local button = type(buttonName) == "string" and _G[buttonName] or nil
+    local record = button and IG.ObservedButtons[button]
+    if record and record.adapter == "dominos" then
+        RefreshButtonSlot(button, record)
+    end
+end
+
+local function RefreshDominosRegistry(controller)
+    local registry = controller and controller.buttons
+    if type(registry) ~= "table" then return end
+
+    for button in pairs(registry) do
+        local record = IG.ObservedButtons[button]
+        if record and record.adapter == "dominos" then
+            RefreshButtonSlot(button, record)
+        end
+    end
+end
+
+local originalAttachDominosNow = Buttons.AttachDominosNow
+function Buttons:AttachDominosNow(discoverExisting)
+    local result = originalAttachDominosNow(self, discoverExisting)
+    local controller = self.DominosActionButtons
+
+    if self.dominosAttached and type(controller) == "table" then
+        if not hookedDominosControllers[controller]
+            and type(hooksecurefunc) == "function"
+            and type(controller.OnActionChanged) == "function"
+        then
+            hookedDominosControllers[controller] = true
+            hooksecurefunc(controller, "OnActionChanged", OnDominosActionChanged)
+        end
+
+        -- Original discovery commits record.dominosSlot after ObserveButton.
+        -- Repair the bounded index once after that provider-owned pass.
+        RefreshDominosRegistry(controller)
+    end
+    return result
+end
+
 local originalOnActionUsableChanged = Usability.OnActionUsableChanged
 function Usability:OnActionUsableChanged(changes, ...)
     local result = originalOnActionUsableChanged(self, changes, ...)
@@ -179,6 +241,8 @@ IG:RegisterModule("ConditionalMacroPolicy", {
     parsesActionUsableChangeBatch = true,
     dirtyHookIsLABOnly = true,
     nativeCallbackReadsActionAPIs = false,
+    dominosIdentityRefreshesAfterProviderCommit = true,
+    adapterPromotionDropsStaleSlots = true,
     slotIndexIsBounded = true,
     parsesMacroBodies = false,
     scansActionSlots = false,
