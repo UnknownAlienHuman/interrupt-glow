@@ -80,10 +80,9 @@ local function ReadCooldownStatus(info, gcdOnlyHint)
 end
 
 -- Returns ready, remaining, readinessRestricted, timingRestricted, isCharge,
--- hardRestricted. Accessible nil is the documented non-charge result for the
--- spell API. An inaccessible charge payload is fundamentally different: the
--- addon cannot know whether the last charge is available, so ordinary cooldown
--- fallback must not be allowed to produce ready=true.
+-- hardRestricted. maxCharges is NeverSecret in the generated SpellChargeInfo
+-- contract and is the safe discriminator between ordinary non-charge actions
+-- and a real charge ability whose currentCharges may be inaccessible.
 local function ReadChargeInfo(info, durationGetter, sourceID)
     if info == nil then
         return nil, nil, false, false, false, false
@@ -92,34 +91,26 @@ local function ReadChargeInfo(info, durationGetter, sourceID)
         return nil, nil, true, true, true, true
     end
 
-    local currentCharges, currentKnown = IG:ReadMember(info, "currentCharges")
     local maxCharges, maxKnown = IG:ReadMember(info, "maxCharges")
-    local hasChargeShape = currentKnown or maxKnown
-    if not hasChargeShape then
+    maxCharges = maxKnown and IG:AsNumber(maxCharges) or nil
+    if maxCharges ~= nil and maxCharges <= 0 then
+        return nil, nil, false, false, false, false
+    end
+    if maxCharges == nil then
         return nil, nil, true, true, true, true
     end
 
-    currentCharges = IG:AsNumber(currentCharges)
-    maxCharges = IG:AsNumber(maxCharges)
-
-    if currentCharges and currentCharges > 0 then
-        return true, 0, false, false, true, false
-    end
-
+    local currentCharges, currentKnown = IG:ReadMember(info, "currentCharges")
+    currentCharges = currentKnown and IG:AsNumber(currentCharges) or nil
     if currentCharges == nil then
         return nil, nil, true, true, true, true
     end
-
-    -- A structurally charge-shaped object with zero/invalid max charges is not a
-    -- trustworthy non-charge sentinel. Fail closed rather than falling through
-    -- to a normal cooldown that may be zero.
-    if maxCharges == nil or maxCharges <= 0 then
-        return nil, nil, true, true, true, true
+    if currentCharges > 0 then
+        return true, 0, false, false, true, false
     end
 
     local timingRestricted = false
     local remaining = nil
-
     if type(durationGetter) == "function" then
         local ok, duration = pcall(durationGetter, sourceID)
         if ok then
@@ -133,8 +124,8 @@ local function ReadChargeInfo(info, durationGetter, sourceID)
         timingRestricted = true
     end
 
-    -- currentCharges == 0 is exact not-ready evidence even when recharge timing
-    -- is inaccessible. Polling is needed only when no accessible deadline exists.
+    -- Exact zero charges are sufficient not-ready evidence even if recharge
+    -- timing is inaccessible. Poll only while no accessible deadline exists.
     return false, remaining, false, timingRestricted, true, false
 end
 
@@ -359,8 +350,6 @@ end
 function Cooldown:GetCachedReadiness(sourceKind, sourceID, gcdOnlyHint)
     local cache = self.cache[sourceKind]
     if not cache or type(sourceID) ~= "number" then
-        -- A missing/invalid physical source is not an ordinary restricted
-        -- cooldown. It cannot be made ready by optimistic compatibility mode.
         return nil, nil, true, true, false, true
     end
 
