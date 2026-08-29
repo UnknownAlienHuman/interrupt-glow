@@ -39,8 +39,10 @@ local function CanHarm(unit)
     local exists = SafeUnitBoolean(UnitExists, unit)
     if exists ~= true then return false end
 
+    -- Unknown/inaccessible alive state is not proof that a unit is a valid
+    -- hostile interrupt target. Require an explicit accessible false.
     local dead = SafeUnitBoolean(UnitIsDeadOrGhost, unit)
-    if dead == true then return false end
+    if dead ~= false then return false end
 
     local canAttack = SafeUnitBoolean(UnitCanAttack, "player", unit)
     return canAttack == true
