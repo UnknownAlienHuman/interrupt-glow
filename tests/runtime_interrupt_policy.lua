@@ -92,15 +92,17 @@ assert((Data.runtimeProofRevision or 0) == revisionBefore + 1)
 Buttons:ReconcileAll()
 assert(reconcileOrder[1] == "action")
 assert(reconcileOrder[2] == "secondary")
-assert(Buttons.runtimeInterruptSeedPass == false)
-assert(allButtonsDirty == 0, "seed pass scheduled a redundant full rebuild")
+assert(Buttons.runtimeInterruptSeedPass == nil,
+    "mutable seed state can remain stuck after a Lua error")
+assert(allButtonsDirty == 1,
+    "new runtime proof did not schedule the bounded propagation pass")
 
 -- A new runtime family learned from an ordinary single-button reconcile must
 -- rebind already-observed direct/CDM copies exactly once on the next frame.
 Data:LearnRuntimeInterrupt(9002)
-assert(allButtonsDirty == 1)
+assert(allButtonsDirty == 2)
 Data:LearnRuntimeInterrupt(9002)
-assert(allButtonsDirty == 1, "existing runtime proof scheduled duplicate full rebuild")
+assert(allButtonsDirty == 2, "existing runtime proof scheduled duplicate full rebuild")
 
 -- Raw runtime map presence is not sufficient after configuration churn.
 Data.runtimeInterrupts[7777] = 7777
@@ -116,5 +118,6 @@ assert(policy.clearsProofOnRegistryRebuild == true)
 assert(policy.actionSlotsSeedBeforeSecondaryCopies == true)
 assert(policy.propagatesNewRuntimeFamilies == true)
 assert(policy.revalidatesCooldownEventMatches == true)
+assert(policy.avoidsStickySeedState == true)
 
 print("RUNTIME INTERRUPT POLICY TEST PASSED")
