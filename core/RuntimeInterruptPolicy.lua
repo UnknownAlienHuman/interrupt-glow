@@ -55,12 +55,11 @@ function Data:LearnRuntimeInterrupt(spellID)
         IG:BumpStat("data.runtimeInterruptFamiliesChanged")
 
         -- A single action button can discover a new hotfix/talent interrupt after
-        -- direct-spell or CDM copies were already reconciled. Rebind all observed
-        -- buttons once on the next frame. During ReconcileAll the second phase
-        -- handles those copies immediately, so no extra pass is scheduled.
-        if not Buttons.runtimeInterruptSeedPass then
-            IG:MarkAllButtonsDirty()
-        end
+        -- direct-spell or CDM copies were already reconciled. Schedule one bounded
+        -- full rebind. A full two-phase rebuild may therefore receive one harmless
+        -- follow-up pass, but no mutable "seed active" flag can be left stuck by a
+        -- Lua error and suppress future propagation permanently.
+        IG:MarkAllButtonsDirty()
     end
 
     return canonicalSpellID
@@ -87,14 +86,12 @@ end
 -- copies. This removes dependence on weak-table iteration order without adding
 -- work to the ordinary single-button mouseover path.
 function Buttons:ReconcileAll()
-    self.runtimeInterruptSeedPass = true
     for _, record in pairs(IG.ObservedButtons) do
         if RecordHasActionSlot(record) then
             self:ReconcileRecord(record)
             IG:BumpStat("buttons.reconciled")
         end
     end
-    self.runtimeInterruptSeedPass = false
 
     for _, record in pairs(IG.ObservedButtons) do
         if not RecordHasActionSlot(record) then
@@ -109,4 +106,5 @@ IG:RegisterModule("RuntimeInterruptPolicy", {
     actionSlotsSeedBeforeSecondaryCopies = true,
     propagatesNewRuntimeFamilies = true,
     revalidatesCooldownEventMatches = true,
+    avoidsStickySeedState = true,
 })
