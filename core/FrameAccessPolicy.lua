@@ -10,6 +10,7 @@ local type = type
 local ACCESS_ALLOWED = 1
 local ACCESS_DEFERRED = 2
 local ACCESS_FORBIDDEN = 3
+local MAX_TRANSIENT_RETRIES = 3
 
 local function ClearQueuedState(record)
     record.overlayQueued = false
@@ -28,6 +29,7 @@ local function MarkOverlayDeferred(record)
     -- context. Fail closed now, but do not permanently blacklist the button.
     record.overlayForbidden = false
     record.overlayAccessDeferred = true
+    record.overlayAccessFailures = (record.overlayAccessFailures or 0) + 1
     record.overlayPending = true
     ClearQueuedState(record)
 end
@@ -129,6 +131,7 @@ function Glow:CreateShell(record)
     }
     record.overlayPending = false
     record.overlayAccessDeferred = false
+    record.overlayAccessFailures = nil
     ClearQueuedState(record)
     IG:BumpStat("ui.shellsCreated")
     return record.overlay
@@ -137,11 +140,14 @@ end
 local originalQueueShell = Glow.QueueShell
 function Glow:QueueShell(record, urgent)
     if record and record.overlayAccessDeferred then
-        if urgent and not IG:IsInCombat() then
-            -- A button that became an interrupt deserves one fresh out-of-combat
-            -- preflight. Persistent failures remain deferred, not hot-looped.
+        if not IG:IsInCombat()
+            and (urgent or (record.overlayAccessFailures or 0) < MAX_TRANSIENT_RETRIES)
+        then
+            -- Re-observation after provider construction may now be readable.
+            -- Non-urgent retries remain bounded; a confirmed interrupt always
+            -- gets one current out-of-combat preflight.
             record.overlayAccessDeferred = false
-            return self:CreateShell(record)
+            return originalQueueShell(self, record, urgent)
         end
         record.overlayPending = true
         return nil
@@ -152,6 +158,8 @@ end
 IG:RegisterModule("FrameAccessPolicy", {
     inaccessibleForeignFrameFailsClosed = true,
     transientAccessFailureIsRetryable = true,
+    nonUrgentRetryLimit = MAX_TRANSIENT_RETRIES,
+    reobservationCanResumePrewarm = true,
     confirmedForbiddenIsPermanent = true,
     forbiddenQueryMustReturnOrdinaryBoolean = true,
     ownsShellCreationBoundary = true,
