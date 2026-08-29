@@ -23,6 +23,7 @@ InterruptGlow = {
     profileCountersEnabled = false,
     modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
+    PendingButtons = setmetatable({}, { __mode = "k" }),
     Buttons = {},
     Data = {},
 }
@@ -38,8 +39,12 @@ function InterruptGlow:AsNumber(value)
     if type(value) == "number" then return value end
     if type(value) == "string" then return tonumber(value) end
 end
-function InterruptGlow:MarkButtonDirty() dirtyCalls = dirtyCalls + 1 end
-function InterruptGlow:BumpStat() error("dormant hot-path counter was called") end
+function InterruptGlow:MarkButtonDirty(button)
+    if self.PendingButtons[button] then return end
+    self.PendingButtons[button] = true
+    dirtyCalls = dirtyCalls + 1
+end
+function InterruptGlow:BumpStat() end
 
 function InterruptGlow.Data:GetCanonicalSpellID(spellID)
     if spellID == 1766 then return 1766 end
@@ -84,73 +89,85 @@ function GetActionInfo(slot)
     return currentActionType, currentActionID, currentActionSubType
 end
 
-local loader, loadError = loadfile(ROOT .. "/core/ActionResolver.lua")
-assert(loader, loadError)
-loader()
+local resolverLoader, resolverError = loadfile(ROOT .. "/core/ActionResolver.lua")
+assert(resolverLoader, resolverError)
+resolverLoader()
+
+local queueLoader, queueError = loadfile(ROOT .. "/core/NativeActionQueuePolicy.lua")
+assert(queueLoader, queueError)
+queueLoader()
 
 local Buttons = InterruptGlow.Buttons
 local button = { action = 7 }
 
--- Friendly/non-interrupt macro branch: one IsInterruptAction call only. This is
--- the dominant mouseover stress path from the original CPU/FPS complaint.
+-- The potentially mouseover-driven callback performs no action classification.
+-- It observes once, invalidates the snapshot, and queues one physical button.
 Buttons:OnNativeActionChanged(button)
-assert(interruptCalls == 1)
-assert(assistedCalls == 0)
-assert(actionInfoCalls == 0)
-assert(getSpellCalls == 0)
-assert(protectedMemberReads == 0, "native slot used protected generic member reads")
-assert(observeCalls == 1)
-assert(dirtyCalls == 1)
-
--- Repeated identical forced feedback does not observe again, call diagnostics,
--- read full identity, or wake the dirty worker.
-Buttons:OnNativeActionChanged(button)
-assert(interruptCalls == 2)
-assert(assistedCalls == 0 and actionInfoCalls == 0 and getSpellCalls == 0)
+assert(interruptCalls == 0 and assistedCalls == 0)
+assert(actionInfoCalls == 0 and getSpellCalls == 0)
 assert(protectedMemberReads == 0)
 assert(observeCalls == 1)
 assert(dirtyCalls == 1)
-
--- Interrupt branch pays the full identity cost once and stores the resolved
--- spell for the next-frame reconcile.
-currentInterrupt = true
-Buttons:OnNativeActionChanged(button)
-assert(interruptCalls == 3)
-assert(assistedCalls == 1)
-assert(actionInfoCalls == 1)
-assert(getSpellCalls == 1)
-assert(protectedMemberReads == 0)
-assert(observeCalls == 1)
-assert(dirtyCalls == 2)
 
 local record = assert(InterruptGlow.ObservedButtons[button])
+assert(record.actionSnapshotFresh == false)
+
+-- Any number of callbacks before the addon flush remain one queued record.
+for _ = 1, 100 do Buttons:OnNativeActionChanged(button) end
+assert(interruptCalls == 0 and actionInfoCalls == 0)
+assert(observeCalls == 1 and dirtyCalls == 1)
+
+-- The addon-owned reconcile reads the latest action once.
+InterruptGlow.PendingButtons[button] = nil
+assert(Buttons:ResolveRecord(record) == false)
+assert(interruptCalls == 1)
+assert(assistedCalls == 0 and actionInfoCalls == 0 and getSpellCalls == 0)
+assert(protectedMemberReads == 0)
+assert(fallbackCalls == 0)
+assert(record.actionSnapshotFresh == true)
+
+-- Interrupt feedback is still queue-only; full identity work happens in the
+-- following reconcile and is reused by that reconcile's resolver call.
+currentInterrupt = true
+Buttons:OnNativeActionChanged(button)
+assert(interruptCalls == 1 and dirtyCalls == 2)
+InterruptGlow.PendingButtons[button] = nil
 local isInterrupt, sourceKind, sourceID, spellID, canonicalSpellID =
     Buttons:ResolveRecord(record)
 assert(isInterrupt == true)
 assert(sourceKind == "action" and sourceID == 7)
 assert(spellID == 1766 and canonicalSpellID == 1766)
-assert(interruptCalls == 3 and assistedCalls == 1)
+assert(interruptCalls == 2 and assistedCalls == 1)
 assert(actionInfoCalls == 1 and getSpellCalls == 1)
 assert(protectedMemberReads == 0)
-assert(fallbackCalls == 0, "fresh native snapshot was re-read through the base resolver")
+assert(fallbackCalls == 0)
 
--- Returning to the non-interrupt branch is again classification-only.
+-- Critical race: another signal already queued the button, then a later action
+-- callback changes its identity. The callback must invalidate before dedupe so
+-- the existing dirty pass cannot reuse the old snapshot.
+record.actionSnapshotFresh = true
+InterruptGlow.PendingButtons[button] = true
 currentInterrupt = false
 Buttons:OnNativeActionChanged(button)
-assert(interruptCalls == 4)
-assert(assistedCalls == 1 and actionInfoCalls == 1 and getSpellCalls == 1)
-assert(protectedMemberReads == 0)
-assert(observeCalls == 1)
-assert(dirtyCalls == 3)
+assert(record.actionSnapshotFresh == false)
+assert(dirtyCalls == 2)
+InterruptGlow.PendingButtons[button] = nil
+assert(Buttons:ResolveRecord(record) == false)
+assert(interruptCalls == 3)
 
--- Empty buttons normalize once instead of waking on every forced update.
+-- Empty action state also remains callback-cheap and is resolved in the batch.
 button.action = 0
 Buttons:OnNativeActionChanged(button)
-assert(dirtyCalls == 4)
-Buttons:OnNativeActionChanged(button)
-assert(dirtyCalls == 4)
-assert(interruptCalls == 4)
+assert(dirtyCalls == 3)
+assert(interruptCalls == 3)
+InterruptGlow.PendingButtons[button] = nil
+assert(Buttons:ResolveRecord(record) == false)
+assert(interruptCalls == 3)
 assert(protectedMemberReads == 0)
-assert(observeCalls == 1)
 
-print("ACTION RESOLVER FAST PATH TEST PASSED")
+local policy = assert(InterruptGlow.modules.NativeActionQueuePolicy)
+assert(policy.callbackReadsActionAPIs == false)
+assert(policy.coalescesPerPhysicalButton == true)
+assert(policy.invalidatesBeforeDedupe == true)
+
+print("ACTION RESOLVER QUEUE-ONLY FAST PATH TEST PASSED")
