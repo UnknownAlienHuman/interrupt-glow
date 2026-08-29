@@ -5,10 +5,12 @@ _G = _G or _ENV
 local allButtonsDirty = 0
 local reconcileOrder = {}
 local refreshCalls = 0
+local cdmRefreshCalls = 0
 local knownFamilies = {}
 
 InterruptGlow = {
     modules = {},
+    DB = { cdm = true },
     ObservedButtons = {},
     Data = {
         runtimeInterrupts = { [8000] = 8000 },
@@ -16,6 +18,7 @@ InterruptGlow = {
         cooldownSpellMatchCache = {},
     },
     Buttons = {},
+    CDM = { attached = true },
 }
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
@@ -50,11 +53,19 @@ function InterruptGlow.Data:MatchesCurrentInterrupt(spellID)
     return self.runtimeInterrupts[spellID] ~= nil
 end
 
+function InterruptGlow.CDM:ObserveExistingItems()
+    assert(InterruptGlow.Data.runtimeInterrupts[9001] == 9001,
+        "CDM identities refreshed before authoritative action proof")
+    cdmRefreshCalls = cdmRefreshCalls + 1
+end
+
 function InterruptGlow.Buttons:ReconcileRecord(record)
     reconcileOrder[#reconcileOrder + 1] = record.name
     if record.name == "action" then
         InterruptGlow.Data:LearnRuntimeInterrupt(9001)
     elseif record.name == "secondary" then
+        assert(cdmRefreshCalls == 1,
+            "secondary copy reconciled before post-action CDM refresh")
         assert(InterruptGlow.Data.runtimeInterrupts[9001] == 9001,
             "secondary copy reconciled before authoritative action proof")
     end
@@ -92,6 +103,7 @@ assert((Data.runtimeProofRevision or 0) == revisionBefore + 1)
 Buttons:ReconcileAll()
 assert(reconcileOrder[1] == "action")
 assert(reconcileOrder[2] == "secondary")
+assert(cdmRefreshCalls == 1)
 assert(Buttons.runtimeInterruptSeedPass == nil,
     "mutable seed state can remain stuck after a Lua error")
 assert(allButtonsDirty == 1,
@@ -116,6 +128,7 @@ assert(Data:MatchesCurrentInterrupt(7777) == true)
 local policy = assert(InterruptGlow.modules.RuntimeInterruptPolicy)
 assert(policy.clearsProofOnRegistryRebuild == true)
 assert(policy.actionSlotsSeedBeforeSecondaryCopies == true)
+assert(policy.refreshesCDMAfterActionSeed == true)
 assert(policy.propagatesNewRuntimeFamilies == true)
 assert(policy.revalidatesCooldownEventMatches == true)
 assert(policy.avoidsStickySeedState == true)
