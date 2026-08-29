@@ -26,6 +26,7 @@ core/Usability.lua
 core/GCDSafetyPolicy.lua
 core/CachePolicy.lua
 core/AbilitySourcePolicy.lua
+core/BoundSourcePolicy.lua
 core/CastTracking.lua
 core/CDM.lua
 core/CDMPolicy.lua
