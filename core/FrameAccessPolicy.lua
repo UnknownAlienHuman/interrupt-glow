@@ -6,6 +6,7 @@ local _G = _G
 local CreateFrame = _G.CreateFrame
 local pcall = pcall
 local type = type
+local pairs = pairs
 
 local ACCESS_ALLOWED = 1
 local ACCESS_DEFERRED = 2
@@ -43,8 +44,6 @@ local function RetryDelay(failures)
 end
 
 local function MarkOverlayDeferred(record)
-    -- Access can be transient during provider construction or a restricted
-    -- context. Fail closed now, but do not permanently blacklist the button.
     record.overlayForbidden = false
     record.overlayAccessDeferred = true
     record.overlayAccessFailures = (record.overlayAccessFailures or 0) + 1
@@ -165,22 +164,26 @@ end
 -- and are retried only on a later bounded provider/lifecycle signal.
 function Glow:CreateShell(record)
     if not record then return nil end
-    if not IG.CanAccess(record.button) then
-        MarkOverlayDeferred(record)
-        IG:BumpStat("ui.shellsDeferred")
-        return nil
-    end
-    if record.button == nil then return nil end
     if record.overlay then return record.overlay end
     if record.overlayForbidden then return nil end
     if IG:IsInCombat() then
         record.overlayPending = true
         return nil
     end
+
+    -- Apply the throttle before touching the foreign object. This also covers a
+    -- frame object that itself is currently inaccessible.
     if record.overlayAccessDeferred and not self:AllowOverlayAccessRetry(record, false) then
         record.overlayPending = true
         return nil
     end
+
+    if not IG.CanAccess(record.button) then
+        MarkOverlayDeferred(record)
+        IG:BumpStat("ui.shellsDeferred")
+        return nil
+    end
+    if record.button == nil then return nil end
 
     local access = InspectButtonAccess(record.button)
     if access == ACCESS_FORBIDDEN then
