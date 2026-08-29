@@ -150,8 +150,6 @@ function Buttons:AttachDominosNow(discoverExisting)
     self.dominosAttached = true
     self.DominosActionButtons = dominosController
 
-    -- Match the real provider order: ObserveButton first, then commit the exact
-    -- controller slot to record.dominosSlot.
     for button, slot in pairs(dominosController.buttons) do
         local record = self:ObserveButton(button, "dominos")
         record.dominosSlot = slot
@@ -180,17 +178,12 @@ assert(usabilityCalls == 0)
 assert(dirtyCalls == 0)
 assert(nativeRecord.conditionalIdentityPending == true)
 
--- A new relevant cast refreshes unit visuals synchronously before the queued
--- button reconcile. A pending conditional identity must never flash the stale
--- interrupt branch during that window.
 local clearBefore = clearVisualCalls
 Glow:RefreshUnit("target")
 assert(refreshUnitCalls == 1)
 assert(clearVisualCalls > clearBefore)
 assert(nativeRecord.visualVisible == false)
 
--- CastTracking requests cooldown readiness only after normalized cast state is
--- relevant. Deferred identity flushes first and is queued for the same frame.
 readinessAwake = true
 assert(InterruptGlow:MarkCooldownDirty(false) == true)
 assert(cooldownDirtyCalls == 1)
@@ -198,23 +191,20 @@ assert(dirtyCalls == 1)
 assert(nativeRecord.conditionalIdentityPending == true)
 ReconcilePending()
 assert(reconcileCalls == 1)
-assert(reconcileSawPending == false)
+assert(reconcileSawPending == true)
 assert(nativeRecord.conditionalIdentityPending == false)
 
--- Once reconciled, ordinary visual refresh resumes.
 Glow:RefreshRecord(nativeRecord)
 assert(refreshRecordCalls >= 1)
 assert(nativeRecord.visualVisible == true)
 
--- While readiness is consumed, the original usability gate and targeted slot
--- invalidation both remain active.
+-- Active signals retain the guard during reconciliation but do not leak into the
+-- sleeping deferred queue and therefore cannot be scheduled twice later.
 assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = 7 } }) == "base-result")
 assert(usabilityCalls == 1)
 assert(dirtyCalls == 2)
 ClearPending()
 
--- The active native callback updates the bounded slot index using one ordinary
--- field read and no generic protected member access or action API call here.
 local readsBeforeNative = protectedReads
 native.action = 8
 Buttons:OnNativeActionChanged(native)
@@ -225,7 +215,6 @@ assert(Buttons:InvalidateConditionalMacroSlot(8) == 1)
 assert(dirtyCalls == 3)
 ClearPending()
 
--- The same callback becomes a zero-action-API deferred record while sleeping.
 readinessAwake = false
 native.action = 13
 nativeRecord.visualVisible = true
@@ -245,10 +234,8 @@ assert(cooldownDirtyCalls == 2)
 assert(dirtyCalls == 4)
 ReconcilePending()
 assert(nativeRecord.conditionalIdentityPending == false)
-assert(reconcileSawPending == false)
+assert(reconcileSawPending == true)
 
--- LibActionButton updates record.labSlot before MarkButtonDirty. The targeted
--- wrapper refreshes cached identity, but only wakes reconciliation when needed.
 local lab = { _state_type = "action", _state_action = "9" }
 local labRecord = Buttons:ObserveButton(lab, "lab")
 labRecord.labSlot = 9
@@ -266,8 +253,6 @@ assert(Buttons:InvalidateConditionalMacroSlot(10) == 1)
 assert(dirtyCalls == 7)
 ClearPending()
 
--- Dominos commits record.dominosSlot after ObserveButton. The later provider
--- hook and post-discovery pass index the committed slot.
 Buttons:AttachDominosNow(true)
 assert(hookCalls == 1)
 assert(Buttons:InvalidateConditionalMacroSlot(11) == 1)
@@ -280,18 +265,13 @@ assert(Buttons:InvalidateConditionalMacroSlot(12) == 1)
 assert(dirtyCalls == 9)
 ClearPending()
 
--- Promoting a formerly slot-backed frame to a non-slot provider drops the old
--- slot instead of retaining stale native/LAB/Dominos identity.
 Buttons:ObserveButton(native, "buttonforge")
 assert(Buttons:InvalidateConditionalMacroSlot(13) == 0)
 
--- Slot zero is a rare bounded global invalidation over observed slot-backed
--- buttons only; it is not an action-slot or frame scan.
 assert(Buttons:InvalidateConditionalMacroSlot(0) == 2)
 assert(dirtyCalls == 11)
 ClearPending()
 
--- ButtonForge identity churn is also deferred while no output consumes it.
 readinessAwake = false
 InterruptGlow:MarkButtonDirty(native)
 assert(dirtyCalls == 11)
@@ -302,8 +282,8 @@ assert(cooldownDirtyCalls == 3)
 assert(dirtyCalls == 12)
 ReconcilePending()
 assert(nativeRecord.conditionalIdentityPending == false)
+assert(reconcileSawPending == true)
 
--- Restricted payloads and fields never enter the index or become table keys.
 readinessAwake = false
 assert(InterruptGlow.Usability:OnActionUsableChanged(secretValue) == false)
 assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = secretValue } }) == false)
@@ -318,6 +298,11 @@ assert(allButtonsDirtyCalls == 0)
 
 local policy = assert(InterruptGlow.modules.ConditionalMacroPolicy)
 assert(policy.usesTargetedUsabilitySignal == true)
+assert(policy.invalidatesSnapshotsBeforeActiveReconcile == true)
+assert(policy.marksIdentityPendingForActiveChanges == true)
+assert(policy.retainsVisualGuardThroughReconcile == true)
+assert(policy.failedReconcileRemainsFailClosed == true)
+assert(policy.separatesActiveGuardFromSleepingQueue == true)
 assert(policy.defersIdentityWhileReadinessSleeps == true)
 assert(policy.flushesBeforeCooldownRefresh == true)
 assert(policy.hidesStaleVisualsUntilReconcile == true)
@@ -328,6 +313,7 @@ assert(policy.nativeCallbackReadsActionAPIs == false)
 assert(policy.dominosIdentityRefreshesAfterProviderCommit == true)
 assert(policy.adapterPromotionDropsStaleSlots == true)
 assert(policy.slotIndexIsBounded == true)
+assert(policy.pendingGuardSetUsesWeakButtons == true)
 assert(policy.deferredSetUsesWeakButtons == true)
 assert(policy.parsesMacroBodies == false)
 assert(policy.scansActionSlots == false)
