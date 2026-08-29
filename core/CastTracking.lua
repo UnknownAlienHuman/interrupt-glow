@@ -322,6 +322,13 @@ function CastTracking:OnUnitEvent(unit, event, ...)
         end
 
         self:SetChannelSuppressed(unit, true, event)
+        if state and state.active == true and state.isChannel ~= true then
+            -- A delayed channel/empower stop without a usable castBarID must not
+            -- delete a newer ordinary cast. Keep suppression so the stale
+            -- UnitChannelInfo family still cannot resurrect.
+            IG:BumpStat("cast.channelStopIgnoredForOrdinaryCast")
+            return
+        end
         self:ClearUnit(unit, event, eventCastBarID)
         return
     end
