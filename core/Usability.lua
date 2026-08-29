@@ -1,10 +1,6 @@
 local IG = _G.InterruptGlow
 if not IG or not IG.Cooldown then return end
 
-local Usability = {}
-IG.Usability = Usability
-IG:RegisterModule("Usability", Usability)
-
 local Cooldown = IG.Cooldown
 local _G = _G
 local C_ActionBar = _G.C_ActionBar
@@ -12,58 +8,72 @@ local C_Spell = _G.C_Spell
 local type = type
 local pcall = pcall
 local pairs = pairs
-local next = next
 
-local function ReadUsable(fn, sourceID)
-    if type(fn) ~= "function" or type(sourceID) ~= "number" then
-        return nil, true
+local function NormalizeUsability(ok, usable, noMana)
+    if not ok or not IG.CanAccess(usable) or not IG.CanAccess(noMana) then
+        return nil, nil, true
     end
-
-    local ok, usable = pcall(fn, sourceID)
-    if not ok or not IG.CanAccess(usable) then
-        return nil, true
+    if type(usable) ~= "boolean" or type(noMana) ~= "boolean" then
+        return nil, nil, true
     end
-    if usable == true then return true, false end
-    if usable == false then return false, false end
-    return nil, true
+    return usable, noMana, false
 end
 
--- Wrap the already-normalized cooldown/charge/LoC/pet policy. Known unusable is
--- an exact not-ready result; inaccessible usability is a hard fail-closed gate
--- that optimistic cooldown compatibility cannot override.
-local originalGetCachedReadiness = Cooldown.GetCachedReadiness
-function Cooldown:GetCachedReadiness(sourceKind, sourceID, gcdOnlyHint)
-    if sourceKind == "action" then
-        local usable, restricted = ReadUsable(
-            C_ActionBar and C_ActionBar.IsUsableAction,
-            sourceID
-        )
-        if restricted then return nil, nil, true, false, false, true end
-        if usable == false then return false, nil, false, false, false, false end
-    elseif sourceKind == "spell" then
-        local usable, restricted = ReadUsable(
-            C_Spell and C_Spell.IsSpellUsable,
-            sourceID
-        )
-        if restricted then return nil, nil, true, false, false, true end
-        if usable == false then return false, nil, false, false, false, false end
+local function ReadActionUsability(slot)
+    if not C_ActionBar or type(C_ActionBar.IsUsableAction) ~= "function" then
+        return nil, nil, true
     end
-
-    return originalGetCachedReadiness(self, sourceKind, sourceID, gcdOnlyHint)
+    return NormalizeUsability(pcall(C_ActionBar.IsUsableAction, slot))
 end
 
-function Usability:IsTrackedActionSlot(slot)
-    if type(slot) ~= "number" then return false end
-    for _, ability in pairs(IG.AbilityStates) do
-        if ability.sourceKind == "action"
-            and ability.sourceID == slot
-            and next(ability.records) ~= nil
-        then
-            return true
-        end
+local function ReadSpellUsability(spellID)
+    if not C_Spell or type(C_Spell.IsSpellUsable) ~= "function" then
+        return nil, nil, true
     end
-    return false
+    return NormalizeUsability(pcall(C_Spell.IsSpellUsable, spellID))
 end
+
+local function ReadActionOrSpellUsability(ability)
+    if ability.sourceKind == "action" then
+        return ReadActionUsability(ability.sourceID)
+    end
+    if ability.sourceKind == "spell" then
+        return ReadSpellUsability(ability.sourceID)
+    end
+    return true, false, false
+end
+
+local function ApplyUsabilityGate(ability)
+    local usable, noMana, hardRestricted = ReadActionOrSpellUsability(ability)
+    local changed = false
+
+    if hardRestricted then
+        changed = ability.ready ~= false
+            or ability.restricted ~= true
+            or ability.hardRestricted ~= true
+            or ability.needsPoll ~= false
+        ability.ready = false
+        ability.restricted = true
+        ability.hardRestricted = true
+        ability.needsPoll = false
+    elseif usable == false or noMana == true then
+        changed = ability.ready ~= false or ability.needsPoll ~= false
+        ability.ready = false
+        ability.needsPoll = false
+    end
+    return changed
+end
+
+local originalRefreshAbility = Cooldown.RefreshAbility
+function Cooldown:RefreshAbility(ability)
+    local changed = originalRefreshAbility(self, ability)
+    changed = ApplyUsabilityGate(ability) or changed
+    return changed
+end
+
+local Usability = {}
+IG.Usability = Usability
+IG:RegisterModule("Usability", Usability)
 
 function Usability:HasTrackedSpellSource()
     for _, ability in pairs(IG.AbilityStates) do
@@ -75,30 +85,28 @@ function Usability:HasTrackedSpellSource()
 end
 
 function Usability:OnActionUsableChanged(changes)
-    if not IG.CanAccess(changes) or type(changes) ~= "table" then
-        -- Payload unexpectedly inaccessible: one bounded refresh is safer than
-        -- treating the previous usability state as authoritative.
-        IG:MarkCooldownDirty(false)
-        return
-    end
+    if not IG.CanAccess(changes) or type(changes) ~= "table" then return false end
 
-    for index = 1, #changes do
-        local change = changes[index]
-        if not IG.CanAccess(change) then
-            IG:MarkCooldownDirty(false)
-            return
-        end
-
+    local matched = false
+    for _, change in pairs(changes) do
         local slot, slotKnown = IG:ReadMember(change, "slot")
-        if not slotKnown or type(slot) ~= "number" then
-            IG:MarkCooldownDirty(false)
-            return
+        if slotKnown then slot = IG:AsNumber(slot) end
+        if type(slot) == "number" then
+            for _, ability in pairs(IG.AbilityStates) do
+                if ability.sourceKind == "action"
+                    and ability.sourceID == slot
+                    and next(ability.records) ~= nil
+                then
+                    matched = true
+                    break
+                end
+            end
         end
-
-        if self:IsTrackedActionSlot(slot) then
-            IG:BumpStat("events.actionUsableChanged")
-            IG:MarkCooldownDirty(false)
-            return
-        end
+        if matched then break end
     end
+
+    if matched then IG:MarkCooldownDirty(false) end
+    return matched
 end
+
+Usability.batchedVisualCommit = true
