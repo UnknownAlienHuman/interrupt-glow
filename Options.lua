@@ -16,7 +16,29 @@ local panel = CreateFrame("Frame", "InterruptGlowOptionsPanel", UIParent)
 panel.name = "Interrupt Glow"
 Options.panel = panel
 
+local function RuntimeActive()
+    local lifecycle = IG.RuntimeLifecycle
+    if lifecycle and type(lifecycle.IsActive) == "function" then
+        return lifecycle:IsActive()
+    end
+    return DB.enabled == true
+end
+
+local function SetMasterEnabled(value)
+    value = value == true
+    local lifecycle = IG.RuntimeLifecycle
+    if lifecycle and type(lifecycle.SetEnabled) == "function" then
+        return lifecycle:SetEnabled(value)
+    end
+
+    DB.enabled = value
+    if value then IG:MarkCooldownDirty(false) end
+    IG:MarkVisualDirty()
+    return true
+end
+
 local function ApplyDefaultsOrFullRefresh()
+    if not RuntimeActive() then return end
     IG:MarkAllButtonsDirty()
     IG:MarkCastDirty()
     IG:MarkCooldownDirty(false)
@@ -68,15 +90,9 @@ function Options:Build()
         subtitle,
         -14,
         "Enable Interrupt Glow",
-        "Master switch for the addon-owned overlays.",
+        "Master runtime switch. Disabling unregisters target/focus and provider callbacks and stops addon workers.",
         function() return DB.enabled end,
-        function(value)
-            DB.enabled = value
-            -- Readiness work sleeps while disabled. Re-enabling during an
-            -- existing relevant cast must take one fresh snapshot before glow.
-            if value then IG:MarkCooldownDirty(false) end
-            IG:MarkVisualDirty()
-        end
+        SetMasterEnabled
     )
 
     local cdText = CreateCheckButton(
@@ -87,13 +103,15 @@ function Options:Build()
         function() return DB.cdText end,
         function(value)
             DB.cdText = value
-            if value then
-                -- Mark pending before the immediate UI refresh so a stale
-                -- deadline cannot flash while the fresh snapshot is queued.
-                IG:MarkCooldownDirty(false)
-                if IG.Glow then IG.Glow:EnsureCooldownTexts() end
+            if RuntimeActive() then
+                if value then
+                    -- Mark pending before the immediate UI refresh so a stale
+                    -- deadline cannot flash while the fresh snapshot is queued.
+                    IG:MarkCooldownDirty(false)
+                    if IG.Glow then IG.Glow:EnsureCooldownTexts() end
+                end
+                IG:MarkVisualDirty()
             end
-            IG:MarkVisualDirty()
         end
     )
 
@@ -105,7 +123,7 @@ function Options:Build()
         function() return DB.cdm end,
         function(value)
             DB.cdm = value
-            if IG.CDM then IG.CDM:SetEnabled(value) end
+            if RuntimeActive() and IG.CDM then IG.CDM:SetEnabled(value) end
         end
     )
 
@@ -117,6 +135,8 @@ function Options:Build()
         function() return DB.strictNI end,
         function(value)
             DB.strictNI = value
+            if not RuntimeActive() then return end
+
             -- A restricted current cast must be sampled again so the raw value
             -- reaches the alpha sink. Turning strict mode off can also make an
             -- existing unknown cast newly relevant, so refresh readiness once.
@@ -134,7 +154,7 @@ function Options:Build()
         function() return DB.optimisticRestrictedCooldown end,
         function(value)
             DB.optimisticRestrictedCooldown = value
-            IG:MarkCooldownDirty(false)
+            if RuntimeActive() then IG:MarkCooldownDirty(false) end
         end
     )
 
@@ -163,6 +183,10 @@ function Options:Build()
     rescan:SetScript("OnClick", function()
         if IG:IsInCombat() then
             IG:Print("Discovery is unavailable during combat.")
+            return
+        end
+        if not RuntimeActive() then
+            IG:Print("Enable Interrupt Glow before running discovery.")
             return
         end
         if IG.Buttons then IG.Buttons:DiscoverAll(true) end
@@ -195,7 +219,6 @@ local function RefreshPanel()
 end
 
 local function ResetDefaults()
-    DB.enabled = true
     DB.cdText = false
     DB.cdm = true
     DB.strictNI = true
@@ -203,7 +226,9 @@ local function ResetDefaults()
     DB.debug = false
     DB.debugChat = false
     DB.debugKeep = 400
-    if IG.CDM then IG.CDM:SetEnabled(true) end
+
+    SetMasterEnabled(true)
+    if RuntimeActive() and IG.CDM then IG.CDM:SetEnabled(true) end
     ApplyDefaultsOrFullRefresh()
     Options:Refresh()
 end
