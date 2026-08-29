@@ -2,7 +2,10 @@ local ROOT = arg[1] or "."
 
 _G = _G or _ENV
 
+local readinessAwake = false
 local dirtyCalls = 0
+local cooldownDirtyCalls = 0
+local allButtonsDirtyCalls = 0
 local nativeCalls = 0
 local usabilityCalls = 0
 local protectedReads = 0
@@ -46,11 +49,24 @@ end
 function InterruptGlow:BumpStat(key, amount)
     stats[key] = (stats[key] or 0) + (amount or 1)
 end
+function InterruptGlow:WipeMap(map)
+    for key in pairs(map) do map[key] = nil end
+end
+function InterruptGlow:NeedsReadinessRuntime()
+    return readinessAwake
+end
 function InterruptGlow:MarkButtonDirty(button)
     local physical = button and button.button or button
     if not physical or self.PendingButtons[physical] then return end
     self.PendingButtons[physical] = true
     dirtyCalls = dirtyCalls + 1
+end
+function InterruptGlow:MarkCooldownDirty()
+    cooldownDirtyCalls = cooldownDirtyCalls + 1
+    return readinessAwake
+end
+function InterruptGlow:MarkAllButtonsDirty()
+    allButtonsDirtyCalls = allButtonsDirtyCalls + 1
 end
 
 local function ClearPending()
@@ -115,14 +131,29 @@ local native = { action = 7 }
 local nativeRecord = Buttons:ObserveButton(native, "native")
 assert(nativeRecord ~= nil)
 
--- ACTION_USABLE_CHANGED supplies a batch of change records, not one scalar slot.
-assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = 7 } }) == "base-result")
-assert(usabilityCalls == 1)
+-- With no relevant cast/countdown, ACTION_USABLE_CHANGED stores one weak button
+-- and skips the base ability scan and dirty worker entirely.
+assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = 7 } }) == false)
+assert(usabilityCalls == 0)
+assert(dirtyCalls == 0)
+
+-- CastTracking requests cooldown readiness only after normalized cast state is
+-- relevant. Deferred identity flushes first and is queued for the same frame.
+readinessAwake = true
+assert(InterruptGlow:MarkCooldownDirty(false) == true)
+assert(cooldownDirtyCalls == 1)
 assert(dirtyCalls == 1)
 ClearPending()
 
--- The native callback updates the bounded slot index using one ordinary field
--- read and no generic protected member access or action API call.
+-- While readiness is consumed, the original usability gate and targeted slot
+-- invalidation both remain active.
+assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = 7 } }) == "base-result")
+assert(usabilityCalls == 1)
+assert(dirtyCalls == 2)
+ClearPending()
+
+-- The active native callback updates the bounded slot index using one ordinary
+-- field read and no generic protected member access or action API call here.
 local readsBeforeNative = protectedReads
 native.action = 8
 Buttons:OnNativeActionChanged(native)
@@ -130,74 +161,105 @@ assert(nativeCalls == 1)
 assert(protectedReads == readsBeforeNative)
 assert(Buttons:InvalidateConditionalMacroSlot(7) == 0)
 assert(Buttons:InvalidateConditionalMacroSlot(8) == 1)
-assert(dirtyCalls == 2)
+assert(dirtyCalls == 3)
+ClearPending()
+
+-- The same callback becomes a zero-action-API deferred record while sleeping.
+readinessAwake = false
+native.action = 13
+Buttons:OnNativeActionChanged(native)
+assert(nativeCalls == 1)
+assert(dirtyCalls == 3)
+assert(Buttons:InvalidateConditionalMacroSlot(8) == 0)
+readinessAwake = true
+InterruptGlow:MarkCooldownDirty(false)
+assert(cooldownDirtyCalls == 2)
+assert(dirtyCalls == 4)
 ClearPending()
 
 -- LibActionButton updates record.labSlot before MarkButtonDirty. The targeted
--- dirty wrapper refreshes only this cached LAB identity.
+-- wrapper refreshes cached identity, but only wakes reconciliation when needed.
 local lab = { _state_type = "action", _state_action = "9" }
 local labRecord = Buttons:ObserveButton(lab, "lab")
 labRecord.labSlot = 9
 Buttons:RefreshConditionalMacroSlot(lab, labRecord)
 assert(Buttons:InvalidateConditionalMacroSlot(9) == 1)
-assert(dirtyCalls == 3)
+assert(dirtyCalls == 5)
 ClearPending()
 
 labRecord.labSlot = 10
 InterruptGlow:MarkButtonDirty(lab)
-assert(dirtyCalls == 4)
+assert(dirtyCalls == 6)
 ClearPending()
 assert(Buttons:InvalidateConditionalMacroSlot(9) == 0)
 assert(Buttons:InvalidateConditionalMacroSlot(10) == 1)
-assert(dirtyCalls == 5)
+assert(dirtyCalls == 7)
 ClearPending()
 
--- Dominos commits record.dominosSlot after ObserveButton. The policy's later
--- provider hook and post-discovery pass must index the committed slot.
+-- Dominos commits record.dominosSlot after ObserveButton. The later provider
+-- hook and post-discovery pass index the committed slot.
 Buttons:AttachDominosNow(true)
 assert(hookCalls == 1)
 assert(Buttons:InvalidateConditionalMacroSlot(11) == 1)
-assert(dirtyCalls == 6)
+assert(dirtyCalls == 8)
 ClearPending()
 
 dominosController:OnActionChanged("DominosButton1", 12)
 assert(Buttons:InvalidateConditionalMacroSlot(11) == 0)
 assert(Buttons:InvalidateConditionalMacroSlot(12) == 1)
-assert(dirtyCalls == 7)
+assert(dirtyCalls == 9)
 ClearPending()
 
 -- Promoting a formerly slot-backed frame to a non-slot provider drops the old
 -- slot instead of retaining stale native/LAB/Dominos identity.
 Buttons:ObserveButton(native, "buttonforge")
-assert(Buttons:InvalidateConditionalMacroSlot(8) == 0)
+assert(Buttons:InvalidateConditionalMacroSlot(13) == 0)
 
 -- Slot zero is a rare bounded global invalidation over observed slot-backed
 -- buttons only; it is not an action-slot or frame scan.
 assert(Buttons:InvalidateConditionalMacroSlot(0) == 2)
-assert(dirtyCalls == 9)
+assert(dirtyCalls == 11)
+ClearPending()
+
+-- ButtonForge identity churn is also deferred while no output consumes it.
+readinessAwake = false
+InterruptGlow:MarkButtonDirty(native)
+assert(dirtyCalls == 11)
+readinessAwake = true
+InterruptGlow:MarkCooldownDirty(false)
+assert(cooldownDirtyCalls == 3)
+assert(dirtyCalls == 12)
 ClearPending()
 
 -- Restricted payloads and fields never enter the index or become table keys.
-assert(InterruptGlow.Usability:OnActionUsableChanged(secretValue) == "base-result")
-assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = secretValue } }) == "base-result")
-assert(dirtyCalls == 9)
+readinessAwake = false
+assert(InterruptGlow.Usability:OnActionUsableChanged(secretValue) == false)
+assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = secretValue } }) == false)
+assert(usabilityCalls == 1)
+assert(dirtyCalls == 12)
 
 Buttons:Detach()
 assert(Buttons.attached == false)
 assert(Buttons:InvalidateConditionalMacroSlot(10) == 0)
 assert(Buttons:InvalidateConditionalMacroSlot(12) == 0)
+assert(allButtonsDirtyCalls == 0)
 
 local policy = assert(InterruptGlow.modules.ConditionalMacroPolicy)
 assert(policy.usesTargetedUsabilitySignal == true)
-assert(policy.identityUpdatesWhileReadinessSleeps == true)
+assert(policy.defersIdentityWhileReadinessSleeps == true)
+assert(policy.flushesBeforeCooldownRefresh == true)
 assert(policy.parsesActionUsableChangeBatch == true)
-assert(policy.dirtyHookIsLABOnly == true)
+assert(policy.dirtyHookIsActionProviderOnly == true)
 assert(policy.nativeCallbackReadsActionAPIs == false)
 assert(policy.dominosIdentityRefreshesAfterProviderCommit == true)
 assert(policy.adapterPromotionDropsStaleSlots == true)
 assert(policy.slotIndexIsBounded == true)
+assert(policy.deferredSetUsesWeakButtons == true)
 assert(policy.parsesMacroBodies == false)
 assert(policy.scansActionSlots == false)
+assert((stats["events.conditionalMacroDeferred"] or 0) == 1)
+assert((stats["events.conditionalMacroDeferredFlush"] or 0) == 3)
+assert((stats["events.nativeActionDeferred"] or 0) == 1)
 assert((stats["events.conditionalMacroSlots"] or 0) == 8)
 
 print("CONDITIONAL MACRO POLICY TEST PASSED")
