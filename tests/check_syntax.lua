@@ -27,6 +27,7 @@ local localTests = {
     "tests/runtime_interrupt_policy.lua",
     "tests/action_resolver_fast_path.lua",
     "tests/lab_callback_policy.lua",
+    "tests/buttonforge_policy.lua",
     "tests/restricted_success_event.lua",
     "tests/runtime_probe.lua",
     "tests/runtime_probe_policy.lua",
