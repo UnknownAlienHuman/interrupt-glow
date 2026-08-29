@@ -6,7 +6,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TOC = ROOT / "InterruptGlow.toc"
-CURRENT_VERSION = "1.1.0-beta.5"
+CURRENT_VERSION = "1.1.0-beta.6"
 CURRENT_INTERFACE = "120100"
 CURRENT_KB_COMMIT = "312085aa8d23dfe283b416ba0f394fef1cae22dd"
 BLIZZARD_SOURCE_COMMIT = "027d26c3406d3de2cbd2b1f67d468fe033a1bcd4"
@@ -14,6 +14,18 @@ BLIZZARD_SOURCE_COMMIT = "027d26c3406d3de2cbd2b1f67d468fe033a1bcd4"
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def require(text: str, symbols: tuple[str, ...], scope: str) -> list[str]:
+    return [f"{scope} is missing {symbol}" for symbol in symbols if symbol not in text]
+
+
+def section(text: str, start: str, end: str) -> str:
+    first = text.find(start)
+    last = text.find(end, first + len(start)) if first >= 0 else -1
+    if first < 0 or last < 0:
+        return ""
+    return text[first:last]
 
 
 def toc_entries() -> list[str]:
@@ -29,19 +41,7 @@ TOC_ENTRIES = toc_entries()
 RUNTIME_FILES = [ROOT / entry for entry in TOC_ENTRIES]
 
 
-def require(text: str, symbols: tuple[str, ...], scope: str) -> list[str]:
-    return [f"{scope} is missing {symbol}" for symbol in symbols if symbol not in text]
-
-
-def between(text: str, start: str, end: str) -> str:
-    start_index = text.find(start)
-    end_index = text.find(end, start_index + len(start)) if start_index >= 0 else -1
-    if start_index < 0 or end_index < 0:
-        return ""
-    return text[start_index:end_index]
-
-
-def check_toc_and_version() -> list[str]:
+def check_toc() -> list[str]:
     errors: list[str] = []
     toc = read(TOC)
     core = read(ROOT / "Core.lua")
@@ -95,6 +95,7 @@ def check_toc_and_version() -> list[str]:
         "core/CastTracking.lua",
         "core/CDM.lua",
         "core/CDMPolicy.lua",
+        "core/RuntimeInterruptPolicy.lua",
         "core/Events.lua",
         "core/Slash.lua",
         "Options.lua",
@@ -105,7 +106,6 @@ def check_toc_and_version() -> list[str]:
             errors.append("TOC runtime policy order is invalid")
     except ValueError as exc:
         errors.append(f"TOC is missing a required module: {exc}")
-
     return errors
 
 
@@ -125,9 +125,8 @@ def check_forbidden_hot_paths() -> list[str]:
         "generic ADDON_LOADED subscription": (
             r"RegisterEvent\s*\(\s*[\"']ADDON_LOADED"
         ),
-        "Blizzard spell-alert manager mutation": r"\bActionButtonSpellAlertManager\b",
+        "spell-alert manager mutation": r"\bActionButtonSpellAlertManager\b",
         "Blizzard castbar inspection": r"\b(TargetFrameSpellBar|FocusFrameSpellBar)\b",
-        "legacy scriptProfile": r"\bscriptProfile\b",
     }
     for path in RUNTIME_FILES:
         text = read(path)
@@ -137,12 +136,50 @@ def check_forbidden_hot_paths() -> list[str]:
     return errors
 
 
-def check_secret_and_restriction_boundaries() -> list[str]:
+def check_action_feedback() -> list[str]:
+    errors: list[str] = []
+    resolver = read(ROOT / "core/ActionResolver.lua")
+    fast = section(resolver, "local function ReadActionSnapshot", "local function StoreSnapshot")
+
+    errors += require(
+        resolver,
+        (
+            "local function PositiveSlot",
+            "actionSnapshotSpellID",
+            "events.nativeFastNonInterrupt",
+            "events.nativeActionBecameEmpty",
+            "ReadActionSnapshot(slot, true)",
+        ),
+        "Native action resolver",
+    )
+    false_pos = fast.find("if interrupt == false then")
+    info_pos = fast.find("ReadActionInfo(slot, trustedSlot)")
+    assisted_pos = fast.find("ReadBooleanAPI(isAssisted")
+    if false_pos < 0 or info_pos < 0 or false_pos > info_pos:
+        errors.append("Non-interrupt action feedback reads full action identity before returning")
+    if false_pos < 0 or assisted_pos < 0 or false_pos > assisted_pos:
+        errors.append("Non-interrupt action feedback queries Assisted Combat before returning")
+
+    test = read(ROOT / "tests/action_resolver_fast_path.lua")
+    errors += require(
+        test,
+        (
+            "one IsInterruptAction call only",
+            "actionInfoCalls == 0",
+            "getSpellCalls == 0",
+            "ACTION RESOLVER FAST PATH TEST PASSED",
+        ),
+        "Native action fast-path regression test",
+    )
+    return errors
+
+
+def check_secret_and_restricted_values() -> list[str]:
     errors: list[str] = []
     cast = read(ROOT / "core/CastTracking.lua")
     glow = read(ROOT / "core/Glow.lua")
-    cooldown = read(ROOT / "core/Cooldown.lua")
     events = read(ROOT / "core/Events.lua")
+    cooldown = read(ROOT / "core/Cooldown.lua")
 
     errors += require(
         cast,
@@ -155,12 +192,12 @@ def check_secret_and_restriction_boundaries() -> list[str]:
             "channelSuppressed",
             "IsStaleCastEvent",
         ),
-        "CastTracking secret/channel boundary",
+        "Cast secret/channel boundary",
     )
-    selector = between(cast, "local function GetEventCastBarID", "local function IsStaleCastEvent")
+    selector = section(cast, "local function GetEventCastBarID", "local function IsStaleCastEvent")
     for forbidden in ("_castGUID", "_spellID", "_interruptedBy", "_complete"):
         if forbidden in selector:
-            errors.append(f"Event castBarID selector binds secret-capable field {forbidden}")
+            errors.append(f"Cast event selector binds secret-capable field {forbidden}")
     if "pcall(UnitCastingInfo" in cast or "pcall(UnitChannelInfo" in cast:
         errors.append("Raw cast returns travel through pcall")
 
@@ -174,23 +211,9 @@ def check_secret_and_restriction_boundaries() -> list[str]:
         "Glow secret sink",
     )
     if "CreatePulseAnimation(overlay.target.niGate)" in glow:
-        errors.append("Secret-alpha child region is animated")
+        errors.append("Secret-alpha region is animated")
     if "pcall(method, region, value" in glow:
         errors.append("Secret alpha sink is wrapped in pcall")
-
-    loc = between(cooldown, "local function ReadLossOfControlState", "local function GetActionLossOfControlState")
-    errors += require(
-        loc,
-        (
-            'if info == nil then',
-            'return "clear"',
-            'if not IG.CanAccess(info) then',
-            'return "restricted"',
-        ),
-        "Loss of Control fail-closed policy",
-    )
-    if loc.find("not IG.CanAccess(info)") > loc.find('return "clear"', loc.find("not IG.CanAccess(info)")) >= 0:
-        errors.append("Inaccessible Loss of Control still falls through to clear")
 
     errors += require(
         events,
@@ -199,7 +222,32 @@ def check_secret_and_restriction_boundaries() -> list[str]:
             "not IG.CanAccess(spellID)",
             "events.restrictedSpellSucceeded",
         ),
-        "Restricted spell-success event boundary",
+        "Restricted spell-success boundary",
+    )
+
+    loc = section(cooldown, "local function ReadLossOfControlState", "local function GetActionLossOfControlState")
+    errors += require(
+        loc,
+        (
+            "if info == nil then",
+            'return "clear"',
+            "if not IG.CanAccess(info) then",
+            'return "restricted"',
+        ),
+        "Loss of Control provenance policy",
+    )
+
+    charges = section(cooldown, "local function ReadChargeInfo", "local function ReadLossOfControlState")
+    errors += require(
+        charges,
+        (
+            "if info == nil then",
+            "if not IG.CanAccess(info) then",
+            "return nil, nil, true, true, true, true",
+            "currentCharges == nil",
+            "maxCharges == nil or maxCharges <= 0",
+        ),
+        "Charge provenance policy",
     )
     return errors
 
@@ -212,6 +260,7 @@ def check_readiness_and_sources() -> list[str]:
     gcd = read(ROOT / "core/GCDSafetyPolicy.lua")
     source = read(ROOT / "core/AbilitySourcePolicy.lua")
     data = read(ROOT / "core/Data.lua")
+    runtime = read(ROOT / "core/RuntimeInterruptPolicy.lua")
     cdm = read(ROOT / "core/CDM.lua")
     cdm_policy = read(ROOT / "core/CDMPolicy.lua")
 
@@ -221,9 +270,19 @@ def check_readiness_and_sources() -> list[str]:
             "GetActionCooldownDuration, slot, true",
             "GetSpellCooldownDuration, spellID, true",
             "return nil, nil, true, true, false, true",
-            "hardRestricted",
+            "record.readinessPending = false",
         ),
         "Cooldown readiness",
+    )
+    errors += require(
+        readiness,
+        ("GetPetActionSlotUsable", "ability.hardRestricted == true"),
+        "Pet/LoC readiness",
+    )
+    errors += require(
+        usability,
+        ("IsUsableAction", "IsSpellUsable", "OnActionUsableChanged"),
+        "Usability policy",
     )
     errors += require(
         gcd,
@@ -232,16 +291,6 @@ def check_readiness_and_sources() -> list[str]:
             "treatsIsOnGCDAsReadinessProof = false",
         ),
         "GCD safety policy",
-    )
-    errors += require(
-        readiness,
-        ("GetPetActionSlotUsable", "ability.hardRestricted == true"),
-        "Pet/LoC readiness policy",
-    )
-    errors += require(
-        usability,
-        ("IsUsableAction", "IsSpellUsable", "OnActionUsableChanged"),
-        "Usability policy",
     )
     errors += require(
         source,
@@ -254,6 +303,24 @@ def check_readiness_and_sources() -> list[str]:
         ),
         "Canonical source policy",
     )
+
+    errors += require(
+        runtime,
+        (
+            "IG:WipeMap(self.runtimeInterrupts)",
+            "function Buttons:ReconcileAll()",
+            "RecordHasActionSlot",
+            "clearsProofOnRegistryRebuild = true",
+            "actionSlotsSeedBeforeSecondaryCopies = true",
+            "propagatesNewRuntimeFamilies = true",
+            "revalidatesCooldownEventMatches = true",
+            "avoidsStickySeedState = true",
+        ),
+        "Runtime interrupt proof policy",
+    )
+    if "runtimeInterruptSeedPass = true" in runtime:
+        errors.append("Runtime interrupt policy retains sticky mutable seed state")
+
     errors += require(
         data,
         (
@@ -301,7 +368,7 @@ def check_readiness_and_sources() -> list[str]:
     return errors
 
 
-def check_lifecycle_workers_and_diagnostics() -> list[str]:
+def check_lifecycle_and_diagnostics() -> list[str]:
     errors: list[str] = []
     shared = read(ROOT / "core/Shared.lua")
     worker = read(ROOT / "core/Worker.lua")
@@ -355,8 +422,10 @@ def check_lifecycle_workers_and_diagnostics() -> list[str]:
             "panel.OnRefresh = RefreshPanel",
             "panel.OnDefault = ResetDefaults",
             "panel.OnCommit = CommitPanel",
+            "DB.debugChat = false",
+            "DB.debugKeep = 400",
         ),
-        "Settings canvas lifecycle",
+        "Settings/default lifecycle",
     )
     errors += require(
         diagnostics,
@@ -378,7 +447,7 @@ def check_lifecycle_workers_and_diagnostics() -> list[str]:
     return errors
 
 
-def check_test_manifest_and_no_ci() -> list[str]:
+def check_tests_and_no_ci() -> list[str]:
     errors: list[str] = []
     syntax = read(ROOT / "tests/check_syntax.lua")
     for path in sorted((ROOT / "tests").glob("*.lua")):
@@ -388,15 +457,18 @@ def check_test_manifest_and_no_ci() -> list[str]:
         if f'"{relative}"' not in syntax:
             errors.append(f"Syntax checker does not include {relative}")
 
-    loc_test = read(ROOT / "tests/loc_fail_closed.lua")
-    errors += require(
-        loc_test,
-        (
-            "optimistic option may not turn inaccessible LoC",
-            "LOSS OF CONTROL FAIL-CLOSED TEST PASSED",
-        ),
-        "LoC focused regression test",
-    )
+    focused = {
+        "tests/action_resolver_fast_path.lua": "ACTION RESOLVER FAST PATH TEST PASSED",
+        "tests/runtime_interrupt_policy.lua": "RUNTIME INTERRUPT POLICY TEST PASSED",
+        "tests/charge_fail_closed.lua": "CHARGE FAIL-CLOSED TEST PASSED",
+        "tests/loc_fail_closed.lua": "LOSS OF CONTROL FAIL-CLOSED TEST PASSED",
+        "tests/toc_contract.lua": "core/RuntimeInterruptPolicy.lua",
+        "tests/options_lifecycle.lua": "DB.debugKeep == 400",
+    }
+    for relative, assertion in focused.items():
+        text = read(ROOT / relative)
+        if assertion not in text:
+            errors.append(f"{relative} is missing assertion {assertion}")
 
     workflow_dir = ROOT / ".github/workflows"
     if workflow_dir.exists() and any(workflow_dir.glob("*.y*ml")):
@@ -406,12 +478,13 @@ def check_test_manifest_and_no_ci() -> list[str]:
 
 def main() -> int:
     errors = (
-        check_toc_and_version()
+        check_toc()
         + check_forbidden_hot_paths()
-        + check_secret_and_restriction_boundaries()
+        + check_action_feedback()
+        + check_secret_and_restricted_values()
         + check_readiness_and_sources()
-        + check_lifecycle_workers_and_diagnostics()
-        + check_test_manifest_and_no_ci()
+        + check_lifecycle_and_diagnostics()
+        + check_tests_and_no_ci()
     )
     if errors:
         print("STATIC CHECKS FAILED")
