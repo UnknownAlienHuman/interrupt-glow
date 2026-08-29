@@ -5,11 +5,13 @@ _G = _G or _ENV
 local dirtyCalls = 0
 local unregisterCalls = 0
 local hookedCalls = 0
+local restrictedButton = nil
+local identityRestricted = false
 
-local slotFrame = { scripts = {} }
+local slotFrame = { scripts = {}, registered = {} }
 function slotFrame:Hide() end
-function slotFrame:RegisterEvent() end
-function slotFrame:UnregisterEvent() end
+function slotFrame:RegisterEvent(event) self.registered[event] = true end
+function slotFrame:UnregisterEvent(event) self.registered[event] = nil end
 function slotFrame:SetScript(name, fn) self.scripts[name] = fn end
 function CreateFrame() return slotFrame end
 
@@ -26,11 +28,19 @@ InterruptGlow = {
     Buttons = {
         attached = true,
         labLibraries = setmetatable({}, { __mode = "k" }),
+        labDiscoveredLibraries = setmetatable({}, { __mode = "k" }),
     },
 }
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
-function InterruptGlow:ReadMember(object, key) return object[key], true end
+function InterruptGlow:ReadMember(object, key)
+    if identityRestricted and object == restrictedButton
+        and (key == "_state_type" or key == "_state_action")
+    then
+        return nil, false
+    end
+    return object[key], true
+end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:MarkButtonDirty() dirtyCalls = dirtyCalls + 1 end
 function InterruptGlow:BumpStat() end
@@ -83,6 +93,7 @@ local button = {
     _state_action = 7,
     UpdateAction = function() end,
 }
+restrictedButton = button
 allButtons[1] = button
 library.buttonRegistry[button] = true
 Buttons:OnLABButtonCreated(nil, button)
@@ -90,17 +101,74 @@ assert(hookedCalls == 1)
 assert(unregisterCalls == 1, "late-created LAB button did not retire broad callback")
 assert(dirtyCalls == 1)
 
--- Further content changes must not repeat callback removal.
+local record = assert(InterruptGlow.ObservedButtons[button])
+assert(record.labStateType == "action" and record.labStateAction == 7)
+assert(record.labSlot == 7 and record.labIdentityRestricted == false)
+
+-- Accessible empty secure identity is not the same as an unreadable identity.
+-- It must clear the previous slot and queue one fail-closed reconciliation.
+button._state_type = nil
+button._state_action = nil
+button.__updateActionHook(button)
+assert(record.labStateType == nil and record.labStateAction == nil)
+assert(record.labSlot == nil and record.labIdentityRestricted == false)
+assert(dirtyCalls == 2)
+
+-- Repeating the same empty identity is a no-op, and the old slot index is gone.
+button.__updateActionHook(button)
+assert(dirtyCalls == 2)
+slotFrame.scripts.OnEvent(slotFrame, "ACTIONBAR_SLOT_CHANGED", 7)
+assert(dirtyCalls == 2)
+
+-- A later readable slot becomes indexed again.
+button._state_type = "action"
+button._state_action = "8"
+button.__updateActionHook(button)
+assert(record.labSlot == 8 and record.labIdentityRestricted == false)
+assert(dirtyCalls == 3)
+
+-- If secure identity fields become inaccessible, stale ordinary identity and
+-- slot membership are discarded immediately. Repeated restricted updates do not
+-- create a per-frame dirty storm.
+identityRestricted = true
+button.__updateActionHook(button)
+assert(record.labStateType == nil and record.labStateAction == nil)
+assert(record.labSlot == nil and record.labIdentityRestricted == true)
+assert(dirtyCalls == 4)
+button.__updateActionHook(button)
+assert(dirtyCalls == 4)
+slotFrame.scripts.OnEvent(slotFrame, "ACTIONBAR_SLOT_CHANGED", 8)
+assert(dirtyCalls == 4)
+
+identityRestricted = false
+button._state_action = 9
+button.__updateActionHook(button)
+assert(record.labSlot == 9 and record.labIdentityRestricted == false)
+assert(dirtyCalls == 5)
+
+-- Further content changes must not repeat callback removal or hook installation.
 Buttons:OnLABButtonContentsChanged(nil, button)
 assert(hookedCalls == 1)
 assert(unregisterCalls == 1)
 
--- Detach/re-attach re-registers provider callbacks in the base adapter. The
--- policy must forget its previous removal state and remove the new broad
--- registration again once exact hooks are known.
+-- Detach drops targeted slot indexes. Re-attach re-registers provider callbacks
+-- in the base adapter and removes the new broad registration once exact hooks
+-- are known again.
 Buttons:Detach()
+assert(Buttons.attached == false)
+local beforeDetachedSlot = dirtyCalls
+slotFrame.scripts.OnEvent(slotFrame, "ACTIONBAR_SLOT_CHANGED", 9)
+assert(dirtyCalls == beforeDetachedSlot)
+
 Buttons.attached = true
 Buttons:AttachLABLibrary(library, true, false)
 assert(unregisterCalls == 2)
+
+local policy = assert(InterruptGlow.modules.LABAdapterPolicy)
+assert(policy.exactUpdateActionHooks == true)
+assert(policy.accessibleEmptyIdentityClearsSlot == true)
+assert(policy.inaccessibleIdentityFailsClosed == true)
+assert(policy.staleSlotIndexesClearedOnDetach == true)
+assert(policy.broadVisualUpdateCallbackRetiredWhenSafe == true)
 
 print("LAB CALLBACK POLICY TEST PASSED")
