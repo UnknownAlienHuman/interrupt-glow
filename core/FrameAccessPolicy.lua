@@ -7,26 +7,44 @@ local CreateFrame = _G.CreateFrame
 local pcall = pcall
 local type = type
 
-local function MarkOverlayForbidden(record)
-    record.overlayForbidden = true
-    record.overlayPending = false
+local ACCESS_ALLOWED = 1
+local ACCESS_DEFERRED = 2
+local ACCESS_FORBIDDEN = 3
+
+local function ClearQueuedState(record)
     record.overlayQueued = false
     Glow.prewarmQueued[record] = nil
 end
 
-local function CanCreateOnButton(button)
-    if not IG.CanAccess(button) then return false end
+local function MarkOverlayForbidden(record)
+    record.overlayForbidden = true
+    record.overlayAccessDeferred = false
+    record.overlayPending = false
+    ClearQueuedState(record)
+end
+
+local function MarkOverlayDeferred(record)
+    -- Access can be transient during provider construction or a restricted
+    -- context. Fail closed now, but do not permanently blacklist the button.
+    record.overlayForbidden = false
+    record.overlayAccessDeferred = true
+    record.overlayPending = true
+    ClearQueuedState(record)
+end
+
+local function InspectButtonAccess(button)
+    if not IG.CanAccess(button) then return ACCESS_DEFERRED end
 
     local method, memberKnown = IG:ReadMember(button, "IsForbidden")
-    if not memberKnown then return false end
-    if method == nil then return true end
-    if type(method) ~= "function" then return false end
+    if not memberKnown then return ACCESS_DEFERRED end
+    if method == nil then return ACCESS_ALLOWED end
+    if type(method) ~= "function" then return ACCESS_FORBIDDEN end
 
     local ok, forbidden = pcall(method, button)
     if not ok or not IG.CanAccess(forbidden) or type(forbidden) ~= "boolean" then
-        return false
+        return ACCESS_DEFERRED
     end
-    return forbidden == false
+    return forbidden and ACCESS_FORBIDDEN or ACCESS_ALLOWED
 end
 
 local function SafeFrameLevel(button)
@@ -77,10 +95,10 @@ local function CreateUnitBranch(button)
     }
 end
 
--- Own the complete shell creation boundary. The previous implementation could
--- continue after IsForbidden errored or returned an inaccessible/non-boolean
--- value. Foreign frame access is now explicit fail-closed before any addon frame
--- or texture is allocated.
+-- Own the complete shell creation boundary. A confirmed forbidden frame is
+-- permanently skipped. An inaccessible/erroring query is deferred and may be
+-- retried after combat/provider construction instead of silently losing the
+-- overlay for the rest of the session.
 function Glow:CreateShell(record)
     if not record or not record.button then return nil end
     if record.overlay then return record.overlay end
@@ -90,28 +108,51 @@ function Glow:CreateShell(record)
         return nil
     end
 
-    local button = record.button
-    if not CanCreateOnButton(button) then
+    record.overlayAccessDeferred = false
+    local access = InspectButtonAccess(record.button)
+    if access == ACCESS_FORBIDDEN then
         MarkOverlayForbidden(record)
         IG:BumpStat("ui.shellsForbidden")
         return nil
     end
+    if access == ACCESS_DEFERRED then
+        MarkOverlayDeferred(record)
+        IG:BumpStat("ui.shellsDeferred")
+        return nil
+    end
 
     record.overlay = {
-        target = CreateUnitBranch(button),
-        focus = CreateUnitBranch(button),
+        target = CreateUnitBranch(record.button),
+        focus = CreateUnitBranch(record.button),
         cooldownText = nil,
         enhanced = false,
     }
     record.overlayPending = false
-    record.overlayQueued = false
-    self.prewarmQueued[record] = nil
+    record.overlayAccessDeferred = false
+    ClearQueuedState(record)
     IG:BumpStat("ui.shellsCreated")
     return record.overlay
 end
 
+local originalQueueShell = Glow.QueueShell
+function Glow:QueueShell(record, urgent)
+    if record and record.overlayAccessDeferred then
+        if urgent and not IG:IsInCombat() then
+            -- A button that became an interrupt deserves one fresh out-of-combat
+            -- preflight. Persistent failures remain deferred, not hot-looped.
+            record.overlayAccessDeferred = false
+            return self:CreateShell(record)
+        end
+        record.overlayPending = true
+        return nil
+    end
+    return originalQueueShell(self, record, urgent)
+end
+
 IG:RegisterModule("FrameAccessPolicy", {
     inaccessibleForeignFrameFailsClosed = true,
+    transientAccessFailureIsRetryable = true,
+    confirmedForbiddenIsPermanent = true,
     forbiddenQueryMustReturnOrdinaryBoolean = true,
     ownsShellCreationBoundary = true,
 })
