@@ -43,15 +43,15 @@ C_Spell = {
     GetSpellCooldown = function() return { isActive = false } end,
 }
 
+-- A legacy global with an incompatible return shape must never be consulted.
+function GetSpellLossOfControlCooldown()
+    error("legacy spell LoC global was called")
+end
 function GetPetActionCooldown() return 0, 0, 1 end
 
 local loader, loadError = loadfile(ROOT .. "/core/Cooldown.lua")
 assert(loader, loadError)
 loader()
-
-local policyLoader, policyError = loadfile(ROOT .. "/core/SpellLossOfControlPolicy.lua")
-assert(policyLoader, policyError)
-policyLoader()
 
 local Cooldown = assert(InterruptGlow.Cooldown)
 
@@ -105,9 +105,11 @@ ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestrict
     Cooldown:GetCachedReadiness("spell", 15487, false)
 assert(ready == nil and hardRestricted == true)
 
-local policy = assert(InterruptGlow.modules.SpellLossOfControlPolicy)
-assert(policy.usesCurrentCSpellAPI == true)
-assert(policy.legacyGlobalUsed == false)
-assert(policy.inaccessibleInfoFailsClosed == true)
+local cooldownSource, sourceError = io.open(ROOT .. "/core/Cooldown.lua", "r")
+assert(cooldownSource, sourceError)
+local source = cooldownSource:read("*a")
+cooldownSource:close()
+assert(source:find("C_Spell.GetSpellLossOfControlCooldownInfo", 1, true))
+assert(not source:find("_G.GetSpellLossOfControlCooldown", 1, true))
 
 print("LOSS OF CONTROL FAIL-CLOSED TEST PASSED")
