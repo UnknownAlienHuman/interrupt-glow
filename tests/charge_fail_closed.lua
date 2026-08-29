@@ -3,6 +3,8 @@ local ROOT = arg[1] or "."
 _G = _G or _ENV
 
 local secretChargeInfo = {}
+local secretCurrentCharges = {}
+local secretDuration = {}
 local actionChargeInfo = secretChargeInfo
 local spellChargeInfo = secretChargeInfo
 
@@ -13,7 +15,11 @@ InterruptGlow = {
 }
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
-function InterruptGlow.CanAccess(value) return value ~= secretChargeInfo end
+function InterruptGlow.CanAccess(value)
+    return value ~= secretChargeInfo
+        and value ~= secretCurrentCharges
+        and value ~= secretDuration
+end
 function InterruptGlow:ReadMember(container, key)
     if container == nil or not self.CanAccess(container) then return nil, false end
     local value = container[key]
@@ -52,7 +58,7 @@ loader()
 
 local Cooldown = assert(InterruptGlow.Cooldown)
 
--- Inaccessible charge state must not fall through to a zero ordinary cooldown.
+-- Inaccessible charge object must not fall through to a zero ordinary cooldown.
 local ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
     Cooldown:GetCachedReadiness("action", 1, false)
 assert(ready == nil and remaining == nil)
@@ -79,10 +85,11 @@ assert(ability.ready == false)
 assert(ability.hardRestricted == true)
 assert(record.ready == false and record.hardRestrictedCooldown == true)
 
--- Accessible nil is the documented non-charge result for C_Spell and may fall
--- through to the ignore-GCD ordinary cooldown path.
-actionChargeInfo = nil
-spellChargeInfo = nil
+-- NeverSecret maxCharges==0 is an ordinary non-charge discriminator even if a
+-- hypothetical currentCharges field is inaccessible. Normal cooldown fallback
+-- must remain available for the common non-charge interrupt path.
+actionChargeInfo = { currentCharges = secretCurrentCharges, maxCharges = 0 }
+spellChargeInfo = { currentCharges = secretCurrentCharges, maxCharges = 0 }
 Cooldown.generation = Cooldown.generation + 1
 ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
     Cooldown:GetCachedReadiness("action", 1, false)
@@ -94,16 +101,32 @@ ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestrict
 assert(ready == true and remaining == 0)
 assert(readinessRestricted == false and hardRestricted == false)
 
+-- Accessible nil is the documented non-charge result for C_Spell and also falls
+-- through to the ignore-GCD ordinary cooldown path.
+actionChargeInfo = nil
+spellChargeInfo = nil
+Cooldown.generation = Cooldown.generation + 1
+ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
+    Cooldown:GetCachedReadiness("action", 1, false)
+assert(ready == true and remaining == 0)
+assert(readinessRestricted == false and hardRestricted == false)
+
+-- For a real charge ability, inaccessible currentCharges hard-fails closed even
+-- though maxCharges itself remains available.
+actionChargeInfo = { currentCharges = secretCurrentCharges, maxCharges = 2 }
+spellChargeInfo = { currentCharges = secretCurrentCharges, maxCharges = 2 }
+Cooldown.generation = Cooldown.generation + 1
+ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
+    Cooldown:GetCachedReadiness("action", 1, false)
+assert(ready == nil and remaining == nil)
+assert(readinessRestricted == true and timingRestricted == true)
+assert(needsPoll == false and hardRestricted == true)
+
 -- Exact zero charges remain not ready even if recharge timing is inaccessible.
-local secretDuration = {}
 actionChargeInfo = { currentCharges = 0, maxCharges = 2 }
 spellChargeInfo = { currentCharges = 0, maxCharges = 2 }
 function C_ActionBar.GetActionChargeDuration() return secretDuration end
 function C_Spell.GetSpellChargeDuration() return secretDuration end
-local oldCanAccess = InterruptGlow.CanAccess
-function InterruptGlow.CanAccess(value)
-    return value ~= secretChargeInfo and value ~= secretDuration
-end
 Cooldown.generation = Cooldown.generation + 1
 ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
     Cooldown:GetCachedReadiness("action", 1, false)
