@@ -13,9 +13,9 @@ addon.modules = addon.modules or {}
 
 local C_AddOns = _G.C_AddOns
 if C_AddOns and C_AddOns.GetAddOnMetadata then
-    addon.version = C_AddOns.GetAddOnMetadata(addon.name, "Version") or "1.1.0-beta.5"
+    addon.version = C_AddOns.GetAddOnMetadata(addon.name, "Version") or "1.1.0-beta.6"
 else
-    addon.version = "1.1.0-beta.5"
+    addon.version = "1.1.0-beta.6"
 end
 
 function addon:RegisterModule(name, module)
