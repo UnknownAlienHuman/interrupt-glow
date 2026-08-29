@@ -81,10 +81,22 @@ function Data:MatchesCurrentInterrupt(spellID)
     return matches
 end
 
+local function RefreshActiveCDMIdentities()
+    local cdm = IG.CDM
+    if not cdm or cdm.attached ~= true or not IG.DB or IG.DB.cdm ~= true then
+        return
+    end
+    if type(cdm.ObserveExistingItems) == "function" then
+        cdm:ObserveExistingItems()
+        IG:BumpStat("cdm.postActionSeedRefreshes")
+    end
+end
+
 -- Full registry rebuilds are rare lifecycle operations. Seed runtime-only
--- families from authoritative action slots first, then reconcile pet/direct/CDM
--- copies. This removes dependence on weak-table iteration order without adding
--- work to the ordinary single-button mouseover path.
+-- families from authoritative action slots first, refresh the two active CDM
+-- pools against those newly proven families, then reconcile all secondary
+-- copies. This removes weak-table iteration and CDM callback order dependence
+-- without adding work to the ordinary single-button mouseover path.
 function Buttons:ReconcileAll()
     for _, record in pairs(IG.ObservedButtons) do
         if RecordHasActionSlot(record) then
@@ -92,6 +104,8 @@ function Buttons:ReconcileAll()
             IG:BumpStat("buttons.reconciled")
         end
     end
+
+    RefreshActiveCDMIdentities()
 
     for _, record in pairs(IG.ObservedButtons) do
         if not RecordHasActionSlot(record) then
@@ -104,6 +118,7 @@ end
 IG:RegisterModule("RuntimeInterruptPolicy", {
     clearsProofOnRegistryRebuild = true,
     actionSlotsSeedBeforeSecondaryCopies = true,
+    refreshesCDMAfterActionSeed = true,
     propagatesNewRuntimeFamilies = true,
     revalidatesCooldownEventMatches = true,
     avoidsStickySeedState = true,
