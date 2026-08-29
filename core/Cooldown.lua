@@ -17,7 +17,6 @@ local _G = _G
 local C_ActionBar = _G.C_ActionBar
 local C_Spell = _G.C_Spell
 local GetPetActionCooldown = _G.GetPetActionCooldown
-local GetSpellLossOfControlCooldown = _G.GetSpellLossOfControlCooldown
 local pcall = pcall
 local type = type
 local pairs = pairs
@@ -147,13 +146,13 @@ local function ReadLossOfControlState(info)
     if not activeKnown or not replacesKnown then
         return "restricted"
     end
-    if isActive == true or replaces == true then
+    if type(isActive) ~= "boolean" or type(replaces) ~= "boolean" then
+        return "restricted"
+    end
+    if isActive or replaces then
         return "blocked"
     end
-    if isActive == false and replaces == false then
-        return "clear"
-    end
-    return "restricted"
+    return "clear"
 end
 
 local function GetActionLossOfControlState(slot)
@@ -166,12 +165,16 @@ local function GetActionLossOfControlState(slot)
 end
 
 local function GetSpellLossOfControlState(spellID)
-    if type(GetSpellLossOfControlCooldown) == "function" then
-        local ok, info = pcall(GetSpellLossOfControlCooldown, spellID)
+    local getter = C_Spell and C_Spell.GetSpellLossOfControlCooldownInfo
+    if type(getter) == "function" then
+        local ok, info = pcall(getter, spellID)
         if ok then return ReadLossOfControlState(info) end
         return "restricted"
     end
-    return "clear"
+
+    -- Interface 120100 exposes this C_Spell API. Missing it on the target build
+    -- is not evidence that the spell is free of a Loss of Control gate.
+    return "restricted"
 end
 
 local function GetActionReadiness(slot, gcdOnlyHint)
