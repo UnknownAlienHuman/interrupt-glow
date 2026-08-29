@@ -330,16 +330,33 @@ function Buttons:Detach()
     return originalDetach(self)
 end
 
-Buttons.RefreshConditionalMacroSlot = RefreshButtonSlot
-Buttons.InvalidateConditionalMacroSlot = InvalidateSlot
-Buttons.InvalidateConditionalMacroChanges = InvalidateChanges
-Buttons.DeferConditionalMacroChanges = DeferChanges
-Buttons.FlushDeferredConditionalActions = FlushDeferredButtons
+-- Public helpers are methods. Bind `self` explicitly instead of exposing the
+-- underlying locals directly; callers and tests use the normal colon syntax.
+function Buttons:RefreshConditionalMacroSlot(button, record)
+    return RefreshButtonSlot(button, record)
+end
+
+function Buttons:InvalidateConditionalMacroSlot(slot)
+    return InvalidateSlot(slot)
+end
+
+function Buttons:InvalidateConditionalMacroChanges(changes)
+    return InvalidateChanges(changes)
+end
+
+function Buttons:DeferConditionalMacroChanges(changes)
+    return DeferChanges(changes)
+end
+
+function Buttons:FlushDeferredConditionalActions()
+    return FlushDeferredButtons()
+end
 
 IG:RegisterModule("ConditionalMacroPolicy", {
     usesTargetedUsabilitySignal = true,
     defersIdentityWhileReadinessSleeps = true,
     flushesBeforeCooldownRefresh = true,
+    publicHelpersUseMethodSemantics = true,
     parsesActionUsableChangeBatch = true,
     dirtyHookIsActionProviderOnly = true,
     nativeCallbackReadsActionAPIs = false,
