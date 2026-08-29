@@ -24,18 +24,21 @@ local requiredOrder = {
     "core/RuntimeProbe.lua",
     "core/RuntimeProbePolicy.lua",
     "core/Glow.lua",
+    "core/FrameAccessPolicy.lua",
     "core/PrewarmPolicy.lua",
     "core/Buttons.lua",
     "core/ButtonForgePolicy.lua",
     "core/NativeCallbackPolicy.lua",
     "core/LABAdapter.lua",
     "core/ActionResolver.lua",
+    "core/NativeActionQueuePolicy.lua",
     "core/Cooldown.lua",
     "core/ReadinessPolicy.lua",
     "core/Usability.lua",
     "core/GCDSafetyPolicy.lua",
     "core/CachePolicy.lua",
     "core/AbilitySourcePolicy.lua",
+    "core/BoundSourcePolicy.lua",
     "core/CastTracking.lua",
     "core/CDM.lua",
     "core/CDMPolicy.lua",
@@ -54,11 +57,15 @@ end
 
 assert(positions["core/RuntimeProbe.lua"] < positions["core/RuntimeProbePolicy.lua"])
 assert(positions["core/RuntimeProbePolicy.lua"] < positions["core/Glow.lua"])
-assert(positions["core/Glow.lua"] < positions["core/PrewarmPolicy.lua"])
+assert(positions["core/Glow.lua"] < positions["core/FrameAccessPolicy.lua"])
+assert(positions["core/FrameAccessPolicy.lua"] < positions["core/PrewarmPolicy.lua"])
 assert(positions["core/PrewarmPolicy.lua"] < positions["core/Buttons.lua"])
 assert(positions["core/Buttons.lua"] < positions["core/ButtonForgePolicy.lua"])
 assert(positions["core/ButtonForgePolicy.lua"] < positions["core/NativeCallbackPolicy.lua"])
-assert(positions["core/AbilitySourcePolicy.lua"] < positions["core/CastTracking.lua"])
+assert(positions["core/ActionResolver.lua"] < positions["core/NativeActionQueuePolicy.lua"])
+assert(positions["core/NativeActionQueuePolicy.lua"] < positions["core/Cooldown.lua"])
+assert(positions["core/AbilitySourcePolicy.lua"] < positions["core/BoundSourcePolicy.lua"])
+assert(positions["core/BoundSourcePolicy.lua"] < positions["core/CastTracking.lua"])
 assert(positions["core/CDM.lua"] < positions["core/CDMPolicy.lua"])
 assert(positions["core/CDMPolicy.lua"] < positions["core/RuntimeInterruptPolicy.lua"])
 assert(positions["core/RuntimeInterruptPolicy.lua"] < positions["core/Events.lua"])
