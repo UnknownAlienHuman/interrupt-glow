@@ -6,8 +6,17 @@ local Buttons = IG.Buttons
 local type = type
 local pairs = pairs
 
+local NEGATIVE_MATCH_LIMIT = 128
+Data.negativeCooldownSpellMatches = Data.negativeCooldownSpellMatches or {}
+Data.negativeCooldownSpellMatchCount = Data.negativeCooldownSpellMatchCount or 0
+
 local function PositiveNumber(value)
     return type(value) == "number" and value > 0
+end
+
+local function ClearNegativeMatches(self)
+    IG:WipeMap(self.negativeCooldownSpellMatches)
+    self.negativeCooldownSpellMatchCount = 0
 end
 
 local function RecordHasActionSlot(record)
@@ -41,6 +50,7 @@ function Data:RefreshActiveSpec(...)
     -- talent and PvP configuration. Clear it before every coalesced registry
     -- rebuild; the action-slot seed pass below restores still-valid families.
     IG:WipeMap(self.runtimeInterrupts)
+    ClearNegativeMatches(self)
     self.runtimeProofRevision = (self.runtimeProofRevision or 0) + 1
     return originalRefreshActiveSpec(self, ...)
 end
@@ -51,34 +61,49 @@ function Data:LearnRuntimeInterrupt(spellID)
     local canonicalSpellID = originalLearnRuntimeInterrupt(self, spellID)
 
     if canonicalSpellID and previous ~= canonicalSpellID then
+        -- A newly proven family can invalidate an earlier negative alias result.
+        -- The negative cache is tiny and cheap to rebuild from later events.
+        ClearNegativeMatches(self)
         self.runtimeProofRevision = (self.runtimeProofRevision or 0) + 1
         IG:BumpStat("data.runtimeInterruptFamiliesChanged")
 
         -- A single action button can discover a new hotfix/talent interrupt after
         -- direct-spell or CDM copies were already reconciled. Schedule one bounded
-        -- full rebind. A full two-phase rebuild may therefore receive one harmless
-        -- follow-up pass, but no mutable "seed active" flag can be left stuck by a
-        -- Lua error and suppress future propagation permanently.
+        -- full rebind. No mutable "seed active" flag can remain stuck after an
+        -- unrelated Lua error and suppress later propagation.
         IG:MarkAllButtonsDirty()
     end
 
     return canonicalSpellID
 end
 
--- Raw presence in runtimeInterrupts is not enough after a configuration change;
--- current spellbook/base/override availability must still validate the family.
+-- Positive matches remain in the authoritative spec/runtime cache. Negative
+-- unrelated spell IDs use a separate bounded cache so a long session cannot
+-- accumulate every cooldown event ID until the next specialization change.
 function Data:MatchesCurrentInterrupt(spellID)
     if not IG.CanAccess(spellID) or type(spellID) ~= "number" then
         return false
     end
 
-    local cached = self.cooldownSpellMatchCache[spellID]
-    if cached ~= nil then return cached end
+    if self.cooldownSpellMatchCache[spellID] == true then return true end
 
     local matches = self.activeInterrupts[spellID] ~= nil
         or self:GetCanonicalSpellID(spellID, "spell") ~= nil
-    self.cooldownSpellMatchCache[spellID] = matches
-    return matches
+    if matches then
+        self.cooldownSpellMatchCache[spellID] = true
+        self.negativeCooldownSpellMatches[spellID] = nil
+        return true
+    end
+
+    if self.negativeCooldownSpellMatches[spellID] == true then return false end
+
+    if self.negativeCooldownSpellMatchCount >= NEGATIVE_MATCH_LIMIT then
+        ClearNegativeMatches(self)
+        IG:BumpStat("data.negativeCooldownMatchCacheResets")
+    end
+    self.negativeCooldownSpellMatches[spellID] = true
+    self.negativeCooldownSpellMatchCount = self.negativeCooldownSpellMatchCount + 1
+    return false
 end
 
 local function RefreshActiveCDMIdentities()
@@ -121,5 +146,6 @@ IG:RegisterModule("RuntimeInterruptPolicy", {
     refreshesCDMAfterActionSeed = true,
     propagatesNewRuntimeFamilies = true,
     revalidatesCooldownEventMatches = true,
+    negativeMatchLimit = NEGATIVE_MATCH_LIMIT,
     avoidsStickySeedState = true,
 })
