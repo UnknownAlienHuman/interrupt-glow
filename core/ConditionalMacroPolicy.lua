@@ -67,11 +67,11 @@ local function ReadGenericActionSlot(button)
 end
 
 local function ReadPhysicalSlot(button, record)
-    if not button or not record then return nil end
+    if not IG.CanAccess(button) then return nil end
+    if button == nil or not record then return nil end
 
     local adapter = record.adapter
     if adapter == "native" then
-        if not IG.CanAccess(button) then return nil end
         local action = button.action
         if not IG.CanAccess(action) then return nil end
         return NormalizeSlot(action)
@@ -93,7 +93,8 @@ local function ReadPhysicalSlot(button, record)
 end
 
 local function RefreshButtonSlot(button, record)
-    if not button then return nil end
+    if not IG.CanAccess(button) then return nil end
+    if button == nil then return nil end
     record = record or IG.ObservedButtons[button]
 
     local slot = ReadPhysicalSlot(button, record)
@@ -146,7 +147,10 @@ local function ClearPendingIdentity(record)
 end
 
 local function MarkIdentityPending(button, deferQueue)
-    local record = button and IG.ObservedButtons[button]
+    if not IG.CanAccess(button) then return false end
+    if button == nil then return false end
+
+    local record = IG.ObservedButtons[button]
     if not record then return false end
 
     record.actionSnapshotFresh = false
@@ -239,8 +243,15 @@ end
 
 local originalReconcileRecord = Buttons.ReconcileRecord
 function Buttons:ReconcileRecord(record, ...)
+    -- Keep the stale-visual guard set while the resolver and all source/readiness
+    -- mutations execute. If reconciliation raises, the old macro branch remains
+    -- hidden instead of becoming visible again on the next unit refresh.
+    local result = originalReconcileRecord(self, record, ...)
     ClearPendingIdentity(record)
-    return originalReconcileRecord(self, record, ...)
+    if record and Glow and type(Glow.RefreshRecord) == "function" then
+        Glow:RefreshRecord(record)
+    end
+    return result
 end
 
 local function ClearPendingVisuals()
@@ -300,24 +311,28 @@ function Buttons:ObserveButton(button, adapter, options)
 end
 
 function IG:MarkButtonDirty(button)
-    local physicalButton = button
-    local record = physicalButton and IG.ObservedButtons[physicalButton]
+    if not IG.CanAccess(button) then return end
+    if button == nil then return end
 
+    local record = IG.ObservedButtons[button]
     if record and (record.adapter == "lab" or record.adapter == "dominos") then
-        RefreshButtonSlot(physicalButton, record)
+        RefreshButtonSlot(button, record)
     end
 
     if record and ACTION_ADAPTER[record.adapter] then
         local awake = ReadinessAwake()
-        MarkIdentityPending(physicalButton, not awake)
+        MarkIdentityPending(button, not awake)
         if not awake then return end
     end
-    return originalMarkButtonDirty(self, physicalButton)
+    return originalMarkButtonDirty(self, button)
 end
 
 local originalOnNativeActionChanged = Buttons.OnNativeActionChanged
 function Buttons:OnNativeActionChanged(button, ...)
-    local record = button and IG.ObservedButtons[button]
+    if not IG.CanAccess(button) then return end
+    if button == nil then return end
+
+    local record = IG.ObservedButtons[button]
     if not record then
         record = self:ObserveButton(button, "native", { skipDirty = true })
         if not record then return end
@@ -434,6 +449,8 @@ IG:RegisterModule("ConditionalMacroPolicy", {
     usesTargetedUsabilitySignal = true,
     invalidatesSnapshotsBeforeActiveReconcile = true,
     marksIdentityPendingForActiveChanges = true,
+    retainsVisualGuardThroughReconcile = true,
+    failedReconcileRemainsFailClosed = true,
     separatesActiveGuardFromSleepingQueue = true,
     defersIdentityWhileReadinessSleeps = true,
     flushesBeforeCooldownRefresh = true,
