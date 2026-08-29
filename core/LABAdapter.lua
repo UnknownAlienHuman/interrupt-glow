@@ -92,8 +92,6 @@ local function CacheIdentity(record, button)
 end
 
 local function OnUpdateAction(button)
-    -- hooksecurefunc hooks cannot be removed. The attach flag provides the
-    -- symmetric behavioral detach required by the module contract.
     if not Buttons.attached then return end
 
     local record = button and IG.ObservedButtons[button]
@@ -123,8 +121,8 @@ end
 local function ForEachButtonTable(buttons, callback)
     local count = 0
     for key, value in pairs(buttons) do
-        -- Upstream LAB uses a button-keyed set, but forks may expose an array.
-        -- Accept both without treating numeric array indices as frames.
+        -- Upstream LAB uses a button-keyed set, while some forks expose arrays.
+        -- Never pass a numeric array index to the frame observer.
         local button = IsButtonObject(key) and key or (IsButtonObject(value) and value or nil)
         if button then
             count = count + 1
@@ -150,6 +148,21 @@ local function ForEachLibraryButton(library, callback)
         return ForEachButtonTable(registry, callback)
     end
     return 0
+end
+
+local function DiscoverLibraryButtons(library, force)
+    if not library then return 0 end
+    if Buttons.labDiscoveredLibraries[library] and not force then return 0 end
+    Buttons.labDiscoveredLibraries[library] = true
+
+    return ForEachLibraryButton(library, function(button)
+        local record = Buttons:ObserveButton(button, "lab", { skipDirty = true })
+        if record then
+            CacheIdentity(record, button)
+            HookButton(button)
+            IG:MarkButtonDirty(button)
+        end
+    end)
 end
 
 local function DisableBroadUpdateIfFullyHooked(library)
@@ -188,7 +201,12 @@ local originalAttachLABLibrary = Buttons.AttachLABLibrary
 function Buttons:AttachLABLibrary(library, discoverExisting, forceDiscovery)
     if type(library) ~= "table" then return end
 
-    originalAttachLABLibrary(self, library, discoverExisting, forceDiscovery)
+    -- Register lifecycle callbacks through the base adapter, but own discovery
+    -- here so set- and array-style registries use the same validated enumerator.
+    originalAttachLABLibrary(self, library, false, false)
+    if discoverExisting then
+        DiscoverLibraryButtons(library, forceDiscovery == true)
+    end
     DisableBroadUpdateIfFullyHooked(library)
 end
 
@@ -201,10 +219,6 @@ function Buttons:OnLABButtonCreated(_, button)
     CacheIdentity(record, button)
     HookButton(button)
     IG:MarkButtonDirty(button)
-
-    -- A LAB provider can attach before it creates any buttons. Once creation has
-    -- populated its registry, remove the broad visual-update callback if every
-    -- current button exposes the exact UpdateAction hook surface.
     TryDisableBroadUpdates()
 end
 
@@ -221,9 +235,8 @@ function Buttons:OnLABButtonContentsChanged(_, button)
 end
 
 -- Fallback for an empty-at-attach or nonstandard LAB provider. Even if LAB calls
--- this for every visual update, identity reads prevent any discovery, cooldown
--- query, allocation or UI work unless the secure state itself changed. Macro
--- feedback within a stable action slot is handled by the targeted slot event.
+-- this for every visual update, identity reads prevent discovery, cooldown work,
+-- allocation or UI mutation unless the secure action identity actually changed.
 function Buttons:OnLABButtonUpdate(_, button)
     if not self.attached then return end
 
@@ -250,7 +263,7 @@ slotEventFrame:SetScript("OnEvent", function(_, _event, slot)
     end
 
     -- slot == 0 is Blizzard's explicit global invalidation. It is rare and still
-    -- bounded to the already-indexed LAB button set; no action-slot or frame scan.
+    -- bounded to already-indexed LAB buttons; no slot or frame scan occurs.
     for button in pairs(buttonSlots) do IG:MarkButtonDirty(button) end
 end)
 
