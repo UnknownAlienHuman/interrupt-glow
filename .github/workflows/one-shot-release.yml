@@ -1,0 +1,124 @@
+name: One-shot release package
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/one-shot-release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build clean addon ZIP from TOC
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import pathlib
+          import shutil
+          import zipfile
+
+          root = pathlib.Path.cwd()
+          toc = root / "InterruptGlow.toc"
+          version = None
+          runtime_files: list[str] = []
+
+          for raw in toc.read_text(encoding="utf-8").splitlines():
+              line = raw.strip()
+              if line.startswith("## Version:"):
+                  version = line.split(":", 1)[1].strip()
+              elif line and not line.startswith("##"):
+                  runtime_files.append(line)
+
+          expected = "1.1.0-beta.6"
+          if version != expected:
+              raise SystemExit(f"TOC version {version!r} does not match {expected!r}")
+
+          ordered_files: list[str] = []
+          for rel in ["InterruptGlow.toc", *runtime_files, "LICENSE"]:
+              if rel not in ordered_files:
+                  ordered_files.append(rel)
+
+          for rel in ordered_files:
+              source = root / rel
+              if not source.is_file():
+                  raise SystemExit(f"release file missing: {rel}")
+
+          dist = root / "dist"
+          package_root = dist / "InterruptGlow"
+          if dist.exists():
+              shutil.rmtree(dist)
+          package_root.mkdir(parents=True)
+
+          for rel in ordered_files:
+              source = root / rel
+              target = package_root / rel
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+
+          archive = dist / f"InterruptGlow-{expected}.zip"
+          with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+              for rel in ordered_files:
+                  source = package_root / rel
+                  zf.write(source, pathlib.PurePosixPath("InterruptGlow") / pathlib.PurePosixPath(rel))
+
+          forbidden = (
+              "AGENTS", "AGENT_GUIDE", "ARCHITECTURE", "CODE_GRAPH", "CODE_INDEX",
+              "README", "CHANGELOG", "todo", "docs/", "tests/", "tools/", ".github/",
+          )
+          with zipfile.ZipFile(archive) as zf:
+              bad = [name for name in zf.namelist() if any(token in name for token in forbidden)]
+              if bad:
+                  raise SystemExit(f"forbidden release entries: {bad}")
+              if zf.testzip() is not None:
+                  raise SystemExit("ZIP CRC verification failed")
+
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          checksum = dist / f"InterruptGlow-{expected}.zip.sha256"
+          checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+          manifest = dist / "release-manifest.txt"
+          manifest.write_text(
+              "version=" + expected + "\n"
+              + "commit=" + __import__("os").environ["GITHUB_SHA"] + "\n"
+              + "sha256=" + digest + "\n"
+              + "files=\n"
+              + "\n".join(f"InterruptGlow/{rel}" for rel in ordered_files)
+              + "\n",
+              encoding="utf-8",
+          )
+          print(f"archive={archive}")
+          print(f"sha256={digest}")
+          PY
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v1.1.0-beta.6"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          gh release create "$tag" \
+            "dist/InterruptGlow-1.1.0-beta.6.zip" \
+            "dist/InterruptGlow-1.1.0-beta.6.zip.sha256" \
+            "dist/release-manifest.txt" \
+            --target "$GITHUB_SHA" \
+            --title "Interrupt Glow 1.1.0-beta.6" \
+            --prerelease \
+            --notes "Clean World of Warcraft addon package for Retail Interface 120100. The ZIP contains only the InterruptGlow folder, TOC-loaded runtime Lua files, Options.lua, Core.lua and LICENSE; project documentation, tests, tools, agent files and CI files are excluded."
