@@ -35,14 +35,11 @@ function Glow:ProcessPrewarmBudget()
             end
 
             if record.overlay and not record.overlayForbidden then
-                local before = record.interruptVisualsReady == true
-                    or record.visualsReady == true
-                    or record.interruptVisuals ~= nil
+                local before = record.overlay.enhanced == true
                 self:EnsureInterruptVisuals(record)
-                local after = record.interruptVisualsReady == true
-                    or record.visualsReady == true
-                    or record.interruptVisuals ~= nil
-                if not before and after then visualsPrepared = visualsPrepared + 1 end
+                if not before and record.overlay.enhanced == true then
+                    visualsPrepared = visualsPrepared + 1
+                end
             end
         end
     end
@@ -63,4 +60,5 @@ IG:RegisterModule("PrewarmPolicy", {
     budgetCountsInspectedRecords = true,
     prewarmsInterruptVisualsForAllObservedButtons = true,
     combatSwitchingRequiresNoVisualAllocation = true,
+    preparedVisualCounterUsesOverlayState = true,
 })
