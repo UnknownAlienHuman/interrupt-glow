@@ -33,6 +33,7 @@ local localTests = {
     "tests/diagnostic_ownership.lua",
     "tests/native_callback_handles.lua",
     "tests/channel_guard.lua",
+    "tests/unit_relation_fail_closed.lua",
     "tests/shared_worker.lua",
     "tests/cache_policy.lua",
     "tests/glow_worker.lua",
