@@ -47,8 +47,12 @@ local function RegisterRuntimeEvents()
     for index = 1, #EVENTS do frame:RegisterEvent(EVENTS[index]) end
     frame:RegisterUnitEvent("UNIT_PET", "player")
     frame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "pet")
-    frame:RegisterUnitEvent("LOSS_OF_CONTROL_ADDED", "player")
-    frame:RegisterUnitEvent("LOSS_OF_CONTROL_UPDATE", "player")
+
+    -- Generated 12.1 documentation gives these events no unit payload/filter.
+    -- RegisterUnitEvent(..., "player") can therefore suppress the invalidation
+    -- entirely. LoC is a hard readiness gate and must use ordinary registration.
+    frame:RegisterEvent("LOSS_OF_CONTROL_ADDED")
+    frame:RegisterEvent("LOSS_OF_CONTROL_UPDATE")
 end
 
 local function InitializeRuntime()
