@@ -28,6 +28,7 @@ local localTests = {
     "tests/spec_interrupt_coverage.lua",
     "tests/action_resolver_fast_path.lua",
     "tests/conditional_macro_policy.lua",
+    "tests/conditional_active_identity_guard.lua",
     "tests/frame_access_policy.lua",
     "tests/lab_callback_policy.lua",
     "tests/buttonforge_policy.lua",
