@@ -3,6 +3,7 @@ if not IG or not IG.Buttons or not IG.Usability then return end
 
 local Buttons = IG.Buttons
 local Usability = IG.Usability
+local Glow = IG.Glow
 local _G = _G
 local hooksecurefunc = _G.hooksecurefunc
 local pairs = pairs
@@ -146,10 +147,16 @@ local function InvalidateSlot(slot)
     return count
 end
 
-local function DeferSlot(slot)
-    local count = VisitSlot(slot, function(button)
+local function DeferButton(button)
+    local record = button and IG.ObservedButtons[button]
+    if record then
         deferredButtons[button] = true
-    end)
+        record.conditionalIdentityPending = true
+    end
+end
+
+local function DeferSlot(slot)
+    local count = VisitSlot(slot, DeferButton)
     if count > 0 then IG:BumpStat("events.conditionalMacroDeferred", count) end
     return count
 end
@@ -176,12 +183,6 @@ local function DeferChanges(changes)
     return VisitChanges(changes, DeferSlot)
 end
 
-local function DeferButton(button)
-    if button and IG.ObservedButtons[button] then
-        deferredButtons[button] = true
-    end
-end
-
 local function FlushDeferredButtons()
     if not Buttons.attached then
         IG:WipeMap(deferredButtons)
@@ -199,6 +200,56 @@ local function FlushDeferredButtons()
 
     if count > 0 then IG:BumpStat("events.conditionalMacroDeferredFlush", count) end
     return count
+end
+
+local originalReconcileRecord = Buttons.ReconcileRecord
+function Buttons:ReconcileRecord(record, ...)
+    if record then
+        record.conditionalIdentityPending = false
+        if record.button then deferredButtons[record.button] = nil end
+    end
+    return originalReconcileRecord(self, record, ...)
+end
+
+local function ClearDeferredVisuals()
+    if not Glow or type(Glow.ClearRecord) ~= "function" then return end
+    for button in pairs(deferredButtons) do
+        local record = IG.ObservedButtons[button]
+        if record and record.conditionalIdentityPending == true then
+            Glow:ClearRecord(record)
+        end
+    end
+end
+
+if Glow then
+    local originalRefreshRecord = Glow.RefreshRecord
+    if type(originalRefreshRecord) == "function" then
+        function Glow:RefreshRecord(record, ...)
+            if record and record.conditionalIdentityPending == true then
+                if type(self.ClearRecord) == "function" then self:ClearRecord(record) end
+                return
+            end
+            return originalRefreshRecord(self, record, ...)
+        end
+    end
+
+    local originalRefreshUnit = Glow.RefreshUnit
+    if type(originalRefreshUnit) == "function" then
+        function Glow:RefreshUnit(unit, ...)
+            local result = originalRefreshUnit(self, unit, ...)
+            ClearDeferredVisuals()
+            return result
+        end
+    end
+
+    local originalRefreshAll = Glow.RefreshAll
+    if type(originalRefreshAll) == "function" then
+        function Glow:RefreshAll(...)
+            local result = originalRefreshAll(self, ...)
+            ClearDeferredVisuals()
+            return result
+        end
+    end
 end
 
 local originalObserveButton = Buttons.ObserveButton
@@ -356,6 +407,7 @@ IG:RegisterModule("ConditionalMacroPolicy", {
     usesTargetedUsabilitySignal = true,
     defersIdentityWhileReadinessSleeps = true,
     flushesBeforeCooldownRefresh = true,
+    hidesStaleVisualsUntilReconcile = true,
     publicHelpersUseMethodSemantics = true,
     parsesActionUsableChangeBatch = true,
     dirtyHookIsActionProviderOnly = true,
