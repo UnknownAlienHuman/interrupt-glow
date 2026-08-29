@@ -37,17 +37,21 @@ C_ActionBar = {
 }
 
 C_Spell = {
+    GetSpellLossOfControlCooldownInfo = function() return spellLoC end,
     GetSpellCharges = function() return nil end,
     GetSpellCooldownDuration = function() return zeroDuration end,
     GetSpellCooldown = function() return { isActive = false } end,
 }
 
-function GetSpellLossOfControlCooldown() return spellLoC end
 function GetPetActionCooldown() return 0, 0, 1 end
 
 local loader, loadError = loadfile(ROOT .. "/core/Cooldown.lua")
 assert(loader, loadError)
 loader()
+
+local policyLoader, policyError = loadfile(ROOT .. "/core/SpellLossOfControlPolicy.lua")
+assert(policyLoader, policyError)
+policyLoader()
 
 local Cooldown = assert(InterruptGlow.Cooldown)
 
@@ -80,7 +84,7 @@ assert(ability.needsPoll == false)
 assert(record.ready == false and record.hardRestrictedCooldown == true)
 
 -- An accessible nil LoC result means no LoC record and permits ordinary
--- ignore-GCD cooldown evaluation.
+-- ignore-GCD cooldown evaluation for both action and direct-spell sources.
 actionLoC = nil
 spellLoC = nil
 Cooldown.generation = Cooldown.generation + 1
@@ -88,5 +92,22 @@ ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestrict
     Cooldown:GetCachedReadiness("action", 1, false)
 assert(ready == true and remaining == 0)
 assert(readinessRestricted == false and hardRestricted == false)
+
+ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
+    Cooldown:GetCachedReadiness("spell", 15487, false)
+assert(ready == true and remaining == 0)
+assert(readinessRestricted == false and hardRestricted == false)
+
+-- NeverSecret fields still require ordinary boolean types.
+spellLoC = { isActive = "false", shouldReplaceNormalCooldown = false }
+Cooldown.generation = Cooldown.generation + 1
+ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
+    Cooldown:GetCachedReadiness("spell", 15487, false)
+assert(ready == nil and hardRestricted == true)
+
+local policy = assert(InterruptGlow.modules.SpellLossOfControlPolicy)
+assert(policy.usesCurrentCSpellAPI == true)
+assert(policy.legacyGlobalUsed == false)
+assert(policy.inaccessibleInfoFailsClosed == true)
 
 print("LOSS OF CONTROL FAIL-CLOSED TEST PASSED")
