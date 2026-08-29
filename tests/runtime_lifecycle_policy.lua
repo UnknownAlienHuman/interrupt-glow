@@ -3,6 +3,7 @@ local ROOT = arg[1] or "."
 _G = _G or _ENV
 
 local combat = false
+local runtimeEventsEnabled = false
 local calls = {}
 local stats = {}
 local queuedRecord = { overlayQueued = true }
@@ -44,6 +45,13 @@ function InterruptGlow:MarkAllButtonsDirty() Count("markAll") end
 function InterruptGlow:MarkCastDirty() Count("markCast") end
 function InterruptGlow:MarkCooldownDirty() Count("markCooldown") end
 function InterruptGlow:MarkVisualDirty() Count("markVisual") end
+function InterruptGlow:SetRuntimeEventsEnabled(enabled)
+    enabled = enabled == true
+    if runtimeEventsEnabled == enabled then return false end
+    runtimeEventsEnabled = enabled
+    Count(enabled and "eventsEnable" or "eventsDisable")
+    return true
+end
 
 function InterruptGlow.Data:RefreshActiveSpec() Count("specRefresh") end
 function InterruptGlow.Buttons:Attach(discover)
@@ -79,6 +87,7 @@ loader()
 local Lifecycle = assert(InterruptGlow.RuntimeLifecycle)
 assert(Lifecycle:Initialize() == true)
 assert(Lifecycle:IsActive() == true)
+assert(runtimeEventsEnabled == true and calls.eventsEnable == 1)
 assert(calls.specRefresh == 1)
 assert(calls.buttonsAttach == 1 and calls.castAttach == 1 and calls.cdmAttach == 1)
 assert(calls.createPending == 1)
@@ -99,6 +108,7 @@ queuedRecord.overlayQueued = true
 assert(Lifecycle:SetEnabled(false) == true)
 assert(InterruptGlow.DB.enabled == false)
 assert(Lifecycle:IsActive() == false)
+assert(runtimeEventsEnabled == false and calls.eventsDisable == 1)
 assert(calls.cdmDetach == 1)
 assert(calls.castClear == 2 and calls.castDetach == 1)
 assert(calls.buttonsDetach == 1)
@@ -111,23 +121,26 @@ assert(next(InterruptGlow.Glow.prewarmQueue) == nil)
 assert(next(InterruptGlow.Glow.prewarmQueued) == nil)
 assert(queuedRecord.overlayQueued == false)
 
--- Repeated disable is idempotent and does not detach twice.
+-- Repeated disable is idempotent and does not detach or unregister twice.
 assert(Lifecycle:SetEnabled(false) == false)
 assert(calls.buttonsDetach == 1 and calls.castDetach == 1 and calls.cdmDetach == 1)
+assert(calls.eventsDisable == 1)
 
--- Enabling in combat records the setting but defers provider discovery and
--- visual construction until PLAYER_REGEN_ENABLED.
+-- Enabling in combat records the setting but defers provider discovery, event
+-- registration and visual construction until PLAYER_REGEN_ENABLED.
 combat = true
 assert(Lifecycle:SetEnabled(true) == false)
 assert(InterruptGlow.DB.enabled == true)
 assert(Lifecycle.enablePending == true)
 assert(Lifecycle:IsActive() == false)
-assert(calls.buttonsAttach == 1)
+assert(runtimeEventsEnabled == false)
+assert(calls.buttonsAttach == 1 and calls.eventsEnable == 1)
 assert((stats["lifecycle.enableDeferred"] or 0) == 1)
 
 combat = false
 assert(Lifecycle:OnCombatEnded() == true)
 assert(Lifecycle:IsActive() == true)
+assert(runtimeEventsEnabled == true and calls.eventsEnable == 2)
 assert(calls.specRefresh == 2)
 assert(calls.buttonsAttach == 2 and calls.castAttach == 2 and calls.cdmAttach == 2)
 assert(calls.createPending == 2)
@@ -136,6 +149,7 @@ local policy = assert(InterruptGlow.modules.RuntimeLifecyclePolicy)
 assert(policy == Lifecycle)
 assert(policy.masterDisableDetachesProviders == true)
 assert(policy.masterDisableDetachesCastWatchers == true)
+assert(policy.masterDisableUnregistersRuntimeEvents == true)
 assert(policy.masterDisableStopsWorkers == true)
 assert(policy.enableDiscoveryIsOutOfCombat == true)
 assert(policy.scheduledFlushIsAllowedToSelfDisable == true)
