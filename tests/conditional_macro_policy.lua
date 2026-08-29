@@ -6,8 +6,18 @@ local dirtyCalls = 0
 local nativeCalls = 0
 local usabilityCalls = 0
 local protectedReads = 0
+local hookCalls = 0
 local stats = {}
 local secretValue = {}
+
+function hooksecurefunc(object, methodName, hook)
+    local original = assert(object[methodName])
+    object[methodName] = function(...)
+        original(...)
+        hook(...)
+    end
+    hookCalls = hookCalls + 1
+end
 
 InterruptGlow = {
     modules = {},
@@ -67,6 +77,30 @@ function Buttons:Detach()
     self.attached = false
 end
 
+local dominosButton = {}
+_G.DominosButton1 = dominosButton
+local dominosController = {
+    buttons = { [dominosButton] = 11 },
+}
+function dominosController:OnActionChanged(buttonName, action)
+    local button = _G[buttonName]
+    local record = Buttons:ObserveButton(button, "dominos")
+    record.dominosSlot = action
+    self.buttons[button] = action
+end
+function Buttons:AttachDominosNow(discoverExisting)
+    assert(discoverExisting == true)
+    self.dominosAttached = true
+    self.DominosActionButtons = dominosController
+
+    -- Match the real provider order: ObserveButton first, then commit the exact
+    -- controller slot to record.dominosSlot.
+    for button, slot in pairs(dominosController.buttons) do
+        local record = self:ObserveButton(button, "dominos")
+        record.dominosSlot = slot
+    end
+end
+
 function InterruptGlow.Usability:OnActionUsableChanged(changes)
     usabilityCalls = usabilityCalls + 1
     assert(type(changes) == "table")
@@ -118,20 +152,40 @@ assert(Buttons:InvalidateConditionalMacroSlot(10) == 1)
 assert(dirtyCalls == 5)
 ClearPending()
 
+-- Dominos commits record.dominosSlot after ObserveButton. The policy's later
+-- provider hook and post-discovery pass must index the committed slot.
+Buttons:AttachDominosNow(true)
+assert(hookCalls == 1)
+assert(Buttons:InvalidateConditionalMacroSlot(11) == 1)
+assert(dirtyCalls == 6)
+ClearPending()
+
+dominosController:OnActionChanged("DominosButton1", 12)
+assert(Buttons:InvalidateConditionalMacroSlot(11) == 0)
+assert(Buttons:InvalidateConditionalMacroSlot(12) == 1)
+assert(dirtyCalls == 7)
+ClearPending()
+
+-- Promoting a formerly slot-backed frame to a non-slot provider drops the old
+-- slot instead of retaining stale native/LAB/Dominos identity.
+Buttons:ObserveButton(native, "buttonforge")
+assert(Buttons:InvalidateConditionalMacroSlot(8) == 0)
+
 -- Slot zero is a rare bounded global invalidation over observed slot-backed
 -- buttons only; it is not an action-slot or frame scan.
 assert(Buttons:InvalidateConditionalMacroSlot(0) == 2)
-assert(dirtyCalls == 7)
+assert(dirtyCalls == 9)
 ClearPending()
 
 -- Restricted payloads and fields never enter the index or become table keys.
 assert(InterruptGlow.Usability:OnActionUsableChanged(secretValue) == "base-result")
 assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = secretValue } }) == "base-result")
-assert(dirtyCalls == 7)
+assert(dirtyCalls == 9)
 
 Buttons:Detach()
 assert(Buttons.attached == false)
-assert(Buttons:InvalidateConditionalMacroSlot(8) == 0)
+assert(Buttons:InvalidateConditionalMacroSlot(10) == 0)
+assert(Buttons:InvalidateConditionalMacroSlot(12) == 0)
 
 local policy = assert(InterruptGlow.modules.ConditionalMacroPolicy)
 assert(policy.usesTargetedUsabilitySignal == true)
@@ -139,9 +193,11 @@ assert(policy.identityUpdatesWhileReadinessSleeps == true)
 assert(policy.parsesActionUsableChangeBatch == true)
 assert(policy.dirtyHookIsLABOnly == true)
 assert(policy.nativeCallbackReadsActionAPIs == false)
+assert(policy.dominosIdentityRefreshesAfterProviderCommit == true)
+assert(policy.adapterPromotionDropsStaleSlots == true)
 assert(policy.slotIndexIsBounded == true)
 assert(policy.parsesMacroBodies == false)
 assert(policy.scansActionSlots == false)
-assert((stats["events.conditionalMacroSlots"] or 0) == 5)
+assert((stats["events.conditionalMacroSlots"] or 0) == 8)
 
 print("CONDITIONAL MACRO POLICY TEST PASSED")
