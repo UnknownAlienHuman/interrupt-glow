@@ -82,6 +82,7 @@ local function AssertDeferred(button)
     assert(record.overlay == nil)
     assert(record.overlayForbidden ~= true)
     assert(record.overlayAccessDeferred == true)
+    assert(record.overlayAccessFailures == 1)
     assert(record.overlayPending == true and record.overlayQueued == false)
     assert(Glow.prewarmQueued[record] == nil)
     assert(createFrameCalls == framesBefore)
@@ -106,12 +107,18 @@ end
 AssertForbidden({ IsForbidden = function() return true end })
 AssertForbidden({ IsForbidden = "not-a-function" })
 
--- A transiently inaccessible button is retried once when it becomes an urgent
--- interrupt candidate out of combat. It was not permanently blacklisted.
+-- A normal provider re-observation can resume bounded non-urgent prewarming
+-- after construction finishes; the button need not first become an interrupt.
 inaccessibleAllowed = true
-assert(Glow:QueueShell(deferredRecord, true) ~= nil)
+assert(Glow:QueueShell(deferredRecord, false) == nil)
 assert(deferredRecord.overlayAccessDeferred == false)
+assert(deferredRecord.overlayQueued == true)
+assert(Glow.prewarmQueued[deferredRecord] == true)
+assert(Glow:CreateShell(deferredRecord) ~= nil)
+assert(deferredRecord.overlayAccessFailures == nil)
 assert(deferredRecord.overlayForbidden ~= true)
+assert(deferredRecord.overlayQueued == false)
+assert(Glow.prewarmQueued[deferredRecord] == nil)
 
 local allowedButton = {
     IsForbidden = function() return false end,
@@ -136,6 +143,8 @@ assert((stats["ui.shellsCreated"] or 0) == 3)
 local policy = assert(InterruptGlow.modules.FrameAccessPolicy)
 assert(policy.inaccessibleForeignFrameFailsClosed == true)
 assert(policy.transientAccessFailureIsRetryable == true)
+assert(policy.nonUrgentRetryLimit == 3)
+assert(policy.reobservationCanResumePrewarm == true)
 assert(policy.confirmedForbiddenIsPermanent == true)
 assert(policy.forbiddenQueryMustReturnOrdinaryBoolean == true)
 assert(policy.ownsShellCreationBoundary == true)
