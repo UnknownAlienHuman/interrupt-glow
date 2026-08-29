@@ -126,6 +126,19 @@ function Probe:BuildReport()
         .. "\ndroppedRestrictions=" .. tostring(self.droppedRestrictions or 0)
 end
 
+-- Final report construction walks normalized state, provider metadata, secrecy
+-- policy and native profiler metrics. Running that work in combat both adds a
+-- visible spike and contaminates the endpoint being measured. Users should mark
+-- the end of the scenario in combat, then stop/finalize after combat.
+local originalStop = Probe.Stop
+function Probe:Stop()
+    if self.active and IG:IsInCombat() then
+        IG:Print("Capture is still active. Add an end marker now and stop it after combat.")
+        return false
+    end
+    return originalStop(self)
+end
+
 local originalShow = Probe.Show
 function Probe:Show()
     if IG:IsInCombat() then
@@ -140,6 +153,7 @@ IG:RegisterModule("RuntimeProbePolicy", {
     maxMarks = MAX_MARKS,
     maxRestrictions = MAX_RESTRICTIONS,
     buildsReportsOutOfCombatOnly = true,
+    finalizesCaptureOutOfCombatOnly = true,
     automaticRestrictionProfilerSnapshots = false,
     includesConfiguration = true,
     includesProviderVersions = true,
