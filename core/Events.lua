@@ -12,9 +12,11 @@ local select = select
 local frame = CreateFrame("Frame")
 IG.EventFrame = frame
 
-local EVENTS = {
+-- These events exist only while the addon runtime is active. The master switch
+-- unregisters them rather than paying a permanent Lua dispatch cost merely to
+-- discover that RuntimeActive() is false.
+local RUNTIME_EVENTS = {
     "PLAYER_ENTERING_WORLD",
-    "PLAYER_REGEN_ENABLED",
     "PLAYER_TARGET_CHANGED",
     "PLAYER_FOCUS_CHANGED",
     "ACTIVE_PLAYER_SPECIALIZATION_CHANGED",
@@ -33,6 +35,13 @@ local EVENTS = {
     "PET_BAR_UPDATE_COOLDOWN",
     "PET_BAR_UPDATE_USABLE",
     "PET_UI_UPDATE",
+}
+
+-- PLAYER_REGEN_ENABLED completes an enable requested in combat and finishes a
+-- deferred Settings build. Restriction transitions remain available to an
+-- explicit runtime capture even if the feature itself is disabled.
+local PERSISTENT_EVENTS = {
+    "PLAYER_REGEN_ENABLED",
     "ADDON_RESTRICTION_STATE_CHANGED",
 }
 
@@ -50,26 +59,48 @@ local function RuntimeNeedsReadiness()
         and IG:NeedsReadinessRuntime() == true
 end
 
-local function RegisterRuntimeEvents()
-    if IG.runtimeEventsRegistered then return end
-    IG.runtimeEventsRegistered = true
+local function RegisterPersistentEvents()
+    if IG.runtimePersistentEventsRegistered then return false end
+    IG.runtimePersistentEventsRegistered = true
+    for index = 1, #PERSISTENT_EVENTS do
+        frame:RegisterEvent(PERSISTENT_EVENTS[index])
+    end
+    return true
+end
 
-    for index = 1, #EVENTS do frame:RegisterEvent(EVENTS[index]) end
-    frame:RegisterUnitEvent("UNIT_PET", "player")
-    frame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "pet")
+function IG:SetRuntimeEventsEnabled(enabled)
+    enabled = enabled == true
+    if (IG.runtimeEventsRegistered == true) == enabled then return false end
 
-    -- Both events carry unitTarget and Blizzard's own ActionButton event frame
-    -- registers them for player. Keep the invalidation scoped to player LoC;
-    -- party/raid crowd-control changes must not wake every interrupt ability.
-    frame:RegisterUnitEvent("LOSS_OF_CONTROL_ADDED", "player")
-    frame:RegisterUnitEvent("LOSS_OF_CONTROL_UPDATE", "player")
+    if enabled then
+        for index = 1, #RUNTIME_EVENTS do frame:RegisterEvent(RUNTIME_EVENTS[index]) end
+        frame:RegisterUnitEvent("UNIT_PET", "player")
+        frame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "pet")
+
+        -- Both events carry unitTarget and Blizzard's own ActionButton event
+        -- frame registers them for player. Party/raid crowd-control changes must
+        -- not wake every interrupt ability.
+        frame:RegisterUnitEvent("LOSS_OF_CONTROL_ADDED", "player")
+        frame:RegisterUnitEvent("LOSS_OF_CONTROL_UPDATE", "player")
+    else
+        for index = 1, #RUNTIME_EVENTS do frame:UnregisterEvent(RUNTIME_EVENTS[index]) end
+        frame:UnregisterEvent("UNIT_PET")
+        frame:UnregisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+        frame:UnregisterEvent("LOSS_OF_CONTROL_ADDED")
+        frame:UnregisterEvent("LOSS_OF_CONTROL_UPDATE")
+    end
+
+    IG.runtimeEventsRegistered = enabled
+    IG:BumpStat(enabled and "lifecycle.runtimeEventsRegistered"
+        or "lifecycle.runtimeEventsUnregistered")
+    return true
 end
 
 local function InitializeRuntime()
     if IG.runtimeInitialized then return end
     IG.runtimeInitialized = true
     IG.playerLoginSeen = true
-    RegisterRuntimeEvents()
+    RegisterPersistentEvents()
 
     if IG.RuntimeLifecycle and type(IG.RuntimeLifecycle.Initialize) == "function" then
         IG.RuntimeLifecycle:Initialize()
@@ -79,6 +110,7 @@ local function InitializeRuntime()
         if IG.CastTracking then IG.CastTracking:Attach() end
         if IG.CDM then IG.CDM:Attach(true) end
         if IG.Glow then IG.Glow:CreatePendingOverlays() end
+        IG:SetRuntimeEventsEnabled(true)
         IG:MarkCooldownDirty(false)
     end
 
@@ -136,9 +168,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
         return
     end
 
-    -- The master switch detaches target/focus and provider callbacks. The shared
-    -- event frame remains registered so Settings and regen lifecycle still work,
-    -- but all runtime event traffic becomes an immediate no-op while inactive.
+    -- Defensive guard for a signal already queued by the client while the
+    -- master switch was unregistering runtime events.
     if not RuntimeActive() then return end
 
     if event == "PLAYER_ENTERING_WORLD" then
@@ -286,4 +317,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 end)
 
+RegisterPersistentEvents()
 ScheduleInitialization()
+
+IG:RegisterModule("RuntimeEventPolicy", {
+    masterDisableUnregistersRuntimeEvents = true,
+    persistentEvents = PERSISTENT_EVENTS,
+    runtimeEvents = RUNTIME_EVENTS,
+    playerLossOfControlUsesUnitFilter = true,
+})
