@@ -9,6 +9,7 @@ local assistedCalls = 0
 local actionInfoCalls = 0
 local getSpellCalls = 0
 local protectedMemberReads = 0
+local observeCalls = 0
 
 local currentInterrupt = false
 local currentAssisted = false
@@ -18,6 +19,8 @@ local currentActionSubType = "spell"
 local currentSpellID = 1766
 
 InterruptGlow = {
+    DB = { debug = false },
+    profileCountersEnabled = false,
     modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     Buttons = {},
@@ -36,7 +39,7 @@ function InterruptGlow:AsNumber(value)
     if type(value) == "string" then return tonumber(value) end
 end
 function InterruptGlow:MarkButtonDirty() dirtyCalls = dirtyCalls + 1 end
-function InterruptGlow:BumpStat() end
+function InterruptGlow:BumpStat() error("dormant hot-path counter was called") end
 
 function InterruptGlow.Data:GetCanonicalSpellID(spellID)
     if spellID == 1766 then return 1766 end
@@ -48,6 +51,7 @@ function InterruptGlow.Buttons:ResolveRecord()
     return false
 end
 function InterruptGlow.Buttons:ObserveButton(button, adapter)
+    observeCalls = observeCalls + 1
     local record = InterruptGlow.ObservedButtons[button]
     if not record then
         record = { button = button, adapter = adapter }
@@ -95,13 +99,16 @@ assert(assistedCalls == 0)
 assert(actionInfoCalls == 0)
 assert(getSpellCalls == 0)
 assert(protectedMemberReads == 0, "native slot used protected generic member reads")
+assert(observeCalls == 1)
 assert(dirtyCalls == 1)
 
--- Repeated identical forced feedback does not wake the dirty worker.
+-- Repeated identical forced feedback does not observe again, call diagnostics,
+-- read full identity, or wake the dirty worker.
 Buttons:OnNativeActionChanged(button)
 assert(interruptCalls == 2)
 assert(assistedCalls == 0 and actionInfoCalls == 0 and getSpellCalls == 0)
 assert(protectedMemberReads == 0)
+assert(observeCalls == 1)
 assert(dirtyCalls == 1)
 
 -- Interrupt branch pays the full identity cost once and stores the resolved
@@ -113,6 +120,7 @@ assert(assistedCalls == 1)
 assert(actionInfoCalls == 1)
 assert(getSpellCalls == 1)
 assert(protectedMemberReads == 0)
+assert(observeCalls == 1)
 assert(dirtyCalls == 2)
 
 local record = assert(InterruptGlow.ObservedButtons[button])
@@ -132,6 +140,7 @@ Buttons:OnNativeActionChanged(button)
 assert(interruptCalls == 4)
 assert(assistedCalls == 1 and actionInfoCalls == 1 and getSpellCalls == 1)
 assert(protectedMemberReads == 0)
+assert(observeCalls == 1)
 assert(dirtyCalls == 3)
 
 -- Empty buttons normalize once instead of waking on every forced update.
@@ -142,5 +151,6 @@ Buttons:OnNativeActionChanged(button)
 assert(dirtyCalls == 4)
 assert(interruptCalls == 4)
 assert(protectedMemberReads == 0)
+assert(observeCalls == 1)
 
 print("ACTION RESOLVER FAST PATH TEST PASSED")
