@@ -2,6 +2,11 @@ local ROOT = arg[1] or "."
 
 _G = _G or _ENV
 
+local cast = {
+    active = false,
+    castBarID = 20,
+    notInterruptible = false,
+}
 local channel = {
     active = true,
     castBarID = 10,
@@ -32,7 +37,12 @@ function InterruptGlow.Glow:ApplyUnitInterruptibility(_, _, _) end
 function InterruptGlow.Glow:RefreshUnit(_) glowRefreshes = glowRefreshes + 1 end
 function InterruptGlow.Glow:RefreshUnitRelation() end
 
-function UnitCastingInfo(_) return nil end
+function UnitCastingInfo(unit)
+    if unit == "target" and cast.active then
+        return "Cast", "Cast", 1, 100000, 105000, false, 1,
+            cast.notInterruptible, 321, cast.castBarID, 0
+    end
+end
 function UnitChannelInfo(unit)
     if unit == "target" and channel.active then
         return "Channel", "Channel", 1, 100000, 105000, false,
@@ -88,14 +98,14 @@ tracker:OnUnitEvent("target", "UNIT_FLAGS", "target")
 assert(state.active == false, "stale UnitChannelInfo resurrected after CHANNEL_STOP")
 assert((InterruptGlow.Stats["cast.channelSnapshotSuppressed"] or 0) >= 1)
 
--- A real new start is the authoritative signal that polling may resume.
+-- A real new channel start is authoritative and clears suppression.
 channel.castBarID = 11
 tracker:OnUnitEvent("target", "UNIT_SPELLCAST_CHANNEL_START", "target", "cast-guid-11", 123, 11)
 assert(state.active == true and state.isChannel == true)
 assert(state.castBarID == 11)
 assert(state.channelSuppressed == false)
 
--- A delayed stop for the previous cast must not clear the newer cast.
+-- A delayed stop for the previous channel must not clear the newer channel.
 tracker:OnUnitEvent(
     "target",
     "UNIT_SPELLCAST_CHANNEL_STOP",
@@ -108,8 +118,7 @@ tracker:OnUnitEvent(
 assert(state.active == true and state.castBarID == 11)
 assert((InterruptGlow.Stats["cast.staleStopIgnored"] or 0) >= 1)
 
--- Current stop clears again. A unit identity reset intentionally permits a
--- mid-channel snapshot for a newly acquired target/focus token.
+-- Current channel stop clears again.
 tracker:OnUnitEvent(
     "target",
     "UNIT_SPELLCAST_CHANNEL_STOP",
@@ -120,10 +129,46 @@ tracker:OnUnitEvent(
     11
 )
 assert(state.active == false and state.channelSuppressed == true)
+
+-- A newer ordinary cast is visible even while stale channel polling remains
+-- suppressed, because UnitCastingInfo is checked first.
+channel.active = false
+cast.active = true
+tracker:OnUnitEvent("target", "UNIT_SPELLCAST_START", "target", "cast-guid-20", 321, 20)
+assert(state.active == true and state.isChannel == false)
+assert(state.castBarID == 20)
+
+-- A delayed channel stop with no usable castBarID must establish/retain channel
+-- suppression but cannot delete the newer ordinary cast.
+tracker:OnUnitEvent(
+    "target",
+    "UNIT_SPELLCAST_CHANNEL_STOP",
+    "target",
+    "old-channel-guid",
+    123,
+    nil,
+    nil
+)
+assert(state.active == true and state.isChannel == false)
+assert(state.castBarID == 20)
+assert(state.channelSuppressed == true)
+assert((InterruptGlow.Stats["cast.channelStopIgnoredForOrdinaryCast"] or 0) == 1)
+
+tracker:OnUnitEvent("target", "UNIT_FLAGS", "target")
+assert(state.active == true and state.isChannel == false and state.castBarID == 20)
+
+-- The matching ordinary stop still clears normally.
+cast.active = false
+tracker:OnUnitEvent("target", "UNIT_SPELLCAST_STOP", "target", "cast-guid-20", 321, 20)
+assert(state.active == false)
+
+-- A unit identity reset intentionally permits a fresh mid-channel snapshot.
+channel.active = true
+channel.castBarID = 12
 tracker:ResetUnitIdentity("target", "PLAYER_TARGET_CHANGED")
-assert(state.active == true and state.castBarID == 11)
+assert(state.active == true and state.isChannel == true and state.castBarID == 12)
 assert(state.channelSuppressed == false)
 
-assert(cooldownInvalidations >= 2)
+assert(cooldownInvalidations >= 3)
 assert(glowRefreshes > 0)
 print("CHANNEL GUARD TEST PASSED")
