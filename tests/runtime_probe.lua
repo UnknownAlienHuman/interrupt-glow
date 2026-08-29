@@ -5,10 +5,10 @@ local printed = {}
 
 InterruptGlow = {
     name = "InterruptGlow",
-    version = "1.1.0-beta.4",
+    version = "1.1.0-beta.7",
     DB = {
         schema = 3,
-        producerVersion = "1.1.0-beta.4",
+        producerVersion = "1.1.0-beta.7",
         interface = 120100,
         debug = false,
         debugKeep = 400,
@@ -53,7 +53,7 @@ InterruptGlow = {
     Data = {
         interface = 120100,
         wowBuild = 69497,
-        sourceCommit = "027d26c",
+        sourceCommit = "027d26c3406d3de2cbd2b1f67d468fe033a1bcd4",
         activeInterrupts = { [15487] = true },
     },
     Buttons = {
@@ -171,7 +171,7 @@ C_Secrets = {
 }
 function GetBuildInfo() return "12.1.0", "69497", "Aug 25 2026", 120100 end
 function GetInstanceInfo() return "Test", "party", 8, "Mythic Keystone", 5, 0, false, 123, 5, 456 end
-function date() return "2026-08-27T00:00:00Z" end
+function date() return "2026-08-29T00:00:00Z" end
 mockNow = 100
 
 local debugLoader, debugError = loadfile(ROOT .. "/core/Debug.lua")
@@ -192,7 +192,7 @@ local probe = InterruptGlow.RuntimeProbe
 local initialReport = probe:BuildReport()
 assert(initialReport:find("cooldownPolicy=NeverSecret"))
 assert(initialReport:find("repository=UnknownAlienHuman/interrupt%-glow"))
-assert(initialReport:find("kbCommit=312085aa8d23dfe283b416ba0f394fef1cae22dd"))
+assert(initialReport:find("kbCommit=5a992ae702a278f3893c7e8f1b212583311438b5", 1, true))
 assert(initialReport:find("savedSchema=3", 1, true))
 assert(initialReport:find("counterOwner=none", 1, true))
 assert(initialReport:find("Dominos.loaded=true"))
