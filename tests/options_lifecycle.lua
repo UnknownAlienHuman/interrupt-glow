@@ -18,7 +18,8 @@ InterruptGlow = {
         strictNI = false,
         optimisticRestrictedCooldown = true,
         debug = true,
-        debugKeep = 400,
+        debugChat = true,
+        debugKeep = 999,
     },
     modules = {},
     CDM = {},
@@ -77,6 +78,8 @@ assert(DB.cdm == true)
 assert(DB.strictNI == true)
 assert(DB.optimisticRestrictedCooldown == false)
 assert(DB.debug == false)
+assert(DB.debugChat == false)
+assert(DB.debugKeep == 400)
 assert(cdmEnabled == true)
 assert(allButtonsDirty == 1)
 assert(castDirty == 1)
