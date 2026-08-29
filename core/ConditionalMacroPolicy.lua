@@ -16,6 +16,7 @@ local tonumber = tonumber
 -- observed buttons only; never scan action slots or parse macro bodies.
 local slotByButton = setmetatable({}, { __mode = "k" })
 local buttonsBySlot = {}
+local pendingIdentityButtons = setmetatable({}, { __mode = "k" })
 local deferredButtons = setmetatable({}, { __mode = "k" })
 local hookedDominosControllers = setmetatable({}, { __mode = "k" })
 
@@ -70,9 +71,6 @@ local function ReadPhysicalSlot(button, record)
 
     local adapter = record.adapter
     if adapter == "native" then
-        -- Native Blizzard action buttons expose an ordinary positive action
-        -- field. Avoid protected generic member reads in the mouseover callback,
-        -- but still reject an inaccessible frame before indexing it.
         if not IG.CanAccess(button) then return nil end
         local action = button.action
         if not IG.CanAccess(action) then return nil end
@@ -87,9 +85,6 @@ local function ReadPhysicalSlot(button, record)
         return NormalizeSlot(record.dominosSlot) or ReadGenericActionSlot(button)
     end
 
-    -- Pet, Cooldown Viewer and ButtonForge records are not physical action-slot
-    -- consumers. Never retain an old native/LAB/Dominos slot after adapter
-    -- priority promotes the same frame to one of these providers.
     if adapter == "pet" or adapter == "cdm" or adapter == "buttonforge" then
         return nil
     end
@@ -133,8 +128,6 @@ local function VisitSlot(slot, visitor)
             end
         end
     elseif slot == 0 then
-        -- Blizzard uses slot 0 for an explicit global action invalidation. This
-        -- rare path remains bounded to already-observed slot-backed buttons.
         for button in pairs(slotByButton) do
             count = count + 1
             visitor(button)
@@ -146,24 +139,29 @@ end
 local function ClearPendingIdentity(record)
     if not record then return end
     record.conditionalIdentityPending = false
-    if record.button then deferredButtons[record.button] = nil end
+    if record.button then
+        pendingIdentityButtons[record.button] = nil
+        deferredButtons[record.button] = nil
+    end
 end
 
-local function MarkIdentityPending(button)
+local function MarkIdentityPending(button, deferQueue)
     local record = button and IG.ObservedButtons[button]
     if not record then return false end
 
-    -- Invalidate before any dirty-queue dedupe. A second callback in the same
-    -- frame must never let ReconcileRecord consume a snapshot captured before
-    -- the latest mouseover/help/harm transition.
     record.actionSnapshotFresh = false
-    deferredButtons[button] = true
+    pendingIdentityButtons[button] = true
+    if deferQueue then
+        deferredButtons[button] = true
+    else
+        -- Active signals already own a normal dirty record. Do not let them leak
+        -- into the sleeping queue and get scheduled a second time later.
+        deferredButtons[button] = nil
+    end
 
     local wasPending = record.conditionalIdentityPending == true
     record.conditionalIdentityPending = true
 
-    -- The previous action branch may still be visibly highlighted. Hide it at
-    -- the callback boundary and keep the guard active until reconciliation.
     if not wasPending
         and record.isInterrupt == true
         and record.overlay
@@ -184,7 +182,7 @@ local function InvalidateSlot(slot)
 end
 
 local function DeferButton(button)
-    MarkIdentityPending(button)
+    MarkIdentityPending(button, true)
 end
 
 local function DeferSlot(slot)
@@ -219,7 +217,6 @@ local function FlushDeferredButtons()
     if not Buttons.attached then
         for button in pairs(deferredButtons) do
             ClearPendingIdentity(IG.ObservedButtons[button])
-            deferredButtons[button] = nil
         end
         return 0
     end
@@ -229,10 +226,8 @@ local function FlushDeferredButtons()
         local record = IG.ObservedButtons[button]
         if not record then
             deferredButtons[button] = nil
+            pendingIdentityButtons[button] = nil
         elseif not IG.PendingButtons or not IG.PendingButtons[button] then
-            -- Retain the weak pending entry until ReconcileRecord completes. A
-            -- synchronous cast/visual refresh between this queue operation and
-            -- the next frame must still be unable to expose the stale branch.
             count = count + 1
             originalMarkButtonDirty(IG, button)
         end
@@ -248,9 +243,9 @@ function Buttons:ReconcileRecord(record, ...)
     return originalReconcileRecord(self, record, ...)
 end
 
-local function ClearDeferredVisuals()
+local function ClearPendingVisuals()
     if not Glow or type(Glow.ClearRecord) ~= "function" then return end
-    for button in pairs(deferredButtons) do
+    for button in pairs(pendingIdentityButtons) do
         local record = IG.ObservedButtons[button]
         if record and record.conditionalIdentityPending == true then
             Glow:ClearRecord(record)
@@ -274,7 +269,7 @@ if Glow then
     if type(originalRefreshUnit) == "function" then
         function Glow:RefreshUnit(unit, ...)
             local result = originalRefreshUnit(self, unit, ...)
-            ClearDeferredVisuals()
+            ClearPendingVisuals()
             return result
         end
     end
@@ -283,7 +278,7 @@ if Glow then
     if type(originalRefreshAll) == "function" then
         function Glow:RefreshAll(...)
             local result = originalRefreshAll(self, ...)
-            ClearDeferredVisuals()
+            ClearPendingVisuals()
             return result
         end
     end
@@ -304,11 +299,6 @@ function Buttons:ObserveButton(button, adapter, options)
     return record
 end
 
--- Exact provider identity callbacks may fire continuously while mouseover/help/
--- harm context changes. Every action-provider signal first invalidates the
--- normalized identity and hides the old visual. When no cast or countdown
--- consumes readiness, retain one weak deferred record instead of waking the
--- reconciliation worker every frame.
 function IG:MarkButtonDirty(button)
     local physicalButton = button
     local record = physicalButton and IG.ObservedButtons[physicalButton]
@@ -318,15 +308,13 @@ function IG:MarkButtonDirty(button)
     end
 
     if record and ACTION_ADAPTER[record.adapter] then
-        MarkIdentityPending(physicalButton)
-        if not ReadinessAwake() then return end
+        local awake = ReadinessAwake()
+        MarkIdentityPending(physicalButton, not awake)
+        if not awake then return end
     end
     return originalMarkButtonDirty(self, physicalButton)
 end
 
--- Keep the native callback free of action API work while readiness sleeps. The
--- latest physical slot and invalid snapshot are retained; a new relevant cast
--- flushes the record before the same batched cooldown pass.
 local originalOnNativeActionChanged = Buttons.OnNativeActionChanged
 function Buttons:OnNativeActionChanged(button, ...)
     local record = button and IG.ObservedButtons[button]
@@ -336,8 +324,9 @@ function Buttons:OnNativeActionChanged(button, ...)
     end
 
     RefreshButtonSlot(button, record)
-    MarkIdentityPending(button)
-    if not ReadinessAwake() then
+    local awake = ReadinessAwake()
+    MarkIdentityPending(button, not awake)
+    if not awake then
         IG:BumpStat("events.nativeActionDeferred")
         return
     end
@@ -345,9 +334,6 @@ function Buttons:OnNativeActionChanged(button, ...)
     return originalOnNativeActionChanged(self, button, ...)
 end
 
--- Dominos updates record.dominosSlot after Buttons:ObserveButton has already
--- run. Install a second, later post-hook on the exact provider callback so the
--- conditional index observes the committed slot rather than the previous one.
 local function OnDominosActionChanged(_controller, buttonName)
     if not Buttons.attached or not Buttons.dominosAttached then return end
     local button = type(buttonName) == "string" and _G[buttonName] or nil
@@ -383,9 +369,6 @@ function Buttons:AttachDominosNow(discoverExisting)
             hookedDominosControllers[controller] = true
             hooksecurefunc(controller, "OnActionChanged", OnDominosActionChanged)
         end
-
-        -- Original discovery commits record.dominosSlot after ObserveButton.
-        -- Repair the bounded index once after that provider-owned pass.
         RefreshDominosRegistry(controller)
     end
     return result
@@ -403,9 +386,6 @@ function Usability:OnActionUsableChanged(changes, ...)
     return false
 end
 
--- CastTracking updates normalized cast state before requesting readiness. Flush
--- deferred action identities first so Shared:Flush reconciles buttons before the
--- cooldown pass in the same frame.
 local originalMarkCooldownDirty = IG.MarkCooldownDirty
 function IG:MarkCooldownDirty(fromSpellCooldownEvent)
     if ReadinessAwake() then FlushDeferredButtons() end
@@ -414,9 +394,6 @@ end
 
 local originalMarkAllButtonsDirty = IG.MarkAllButtonsDirty
 function IG:MarkAllButtonsDirty(...)
-    -- A full rebuild will call the wrapped ReconcileRecord for every observed
-    -- button. Preserve the pending visual guard until those records are actually
-    -- reconciled instead of exposing stale macro identity in the interim.
     return originalMarkAllButtonsDirty(self, ...)
 end
 
@@ -427,13 +404,12 @@ function Buttons:Detach()
             record.conditionalIdentityPending = false
         end
     end
+    IG:WipeMap(pendingIdentityButtons)
     IG:WipeMap(deferredButtons)
     for button in pairs(slotByButton) do RemoveButton(button) end
     return originalDetach(self)
 end
 
--- Public helpers are methods. Bind `self` explicitly instead of exposing the
--- underlying locals directly; callers and tests use the normal colon syntax.
 function Buttons:RefreshConditionalMacroSlot(button, record)
     return RefreshButtonSlot(button, record)
 end
@@ -458,6 +434,7 @@ IG:RegisterModule("ConditionalMacroPolicy", {
     usesTargetedUsabilitySignal = true,
     invalidatesSnapshotsBeforeActiveReconcile = true,
     marksIdentityPendingForActiveChanges = true,
+    separatesActiveGuardFromSleepingQueue = true,
     defersIdentityWhileReadinessSleeps = true,
     flushesBeforeCooldownRefresh = true,
     hidesStaleVisualsUntilReconcile = true,
@@ -469,6 +446,7 @@ IG:RegisterModule("ConditionalMacroPolicy", {
     dominosIdentityRefreshesAfterProviderCommit = true,
     adapterPromotionDropsStaleSlots = true,
     slotIndexIsBounded = true,
+    pendingGuardSetUsesWeakButtons = true,
     deferredSetUsesWeakButtons = true,
     parsesMacroBodies = false,
     scansActionSlots = false,
