@@ -57,19 +57,18 @@ allowed = false
 assert(InterruptGlow.Buttons:ResolveCDM(record) == false, "cached CDM identity crossed spec policy")
 allowed = true
 
+-- CDMPolicy must not wrap the spec refresh itself. RuntimeInterruptPolicy owns
+-- the single correctly ordered action-seed -> active-pool -> secondary pass.
 local specID, changed = InterruptGlow.Data:RefreshActiveSpec()
 assert(specID == 258 and changed == true)
-assert(refreshCalls == 1 and observeCalls == 1)
-
-InterruptGlow.CDM.attached = false
-InterruptGlow.Data:RefreshActiveSpec()
-assert(refreshCalls == 2 and observeCalls == 1)
+assert(refreshCalls == 1 and observeCalls == 0,
+    "CDMPolicy performed a duplicate pre-action pool refresh")
 
 InterruptGlow.DB.cdm = false
 assert(InterruptGlow.Buttons:ResolveCDM(record) == false)
 
 local policy = assert(InterruptGlow.modules.CDMPolicy)
 assert(policy.usesCapturedPoolIdentity == true)
-assert(policy.refreshesActiveItemsAfterSpecData == true)
+assert(policy.specRefreshOwnedByRuntimeInterruptPolicy == true)
 
 print("CDM POLICY TEST PASSED")
