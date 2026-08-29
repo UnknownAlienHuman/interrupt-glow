@@ -10,59 +10,126 @@ local pcall = pcall
 
 local originalResolveRecord = Buttons.ResolveRecord
 
+local function PositiveSlot(value)
+    local slot = IG:AsNumber(value)
+    if type(slot) == "number" and slot > 0 then return slot end
+    return nil
+end
+
 local function ResolveSlot(button)
     local stateType, stateTypeKnown = IG:ReadMember(button, "_state_type")
     if stateTypeKnown and stateType == "action" then
         local stateAction, stateActionKnown = IG:ReadMember(button, "_state_action")
         if stateActionKnown then
-            local slot = IG:AsNumber(stateAction)
+            local slot = PositiveSlot(stateAction)
             if slot then return slot end
         end
     end
 
     local action, actionKnown = IG:ReadMember(button, "action")
-    if actionKnown then return IG:AsNumber(action) end
+    if actionKnown then return PositiveSlot(action) end
     return nil
 end
 
-local function ReadActionSnapshot(slot)
-    local actionType, id, subType
-    if type(GetActionInfo) == "function" and type(slot) == "number" then
+local function ReadBooleanAPI(fn, slot, trustedSlot)
+    if type(fn) ~= "function" then return nil end
+
+    local value
+    if trustedSlot then
+        -- Native Blizzard action buttons expose a valid positive action slot.
+        -- Avoid a protected-call frame in the dominant mouseover feedback path.
+        value = fn(slot)
+    else
         local ok
-        ok, actionType, id, subType = pcall(GetActionInfo, slot)
-        if not ok
-            or not IG.CanAccess(actionType)
-            or not IG.CanAccess(id)
-            or not IG.CanAccess(subType)
-        then
-            actionType, id, subType = nil, nil, nil
-        end
+        ok, value = pcall(fn, slot)
+        if not ok then return nil end
     end
 
-    local assisted = nil
-    if C_ActionBar and type(C_ActionBar.IsAssistedCombatAction) == "function" then
-        local ok, value = pcall(C_ActionBar.IsAssistedCombatAction, slot)
-        if ok and IG.CanAccess(value) then assisted = value == true end
-    end
-    assisted = assisted == true or subType == "assistedcombat"
-
-    local interrupt = nil
-    if C_ActionBar and type(C_ActionBar.IsInterruptAction) == "function" then
-        local ok, value = pcall(C_ActionBar.IsInterruptAction, slot)
-        if ok and IG.CanAccess(value) then
-            if value == true then interrupt = true
-            elseif value == false then interrupt = false end
-        end
-    end
-
-    return actionType, id, subType, interrupt, assisted
+    if not IG.CanAccess(value) then return nil end
+    if value == true then return true end
+    if value == false then return false end
+    return nil
 end
 
-local function StoreSnapshot(record, slot, actionType, id, subType, interrupt, assisted)
+local function ReadActionInfo(slot, trustedSlot)
+    if type(GetActionInfo) ~= "function" then return nil, nil, nil end
+
+    local actionType, id, subType
+    if trustedSlot then
+        actionType, id, subType = GetActionInfo(slot)
+    else
+        local ok
+        ok, actionType, id, subType = pcall(GetActionInfo, slot)
+        if not ok then return nil, nil, nil end
+    end
+
+    if not IG.CanAccess(actionType)
+        or not IG.CanAccess(id)
+        or not IG.CanAccess(subType)
+    then
+        return nil, nil, nil
+    end
+    return actionType, id, subType
+end
+
+local function ReadResolvedSpellID(slot, trustedSlot, actionType, id, subType)
+    local getSpell = C_ActionBar and C_ActionBar.GetSpell
+    if type(getSpell) == "function" then
+        local spellID
+        if trustedSlot then
+            spellID = getSpell(slot)
+        else
+            local ok
+            ok, spellID = pcall(getSpell, slot)
+            if not ok then spellID = nil end
+        end
+
+        if IG.CanAccess(spellID) and type(spellID) == "number" then
+            return spellID
+        end
+    end
+
+    if actionType == "spell" and type(id) == "number" then return id end
+    if actionType == "macro" and subType == "spell" and type(id) == "number" then return id end
+    return nil
+end
+
+local function ReadActionSnapshot(slot, trustedSlot)
+    local isInterrupt = C_ActionBar and C_ActionBar.IsInterruptAction
+    local interrupt = ReadBooleanAPI(isInterrupt, slot, trustedSlot)
+
+    -- Dominant mouseover path: one current-action classification call and no
+    -- GetActionInfo, GetSpell, assisted-combat query, cooldown work or allocation.
+    if interrupt == false then
+        return nil, nil, nil, nil, false, nil
+    end
+
+    local isAssisted = C_ActionBar and C_ActionBar.IsAssistedCombatAction
+    local assisted = nil
+    if interrupt == true then
+        assisted = ReadBooleanAPI(isAssisted, slot, trustedSlot)
+        if assisted == true then
+            return nil, nil, nil, nil, true, true
+        end
+    end
+
+    local actionType, id, subType = ReadActionInfo(slot, trustedSlot)
+    if subType == "assistedcombat" then
+        assisted = true
+    elseif assisted == nil and interrupt == nil then
+        assisted = ReadBooleanAPI(isAssisted, slot, trustedSlot)
+    end
+
+    local spellID = ReadResolvedSpellID(slot, trustedSlot, actionType, id, subType)
+    return actionType, id, subType, spellID, interrupt, assisted
+end
+
+local function StoreSnapshot(record, slot, actionType, id, subType, spellID, interrupt, assisted)
     local changed = record.actionSnapshotSlot ~= slot
         or record.actionSnapshotType ~= actionType
         or record.actionSnapshotID ~= id
         or record.actionSnapshotSubType ~= subType
+        or record.actionSnapshotSpellID ~= spellID
         or record.actionSnapshotInterrupt ~= interrupt
         or record.actionSnapshotAssisted ~= assisted
 
@@ -70,34 +137,29 @@ local function StoreSnapshot(record, slot, actionType, id, subType, interrupt, a
     record.actionSnapshotType = actionType
     record.actionSnapshotID = id
     record.actionSnapshotSubType = subType
+    record.actionSnapshotSpellID = spellID
     record.actionSnapshotInterrupt = interrupt
     record.actionSnapshotAssisted = assisted
     return changed
 end
 
-local function GetResolvedSpellID(actionType, id, subType)
-    if actionType == "spell" and type(id) == "number" then return id end
-    if actionType == "macro" and subType == "spell" and type(id) == "number" then return id end
-    return nil
-end
-
-local function ResolveSnapshot(record, slot, actionType, id, subType, interrupt, assisted)
-    if assisted == true then return false end
-
-    local spellID = GetResolvedSpellID(actionType, id, subType)
+local function ResolveSnapshot(record, slot, spellID, interrupt, assisted)
+    if interrupt == false or assisted == true then return false end
 
     if interrupt == true then
         local canonicalSpellID = spellID and IG.Data:GetCanonicalSpellID(spellID, "action") or nil
-        if spellID and not canonicalSpellID then canonicalSpellID = IG.Data:LearnRuntimeInterrupt(spellID) end
+        if spellID and not canonicalSpellID then
+            canonicalSpellID = IG.Data:LearnRuntimeInterrupt(spellID)
+        end
         canonicalSpellID = canonicalSpellID or spellID
         return true, "action", slot, spellID, canonicalSpellID
     end
 
-    if interrupt == false then return false end
-
     if spellID then
         local canonicalSpellID = IG.Data:GetCanonicalSpellID(spellID, "action")
-        if canonicalSpellID then return true, "action", slot, spellID, canonicalSpellID end
+        if canonicalSpellID then
+            return true, "action", slot, spellID, canonicalSpellID
+        end
         return false
     end
 
@@ -117,20 +179,23 @@ function Buttons:ResolveRecord(record)
     local slot = ResolveSlot(record.button)
     if not slot then return originalResolveRecord(self, record) end
 
-    local actionType, id, subType, interrupt, assisted
+    local actionType, id, subType, spellID, interrupt, assisted
     if record.actionSnapshotFresh == true and record.actionSnapshotSlot == slot then
         record.actionSnapshotFresh = false
         actionType = record.actionSnapshotType
         id = record.actionSnapshotID
         subType = record.actionSnapshotSubType
+        spellID = record.actionSnapshotSpellID
         interrupt = record.actionSnapshotInterrupt
         assisted = record.actionSnapshotAssisted
     else
-        actionType, id, subType, interrupt, assisted = ReadActionSnapshot(slot)
-        StoreSnapshot(record, slot, actionType, id, subType, interrupt, assisted)
+        local trustedSlot = record.adapter == "native"
+        actionType, id, subType, spellID, interrupt, assisted =
+            ReadActionSnapshot(slot, trustedSlot)
+        StoreSnapshot(record, slot, actionType, id, subType, spellID, interrupt, assisted)
     end
 
-    return ResolveSnapshot(record, slot, actionType, id, subType, interrupt, assisted)
+    return ResolveSnapshot(record, slot, spellID, interrupt, assisted)
 end
 
 function Buttons:OnNativeActionChanged(button)
@@ -139,15 +204,24 @@ function Buttons:OnNativeActionChanged(button)
 
     local slot = ResolveSlot(button)
     if not slot then
-        IG:MarkButtonDirty(button)
+        -- Empty native buttons can receive repeated forced updates. Normalize the
+        -- empty state once instead of waking the dirty worker every time.
+        if StoreSnapshot(record, nil, nil, nil, nil, nil, false, nil) then
+            record.actionSnapshotFresh = false
+            IG:MarkButtonDirty(button)
+            IG:BumpStat("events.nativeActionBecameEmpty")
+        end
         return
     end
 
-    local actionType, id, subType, interrupt, assisted = ReadActionSnapshot(slot)
-    if StoreSnapshot(record, slot, actionType, id, subType, interrupt, assisted) then
+    local actionType, id, subType, spellID, interrupt, assisted =
+        ReadActionSnapshot(slot, true)
+    if StoreSnapshot(record, slot, actionType, id, subType, spellID, interrupt, assisted) then
         record.actionSnapshotFresh = true
         IG:MarkButtonDirty(button)
         IG:BumpStat("events.nativeActionIdentityChanged")
+    elseif interrupt == false then
+        IG:BumpStat("events.nativeFastNonInterrupt")
     else
         IG:BumpStat("events.nativeActionIdentityUnchanged")
     end
