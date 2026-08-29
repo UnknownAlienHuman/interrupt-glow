@@ -64,10 +64,35 @@ local function ApplyUsabilityGate(ability)
     return changed
 end
 
+local function CommitAbilityToRecords(ability)
+    local changed = false
+    for record in pairs(ability.records or {}) do
+        local recordChanged = record.ready ~= ability.ready
+            or record.restrictedCooldown ~= ability.restricted
+            or record.hardRestrictedCooldown ~= ability.hardRestricted
+            or record.deadline ~= ability.deadline
+            or record.readinessPending ~= ability.readinessPending
+
+        record.ready = ability.ready
+        record.restrictedCooldown = ability.restricted
+        record.hardRestrictedCooldown = ability.hardRestricted
+        record.deadline = ability.deadline
+        record.readinessPending = ability.readinessPending
+        changed = recordChanged or changed
+    end
+    return changed
+end
+
 local originalRefreshAbility = Cooldown.RefreshAbility
 function Cooldown:RefreshAbility(ability)
     local changed = originalRefreshAbility(self, ability)
     changed = ApplyUsabilityGate(ability) or changed
+
+    -- This is the final readiness policy layer loaded before source arbitration.
+    -- Commit the fully gated ability state once to every physical button. Glow
+    -- reads record.ready, so leaving the base cooldown value here would allow a
+    -- pet/usability hard restriction to display a stale ready glow.
+    changed = CommitAbilityToRecords(ability) or changed
     return changed
 end
 
@@ -110,3 +135,4 @@ function Usability:OnActionUsableChanged(changes)
 end
 
 Usability.batchedVisualCommit = true
+Usability.finalRecordCommit = true
