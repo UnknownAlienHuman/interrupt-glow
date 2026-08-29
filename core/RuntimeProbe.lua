@@ -1,559 +1,690 @@
 local IG = _G.InterruptGlow
 if not IG then return end
 
-local RuntimeProbe = {
+local Probe = {
     active = false,
-    label = nil,
-    startedAt = nil,
-    stoppedAt = nil,
     marks = {},
     restrictionTransitions = {},
-    profilerStart = nil,
-    profilerStop = nil,
     lastReport = nil,
-    lastRestrictionType = nil,
-    lastRestrictionState = nil,
+    startProfile = nil,
+    endProfile = nil,
+    diagnosticsOwner = {},
+    kbCommit = "5a992ae702a278f3893c7e8f1b212583311438b5",
+    sourceCommit = "027d26c3406d3de2cbd2b1f67d468fe033a1bcd4",
 }
-IG.RuntimeProbe = RuntimeProbe
-IG:RegisterModule("RuntimeProbe", RuntimeProbe)
+IG.RuntimeProbe = Probe
+IG:RegisterModule("RuntimeProbe", Probe)
 
 local _G = _G
+local C_AddOnProfiler = _G.C_AddOnProfiler
+local C_AddOns = _G.C_AddOns
 local C_Secrets = _G.C_Secrets
-local Enum = _G.Enum
+local CreateFrame = _G.CreateFrame
 local GetBuildInfo = _G.GetBuildInfo
 local GetInstanceInfo = _G.GetInstanceInfo
-local date = _G.date
-local pcall = pcall
+local IsInInstance = _G.IsInInstance
+local UnitGUID = _G.UnitGUID
+local UnitClassBase = _G.UnitClassBase
+local UnitAffectingCombat = _G.UnitAffectingCombat
 local type = type
-local tostring = tostring
 local pairs = pairs
-local sort = table.sort
-local concat = table.concat
-local format = string.format
+local next = next
+local tostring = tostring
+local tonumber = tonumber
+local pcall = pcall
+local table_sort = table.sort
+local math_floor = math.floor
 
-local KB_COMMIT = "312085aa8d23dfe283b416ba0f394fef1cae22dd"
-local PROVIDERS = {
-    "Bartender4",
-    "ElvUI",
-    "Dominos",
-    "ButtonForge",
-    "Blizzard_CooldownViewer",
-}
+local function SafeCall(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local ok, value = pcall(fn, ...)
+    if ok and IG.CanAccess(value) then return value end
+    return nil
+end
 
-local function SafeScalar(value, fallback)
-    if not IG.CanAccess(value) then return "<inaccessible>" end
-    if value == nil then return fallback or "nil" end
+local function SafeBooleanCall(fn, ...)
+    local value = SafeCall(fn, ...)
+    if value == true then return true end
+    if value == false then return false end
+    return nil
+end
 
+local function SafeString(value, fallback)
+    if not IG.CanAccess(value) then return fallback or "<restricted>" end
     local valueType = type(value)
     if valueType == "string" or valueType == "number" or valueType == "boolean" then
         return tostring(value)
     end
-    return "<" .. valueType .. ">"
+    if value == nil then return fallback or "nil" end
+    return fallback or "<non-scalar>"
 end
 
-local function CaptureScalar(value)
-    if not IG.CanAccess(value) then return nil end
-    local valueType = type(value)
-    if valueType == "string" or valueType == "number" or valueType == "boolean" then
-        return value
+local function CopyScalarMap(source)
+    local result = {}
+    for key, value in pairs(source or {}) do
+        if IG.CanAccess(key) and type(key) == "string" and IG.CanAccess(value) then
+            local valueType = type(value)
+            if valueType == "string" or valueType == "number" or valueType == "boolean" then
+                result[key] = value
+            end
+        end
+    end
+    return result
+end
+
+local function FormatNumber(value)
+    if type(value) ~= "number" then return "n/a" end
+    return ("%.4f"):format(value)
+end
+
+local function FormatBoolean(value)
+    if value == true then return "true" end
+    if value == false then return "false" end
+    return "unknown"
+end
+
+local function CaptureProfilerSnapshot()
+    if not C_AddOnProfiler or type(C_AddOnProfiler.GetAddOnPerformanceInfo) ~= "function" then
+        return nil
+    end
+
+    local ok, info = pcall(C_AddOnProfiler.GetAddOnPerformanceInfo, IG.name)
+    if not ok or not IG.CanAccess(info) or type(info) ~= "table" then return nil end
+
+    local result = {}
+    for key, value in pairs(info) do
+        if IG.CanAccess(key) and type(key) == "string" and IG.CanAccess(value) then
+            if type(value) == "number" then result[key] = value end
+        end
+    end
+    return result
+end
+
+local function SnapshotDelta(startSnapshot, endSnapshot)
+    local delta = {}
+    for key, endValue in pairs(endSnapshot or {}) do
+        local startValue = startSnapshot and startSnapshot[key]
+        if type(endValue) == "number" and type(startValue) == "number" then
+            delta[key] = endValue - startValue
+        elseif type(endValue) == "number" then
+            delta[key] = endValue
+        end
+    end
+    return delta
+end
+
+local function CaptureBuild()
+    if type(GetBuildInfo) ~= "function" then
+        return {
+            version = "<unavailable>",
+            build = "<unavailable>",
+            date = "<unavailable>",
+            interface = "<unavailable>",
+        }
+    end
+
+    local ok, version, build, date, interface = pcall(GetBuildInfo)
+    if not ok then
+        return {
+            version = "<error>",
+            build = "<error>",
+            date = "<error>",
+            interface = "<error>",
+        }
+    end
+
+    return {
+        version = SafeString(version),
+        build = SafeString(build),
+        date = SafeString(date),
+        interface = SafeString(interface),
+    }
+end
+
+local function CaptureInstance()
+    local inInstance, instanceType = nil, nil
+    if type(IsInInstance) == "function" then
+        local ok, value, kind = pcall(IsInInstance)
+        if ok and IG.CanAccess(value) and IG.CanAccess(kind) then
+            inInstance = value == true
+            if type(kind) == "string" then instanceType = kind end
+        end
+    end
+
+    local name, instanceID, difficultyID
+    if type(GetInstanceInfo) == "function" then
+        local ok, rawName, _, rawDifficultyID, _, _, _, _, rawInstanceID = pcall(GetInstanceInfo)
+        if ok then
+            if IG.CanAccess(rawName) and type(rawName) == "string" then name = rawName end
+            if IG.CanAccess(rawDifficultyID) and type(rawDifficultyID) == "number" then
+                difficultyID = rawDifficultyID
+            end
+            if IG.CanAccess(rawInstanceID) and type(rawInstanceID) == "number" then
+                instanceID = rawInstanceID
+            end
+        end
+    end
+
+    return {
+        inInstance = inInstance,
+        instanceType = instanceType,
+        name = name,
+        instanceID = instanceID,
+        difficultyID = difficultyID,
+    }
+end
+
+local function CaptureProviders()
+    local providers = {}
+    local names = {
+        "Blizzard_CooldownViewer",
+        "Bartender4",
+        "Dominos",
+        "ElvUI",
+        "ButtonForge",
+    }
+
+    for index = 1, #names do
+        local name = names[index]
+        providers[name] = IG:IsAddOnFullyLoaded(name)
+    end
+    return providers
+end
+
+local function CaptureUnitIdentity(unit)
+    local guid = SafeCall(UnitGUID, unit)
+    local classBase = SafeCall(UnitClassBase, unit)
+    local combat = SafeBooleanCall(UnitAffectingCombat, unit)
+    return {
+        guid = SafeString(guid),
+        classBase = SafeString(classBase),
+        combat = combat,
+    }
+end
+
+local function CaptureSecretPolicy(record)
+    local result = {
+        action = nil,
+        spell = nil,
+        cast = {},
+    }
+
+    if C_Secrets then
+        if record and record.sourceKind == "action"
+            and type(C_Secrets.ShouldActionCooldownBeSecret) == "function"
+        then
+            result.action = SafeBooleanCall(
+                C_Secrets.ShouldActionCooldownBeSecret,
+                record.sourceID
+            )
+        end
+
+        if record and type(record.canonicalSpellID) == "number" then
+            if type(C_Secrets.ShouldSpellCooldownBeSecret) == "function" then
+                result.spell = SafeBooleanCall(
+                    C_Secrets.ShouldSpellCooldownBeSecret,
+                    record.canonicalSpellID
+                )
+            elseif type(C_Secrets.GetSpellCooldownSecrecy) == "function" then
+                local secrecy = SafeCall(C_Secrets.GetSpellCooldownSecrecy, record.canonicalSpellID)
+                result.spell = secrecy ~= nil and secrecy ~= false
+            end
+        end
+
+        if type(C_Secrets.ShouldUnitSpellCastingBeSecret) == "function" then
+            result.cast.target = SafeBooleanCall(
+                C_Secrets.ShouldUnitSpellCastingBeSecret,
+                "target"
+            )
+            result.cast.focus = SafeBooleanCall(
+                C_Secrets.ShouldUnitSpellCastingBeSecret,
+                "focus"
+            )
+        end
+    end
+    return result
+end
+
+local function CaptureRepresentativeRecord()
+    for record in pairs(IG.InterruptRecords or {}) do
+        return record
     end
     return nil
 end
 
-local function SafeCall(fn, ...)
-    if type(fn) ~= "function" then return false, "<unavailable>" end
+local function CaptureAbilityState()
+    local result = {}
+    for key, ability in pairs(IG.AbilityStates or {}) do
+        if type(key) == "number" or type(key) == "string" then
+            result[#result + 1] = {
+                key = SafeString(key),
+                spell = SafeString(ability.canonicalSpellID),
+                sourceKind = SafeString(ability.sourceKind),
+                sourceID = SafeString(ability.sourceID),
+                ready = ability.ready == true,
+                restricted = ability.restricted == true,
+                hardRestricted = ability.hardRestricted == true,
+                needsPoll = ability.needsPoll == true,
+                deadline = type(ability.deadline) == "number" and ability.deadline or nil,
+                records = 0,
+            }
 
-    -- Runtime probes are explicit diagnostics. pcall contains an API error but
-    -- never declassifies a value; accessibility is still checked immediately.
-    local ok, value = pcall(fn, ...)
-    if not ok then return false, "<error>" end
-    if not IG.CanAccess(value) then return false, "<inaccessible>" end
-    return true, value
-end
-
-local function FormatBoolCall(fn, ...)
-    local ok, value = SafeCall(fn, ...)
-    if not ok then return SafeScalar(value) end
-    if value == true then return "true" end
-    if value == false then return "false" end
-    return SafeScalar(value)
-end
-
-local function GetSecrecyName(value)
-    if not IG.CanAccess(value) then return "<inaccessible>" end
-
-    local secrecy = Enum and Enum.SecrecyLevel
-    if secrecy then
-        if value == secrecy.NeverSecret then return "NeverSecret" end
-        if value == secrecy.AlwaysSecret then return "AlwaysSecret" end
-        if value == secrecy.ContextuallySecret then return "ContextuallySecret" end
+            local entry = result[#result]
+            for _ in pairs(ability.records or {}) do entry.records = entry.records + 1 end
+        end
     end
-    return SafeScalar(value)
+
+    table_sort(result, function(left, right) return left.key < right.key end)
+    return result
 end
 
-local function FormatSecrecyCall(fn, spellID)
-    local ok, value = SafeCall(fn, spellID)
-    if not ok then return SafeScalar(value) end
-    return GetSecrecyName(value)
+local function CaptureCastState()
+    local result = {}
+    for _, unit in ipairs({ "target", "focus" }) do
+        local state = IG.CastState and IG.CastState[unit]
+        if state then
+            result[unit] = {
+                active = state.active == true,
+                hostile = state.hostile == true,
+                niState = SafeString(state.niState),
+                castBarID = SafeString(state.castBarID),
+                isChannel = state.isChannel == true,
+                channelSuppressed = state.channelSuppressed == true,
+                lastEvent = SafeString(state.lastEvent),
+            }
+        end
+    end
+    return result
 end
 
-local function NormalizeLabel(value, fallback)
-    if type(value) ~= "string" then return fallback or "" end
-    value = value:gsub("[%c]", " ")
-    if #value > 96 then value = value:sub(1, 96) end
-    return value
+local function CaptureWorkerState()
+    local worker = IG.Worker
+    local result = {}
+
+    local function Add(name, frame)
+        if not frame then return end
+        local mode = worker and worker.GetMode and worker:GetMode(frame)
+        local shown = frame.IsShown and frame:IsShown() or nil
+        result[name] = {
+            mode = SafeString(mode),
+            shown = shown == true,
+        }
+    end
+
+    Add("flush", IG.flushFrame)
+    Add("prewarm", IG.Glow and IG.Glow.prewarmFrame)
+    Add("runtime", IG.Glow and IG.Glow.runtimeFrame)
+    return result
 end
 
-local function AddLine(lines, text)
-    lines[#lines + 1] = text
+local function CountWeakMap(map)
+    local count = 0
+    for _ in pairs(map or {}) do count = count + 1 end
+    return count
+end
+
+local function CurrentSummary()
+    local representative = CaptureRepresentativeRecord()
+    return {
+        build = CaptureBuild(),
+        instance = CaptureInstance(),
+        providers = CaptureProviders(),
+        player = CaptureUnitIdentity("player"),
+        counts = {
+            observedButtons = CountWeakMap(IG.ObservedButtons),
+            pendingButtons = CountWeakMap(IG.PendingButtons),
+            interruptRecords = CountWeakMap(IG.InterruptRecords),
+            abilities = CountWeakMap(IG.AbilityStates),
+        },
+        secretPolicy = CaptureSecretPolicy(representative),
+        casts = CaptureCastState(),
+        abilities = CaptureAbilityState(),
+        workers = CaptureWorkerState(),
+        stats = CopyScalarMap(IG.Stats),
+        database = {
+            schema = IG.DB and IG.DB.schema,
+            producerVersion = IG.DB and IG.DB.producerVersion,
+            interface = IG.DB and IG.DB.interface,
+        },
+    }
 end
 
 local function SortedKeys(map)
     local keys = {}
     for key in pairs(map or {}) do keys[#keys + 1] = key end
-    sort(keys, function(a, b)
-        local ta, tb = type(a), type(b)
-        if ta == tb and (ta == "number" or ta == "string") then return a < b end
-        return tostring(a) < tostring(b)
-    end)
+    table_sort(keys)
     return keys
 end
 
-local function CollectActiveSpellIDs()
-    local set = {}
-    local data = IG.Data
-
-    if data and type(data.GetActiveInterrupts) == "function" then
-        for spellID in data:GetActiveInterrupts() do
-            if type(spellID) == "number" then set[spellID] = true end
-        end
-    end
-
-    for _, ability in pairs(IG.AbilityStates or {}) do
-        local spellID = ability and ability.canonicalSpellID
-        if type(spellID) == "number" then set[spellID] = true end
-    end
-
-    return SortedKeys(set)
-end
-
-local function CollectActionSlots()
-    local set = {}
-    for _, ability in pairs(IG.AbilityStates or {}) do
-        if ability and ability.sourceKind == "action" and type(ability.sourceID) == "number" then
-            set[ability.sourceID] = true
-        end
-    end
-    return SortedKeys(set)
-end
-
-local function CaptureProfiler()
-    if IG.Debug and type(IG.Debug.ProfilerSnapshot) == "function" then
-        return IG.Debug:ProfilerSnapshot()
-    end
-    return nil
-end
-
-local function AppendBuildSection(lines)
-    AddLine(lines, "[build]")
-
-    if type(GetBuildInfo) == "function" then
-        local version, build, buildDate, interfaceVersion = GetBuildInfo()
-        AddLine(lines, "version=" .. SafeScalar(version))
-        AddLine(lines, "build=" .. SafeScalar(build))
-        AddLine(lines, "buildDate=" .. SafeScalar(buildDate))
-        AddLine(lines, "interface=" .. SafeScalar(interfaceVersion))
-    else
-        AddLine(lines, "GetBuildInfo=<unavailable>")
-    end
-
-    AddLine(lines, "addon=" .. SafeScalar(IG.name))
-    AddLine(lines, "addonVersion=" .. SafeScalar(IG.version))
-    AddLine(lines, "repository=UnknownAlienHuman/interrupt-glow")
-    AddLine(lines, "expectedInterface=" .. SafeScalar(IG.Data and IG.Data.interface))
-    AddLine(lines, "sourceBuild=" .. SafeScalar(IG.Data and IG.Data.wowBuild))
-    AddLine(lines, "sourceCommit=" .. SafeScalar(IG.Data and IG.Data.sourceCommit))
-    AddLine(lines, "kbCommit=" .. KB_COMMIT)
-    AddLine(lines, "savedSchema=" .. SafeScalar(IG.DB and IG.DB.schema))
-    AddLine(lines, "savedProducerVersion=" .. SafeScalar(IG.DB and IG.DB.producerVersion))
-    AddLine(lines, "savedInterface=" .. SafeScalar(IG.DB and IG.DB.interface))
-    AddLine(lines, "capturedAt=" .. SafeScalar(type(date) == "function" and date("!%Y-%m-%dT%H:%M:%SZ") or nil))
-end
-
-local function AppendContextSection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[context]")
-    AddLine(lines, "combat=" .. tostring(IG:IsInCombat()))
-
-    if type(GetInstanceInfo) == "function" then
-        local name, instanceType, difficultyID, difficultyName, maxPlayers,
-            dynamicDifficulty, isDynamic, instanceID, instanceGroupSize, lfgDungeonID = GetInstanceInfo()
-
-        AddLine(lines, "instanceName=" .. SafeScalar(name))
-        AddLine(lines, "instanceType=" .. SafeScalar(instanceType))
-        AddLine(lines, "difficultyID=" .. SafeScalar(difficultyID))
-        AddLine(lines, "difficultyName=" .. SafeScalar(difficultyName))
-        AddLine(lines, "maxPlayers=" .. SafeScalar(maxPlayers))
-        AddLine(lines, "dynamicDifficulty=" .. SafeScalar(dynamicDifficulty))
-        AddLine(lines, "isDynamic=" .. SafeScalar(isDynamic))
-        AddLine(lines, "instanceID=" .. SafeScalar(instanceID))
-        AddLine(lines, "instanceGroupSize=" .. SafeScalar(instanceGroupSize))
-        AddLine(lines, "lfgDungeonID=" .. SafeScalar(lfgDungeonID))
-    else
-        AddLine(lines, "GetInstanceInfo=<unavailable>")
-    end
-
-    AddLine(lines, "lastRestrictionType=" .. SafeScalar(RuntimeProbe.lastRestrictionType, "unobserved"))
-    AddLine(lines, "lastRestrictionState=" .. SafeScalar(RuntimeProbe.lastRestrictionState, "unobserved"))
-    for index = 1, #RuntimeProbe.restrictionTransitions do
-        local transition = RuntimeProbe.restrictionTransitions[index]
-        AddLine(lines, format(
-            "restriction.%d=%.3f type=%s state=%s",
-            index,
-            transition.elapsed,
-            SafeScalar(transition.restrictionType),
-            SafeScalar(transition.state)
-        ))
-    end
-end
-
-local function AppendProviderSection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[providers]")
-
-    for index = 1, #PROVIDERS do
-        local name = PROVIDERS[index]
-        AddLine(lines, name .. ".loaded=" .. tostring(IG:IsAddOnFullyLoaded(name)))
-    end
-
-    local buttons = IG.Buttons
-    AddLine(lines, "native.attached=" .. SafeScalar(buttons and buttons.nativeAttached))
-    AddLine(lines, "dominos.attached=" .. SafeScalar(buttons and buttons.dominosAttached))
-    AddLine(lines, "buttonForge.attached=" .. SafeScalar(buttons and buttons.buttonForgeAttached))
-    AddLine(lines, "cooldownViewer.attached=" .. SafeScalar(IG.CDM and IG.CDM.attached))
-end
-
-local function AppendWorkerSection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[workers]")
-
-    local worker = IG.Worker
-    local supportsFlush = false
-    local supportsPrewarm = false
-    local supportsRuntime = false
-    if worker and type(worker.SupportsOnUpdateMode) == "function" then
-        supportsFlush = worker:SupportsOnUpdateMode(IG.flushFrame) == true
-        supportsPrewarm = worker:SupportsOnUpdateMode(IG.Glow and IG.Glow.prewarmFrame) == true
-        supportsRuntime = worker:SupportsOnUpdateMode(IG.Glow and IG.Glow.runtimeFrame) == true
-    end
-
-    AddLine(lines, "flush.onUpdateMode=" .. tostring(supportsFlush))
-    AddLine(lines, "flush.dirty=" .. tostring(IG:HasDirtyWork()))
-    AddLine(lines, "prewarm.onUpdateMode=" .. tostring(supportsPrewarm))
-    AddLine(lines, "prewarm.scheduled=" .. SafeScalar(IG.Glow and IG.Glow.prewarmScheduled))
-    AddLine(lines, "prewarm.pending=" .. tostring(
-        IG.Glow ~= nil and IG.Glow.prewarmHead <= IG.Glow.prewarmTail
-    ))
-    AddLine(lines, "runtime.onUpdateMode=" .. tostring(supportsRuntime))
-    AddLine(lines, "runtime.enabled=" .. SafeScalar(IG.Glow and IG.Glow.runtimeWorkerEnabled))
-end
-
-local function AppendPolicySection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[policies]")
-
-    local policy = IG.modules and IG.modules.GCDSafetyPolicy or nil
-    AddLine(lines, "gcd.ignoreGlobalCooldownDuration=" .. SafeScalar(
-        policy and policy.ignoresGlobalCooldownInDurationAPI,
-        "unknown"
-    ))
-    AddLine(lines, "gcd.isOnGCDReadinessProof=" .. SafeScalar(
-        policy and policy.treatsIsOnGCDAsReadinessProof,
-        "unknown"
-    ))
-end
-
-local function AppendCaptureSection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[capture]")
-    AddLine(lines, "active=" .. tostring(RuntimeProbe.active))
-    AddLine(lines, "label=" .. SafeScalar(RuntimeProbe.label, ""))
-    AddLine(lines, "counterOwner=" .. SafeScalar(IG.profileCounterOwner, "none"))
-
-    local endTime = RuntimeProbe.active and IG:Now() or RuntimeProbe.stoppedAt
-    if type(RuntimeProbe.startedAt) == "number" and type(endTime) == "number" then
-        AddLine(lines, format("duration=%.3f", endTime - RuntimeProbe.startedAt))
-    else
-        AddLine(lines, "duration=0")
-    end
-
-    for index = 1, #RuntimeProbe.marks do
-        local mark = RuntimeProbe.marks[index]
-        AddLine(lines, format("mark.%d=%.3f %s", index, mark.elapsed, SafeScalar(mark.label)))
-    end
-end
-
-local function AppendCastSection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[casts]")
-
-    local units = { "target", "focus" }
-    for index = 1, #units do
-        local unit = units[index]
-        local state = IG.CastState and IG.CastState[unit] or nil
-        AddLine(lines, unit .. ".active=" .. SafeScalar(state and state.active))
-        AddLine(lines, unit .. ".hostile=" .. SafeScalar(state and state.hostile))
-        AddLine(lines, unit .. ".isChannel=" .. SafeScalar(state and state.isChannel))
-        AddLine(lines, unit .. ".niState=" .. SafeScalar(state and state.niState))
-        AddLine(lines, unit .. ".castBarID=" .. SafeScalar(state and state.castBarID))
-        AddLine(lines, unit .. ".channelSuppressed=" .. SafeScalar(state and state.channelSuppressed))
-        AddLine(lines, unit .. ".lastEvent=" .. SafeScalar(state and state.lastEvent, "unobserved"))
-    end
-
-    AddLine(lines, "upstream.WOWUI-2026-005=ACTIVE_UPSTREAM")
-    AddLine(lines, "mitigation.WOWUI-2026-005=event-authoritative-channel-stop-guard")
-end
-
-local function AppendSecrecySection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[secrecy]")
-
-    if not C_Secrets then
-        AddLine(lines, "C_Secrets=<unavailable>")
-        return
-    end
-
-    AddLine(lines, "hasSecretRestrictions=" .. FormatBoolCall(C_Secrets.HasSecretRestrictions))
-    AddLine(lines, "cooldownsSecretNow=" .. FormatBoolCall(C_Secrets.ShouldCooldownsBeSecret))
-    AddLine(lines, "targetCastSecretNow=" .. FormatBoolCall(C_Secrets.ShouldUnitSpellCastingBeSecret, "target"))
-    AddLine(lines, "focusCastSecretNow=" .. FormatBoolCall(C_Secrets.ShouldUnitSpellCastingBeSecret, "focus"))
-
-    local spellIDs = CollectActiveSpellIDs()
-    for index = 1, #spellIDs do
-        local spellID = spellIDs[index]
-        AddLine(lines, format(
-            "spell.%d cooldownPolicy=%s cooldownSecretNow=%s",
-            spellID,
-            FormatSecrecyCall(C_Secrets.GetSpellCooldownSecrecy, spellID),
-            FormatBoolCall(C_Secrets.ShouldSpellCooldownBeSecret, spellID)
-        ))
-    end
-
-    local slots = CollectActionSlots()
-    for index = 1, #slots do
-        local slot = slots[index]
-        AddLine(lines, format(
-            "action.%d cooldownSecretNow=%s",
-            slot,
-            FormatBoolCall(C_Secrets.ShouldActionCooldownBeSecret, slot)
-        ))
-    end
-end
-
-local function AppendAbilitySection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[abilities]")
-
-    local keys = SortedKeys(IG.AbilityStates)
-    if #keys == 0 then AddLine(lines, "count=0") end
-
+local function AppendMap(lines, prefix, map)
+    local keys = SortedKeys(map)
     for index = 1, #keys do
         local key = keys[index]
-        local ability = IG.AbilityStates[key]
-        if ability then
-            local recordCount = ability.records and #SortedKeys(ability.records) or 0
-            AddLine(lines, format(
-                "%s source=%s:%s canonical=%s ready=%s pending=%s restricted=%s hardRestricted=%s needsPoll=%s deadline=%s records=%s",
-                SafeScalar(key),
-                SafeScalar(ability.sourceKind),
-                SafeScalar(ability.sourceID),
-                SafeScalar(ability.canonicalSpellID),
-                SafeScalar(ability.ready),
-                SafeScalar(ability.readinessPending),
-                SafeScalar(ability.restricted),
-                SafeScalar(ability.hardRestricted),
-                SafeScalar(ability.needsPoll),
-                SafeScalar(ability.deadline),
-                SafeScalar(recordCount)
-            ))
-        end
+        lines[#lines + 1] = prefix .. key .. "=" .. SafeString(map[key])
     end
 end
 
-local function AppendCountersSection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[counters]")
-
-    local keys = SortedKeys(IG.Stats)
-    if #keys == 0 then AddLine(lines, "count=0") end
-    for index = 1, #keys do
-        local key = keys[index]
-        AddLine(lines, SafeScalar(key) .. "=" .. SafeScalar(IG.Stats[key]))
-    end
-end
-
-local function AppendSnapshot(lines, prefix, snapshot)
+local function AppendProfiler(lines, label, snapshot)
+    lines[#lines + 1] = "[profiler." .. label .. "]"
     if not snapshot then
-        AddLine(lines, prefix .. ".available=false")
+        lines[#lines + 1] = "available=false"
         return
     end
-
-    AddLine(lines, prefix .. ".available=" .. SafeScalar(snapshot.available))
-    AddLine(lines, prefix .. ".enabled=" .. SafeScalar(snapshot.enabled, "unknown"))
-    AddLine(lines, prefix .. ".ticksPerSecond=" .. SafeScalar(snapshot.ticksPerSecond, "unknown"))
-
-    local metrics = IG.Debug and IG.Debug.profilerMetrics or {}
-    for index = 1, #metrics do
-        local name = metrics[index][1]
-        local value = snapshot.metrics and snapshot.metrics[name]
-        if value ~= nil then AddLine(lines, prefix .. "." .. name .. "=" .. SafeScalar(value)) end
+    lines[#lines + 1] = "available=true"
+    local keys = SortedKeys(snapshot)
+    for index = 1, #keys do
+        local key = keys[index]
+        lines[#lines + 1] = key .. "=" .. FormatNumber(snapshot[key])
     end
 end
 
-local function AppendProfilerDeltas(lines, prefix, startSnapshot, endSnapshot)
-    if not IG.Debug or type(IG.Debug.ProfilerDelta) ~= "function" then return end
-    local delta = IG.Debug:ProfilerDelta(startSnapshot, endSnapshot)
-    AddLine(lines, prefix .. ".PeakTimeIncrease=" .. SafeScalar(delta.peakIncrease, "unknown"))
-
-    local metrics = IG.Debug.profilerMetrics or {}
-    for index = 1, #metrics do
-        local name = metrics[index][1]
-        if metrics[index][3] == true and delta.metrics[name] ~= nil then
-            AddLine(lines, prefix .. "." .. name .. "=" .. SafeScalar(delta.metrics[name]))
-        end
-    end
-end
-
-local function AppendProfilerSection(lines)
-    AddLine(lines, "")
-    AddLine(lines, "[profiler]")
-
-    local finish = RuntimeProbe.active and CaptureProfiler()
-        or RuntimeProbe.profilerStop
-        or CaptureProfiler()
-    local start = RuntimeProbe.profilerStart or finish
-
-    AppendSnapshot(lines, "start", start)
-    AppendSnapshot(lines, "end", finish)
-    AppendProfilerDeltas(lines, "delta", start, finish)
-
-    for index = 1, #RuntimeProbe.marks do
-        local mark = RuntimeProbe.marks[index]
-        if mark.profiler then
-            AddLine(lines, "marker." .. index .. ".label=" .. SafeScalar(mark.label))
-            AddLine(lines, "marker." .. index .. ".elapsed=" .. SafeScalar(mark.elapsed))
-            AppendSnapshot(lines, "marker." .. index, mark.profiler)
-            AppendProfilerDeltas(lines, "marker." .. index .. ".delta", start, mark.profiler)
-        end
-    end
-end
-
-function RuntimeProbe:BuildReport()
-    local lines = {}
-    AppendBuildSection(lines)
-    AppendContextSection(lines)
-    AppendProviderSection(lines)
-    AppendWorkerSection(lines)
-    AppendPolicySection(lines)
-    AppendCaptureSection(lines)
-    AppendCastSection(lines)
-    AppendSecrecySection(lines)
-    AppendAbilitySection(lines)
-    AppendCountersSection(lines)
-    AppendProfilerSection(lines)
-    return concat(lines, "\n")
-end
-
-function RuntimeProbe:AddMark(label, announce)
-    if not self.active then return false end
-
-    self.marks[#self.marks + 1] = {
-        elapsed = IG:Now() - self.startedAt,
-        label = NormalizeLabel(label, "mark"),
-        profiler = CaptureProfiler(),
-    }
-    if announce then IG:Print("Capture marker added.") end
-    return true
-end
-
-function RuntimeProbe:Start(label)
+function Probe:Start(label)
     if self.active then
         IG:Print("A runtime capture is already active.")
         return false
     end
 
-    local acquired, owner = IG:StartProfileCounters("capture")
-    if not acquired then
-        IG:Print("Cannot start capture while diagnostic counters are owned by " .. tostring(owner) .. ".")
-        return false
-    end
-
     self.active = true
-    self.label = NormalizeLabel(label, "")
+    self.label = type(label) == "string" and label ~= "" and label or "unnamed"
     self.startedAt = IG:Now()
-    self.stoppedAt = nil
+    self.startSummary = CurrentSummary()
+    self.startProfile = CaptureProfilerSnapshot()
+    self.endProfile = nil
     self.marks = {}
     self.restrictionTransitions = {}
     self.lastRestrictionType = nil
     self.lastRestrictionState = nil
-    self.profilerStop = nil
     self.lastReport = nil
-    self.profilerStart = CaptureProfiler()
-    IG:Print("Runtime capture started.")
+    IG:StartProfileCounters(self.diagnosticsOwner)
+    IG:BumpStat("probe.starts")
+    IG:Print("Runtime capture started: " .. self.label)
     return true
 end
 
-function RuntimeProbe:Mark(label)
+function Probe:AddMark(label, announce)
     if not self.active then
-        IG:Print("No active capture. Use /iglow capture start.")
-        return false
-    end
-    return self:AddMark(label, true)
-end
-
-function RuntimeProbe:Stop()
-    if not self.active then
-        IG:Print("No active capture.")
+        if announce then IG:Print("No runtime capture is active.") end
         return false
     end
 
-    self.stoppedAt = IG:Now()
-    self.profilerStop = CaptureProfiler()
-    self.active = false
-
-    -- Freeze the report while capture still owns the counter window, then
-    -- release ownership. This preserves unambiguous evidence without letting the
-    -- report-building step contaminate the measured profiler endpoint.
-    self.lastReport = self:BuildReport()
-    IG:StopProfileCounters("capture")
-    IG:Print("Runtime capture stopped. Use /iglow capture show.")
+    local mark = {
+        label = type(label) == "string" and label ~= "" and label
+            or ("mark-" .. tostring(#self.marks + 1)),
+        elapsed = IG:Now() - self.startedAt,
+        profile = CaptureProfilerSnapshot(),
+        stats = CopyScalarMap(IG.Stats),
+        counts = {
+            observedButtons = CountWeakMap(IG.ObservedButtons),
+            pendingButtons = CountWeakMap(IG.PendingButtons),
+            interruptRecords = CountWeakMap(IG.InterruptRecords),
+            abilities = CountWeakMap(IG.AbilityStates),
+        },
+        workers = CaptureWorkerState(),
+    }
+    self.marks[#self.marks + 1] = mark
+    IG:BumpStat("probe.marks")
+    if announce then IG:Print("Runtime capture mark: " .. mark.label) end
     return true
 end
 
-function RuntimeProbe:Show()
-    local report = self.active and self:BuildReport() or self.lastReport or self:BuildReport()
-    if IG.Debug and type(IG.Debug.ShowText) == "function" then
-        IG.Debug:ShowText("Interrupt Glow Runtime Probe", report)
-    else
-        IG:Print("Runtime report UI is unavailable.")
-    end
-end
-
-function RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
+function Probe:OnRestrictionStateChanged(restrictionType, state)
     if not self.active then return end
 
-    local safeType = CaptureScalar(restrictionType)
-    local safeState = CaptureScalar(state)
+    local safeType = nil
+    if IG.CanAccess(restrictionType) then
+        local valueType = type(restrictionType)
+        if valueType == "string" or valueType == "number" then safeType = restrictionType end
+    end
+
+    local safeState = nil
+    if IG.CanAccess(state) then
+        local valueType = type(state)
+        if valueType == "string" or valueType == "number" or valueType == "boolean" then
+            safeState = state
+        end
+    end
+
     self.lastRestrictionType = safeType
     self.lastRestrictionState = safeState
-
     self.restrictionTransitions[#self.restrictionTransitions + 1] = {
         elapsed = IG:Now() - self.startedAt,
         restrictionType = safeType,
         state = safeState,
     }
-    self:AddMark("restriction type="
-        .. SafeScalar(safeType, "unknown")
-        .. " state="
-        .. SafeScalar(safeState, "unknown"), false)
+
+    -- Segment cumulative native profiler evidence around restriction transitions.
+    self:AddMark("restriction:" .. SafeString(safeType), false)
+end
+
+function Probe:BuildReport()
+    local endSummary = self.endSummary or CurrentSummary()
+    local lines = {
+        "Interrupt Glow runtime capture",
+        "label=" .. SafeString(self.label),
+        "addonVersion=" .. SafeString(IG.version),
+        "kbCommit=" .. self.kbCommit,
+        "wowUiSourceCommit=" .. self.sourceCommit,
+        "duration=" .. FormatNumber((self.endedAt or IG:Now()) - (self.startedAt or IG:Now())),
+        "",
+        "[build]",
+        "version=" .. SafeString(endSummary.build.version),
+        "build=" .. SafeString(endSummary.build.build),
+        "date=" .. SafeString(endSummary.build.date),
+        "interface=" .. SafeString(endSummary.build.interface),
+        "savedSchema=" .. SafeString(endSummary.database.schema),
+        "savedProducerVersion=" .. SafeString(endSummary.database.producerVersion),
+        "savedInterface=" .. SafeString(endSummary.database.interface),
+        "",
+        "[instance]",
+        "inInstance=" .. FormatBoolean(endSummary.instance.inInstance),
+        "instanceType=" .. SafeString(endSummary.instance.instanceType),
+        "name=" .. SafeString(endSummary.instance.name),
+        "instanceID=" .. SafeString(endSummary.instance.instanceID),
+        "difficultyID=" .. SafeString(endSummary.instance.difficultyID),
+        "",
+        "[providers]",
+    }
+
+    AppendMap(lines, "", endSummary.providers)
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "[counts]"
+    AppendMap(lines, "", endSummary.counts)
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "[secretPolicy]"
+    lines[#lines + 1] = "action=" .. FormatBoolean(endSummary.secretPolicy.action)
+    lines[#lines + 1] = "spell=" .. FormatBoolean(endSummary.secretPolicy.spell)
+    lines[#lines + 1] = "targetCast=" .. FormatBoolean(endSummary.secretPolicy.cast.target)
+    lines[#lines + 1] = "focusCast=" .. FormatBoolean(endSummary.secretPolicy.cast.focus)
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "[workers]"
+    for _, name in ipairs({ "flush", "prewarm", "runtime" }) do
+        local worker = endSummary.workers[name]
+        if worker then
+            lines[#lines + 1] = name .. ".mode=" .. SafeString(worker.mode)
+            lines[#lines + 1] = name .. ".shown=" .. tostring(worker.shown)
+        end
+    end
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "[casts]"
+    for _, unit in ipairs({ "target", "focus" }) do
+        local cast = endSummary.casts[unit]
+        if cast then
+            lines[#lines + 1] = unit .. ".active=" .. tostring(cast.active)
+            lines[#lines + 1] = unit .. ".hostile=" .. tostring(cast.hostile)
+            lines[#lines + 1] = unit .. ".ni=" .. cast.niState
+            lines[#lines + 1] = unit .. ".castBarID=" .. cast.castBarID
+            lines[#lines + 1] = unit .. ".channel=" .. tostring(cast.isChannel)
+            lines[#lines + 1] = unit .. ".suppressed=" .. tostring(cast.channelSuppressed)
+            lines[#lines + 1] = unit .. ".lastEvent=" .. cast.lastEvent
+        end
+    end
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "[abilities]"
+    if #endSummary.abilities == 0 then
+        lines[#lines + 1] = "none=true"
+    else
+        for index = 1, #endSummary.abilities do
+            local ability = endSummary.abilities[index]
+            lines[#lines + 1] = table.concat({
+                ability.key,
+                "spell=" .. ability.spell,
+                "source=" .. ability.sourceKind .. ":" .. ability.sourceID,
+                "ready=" .. tostring(ability.ready),
+                "restricted=" .. tostring(ability.restricted),
+                "hard=" .. tostring(ability.hardRestricted),
+                "poll=" .. tostring(ability.needsPoll),
+                "deadline=" .. SafeString(ability.deadline),
+                "records=" .. tostring(ability.records),
+            }, " ")
+        end
+    end
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "[restrictionTransitions]"
+    if #self.restrictionTransitions == 0 then
+        lines[#lines + 1] = "none=true"
+    else
+        for index = 1, #self.restrictionTransitions do
+            local transition = self.restrictionTransitions[index]
+            lines[#lines + 1] = ("%d elapsed=%s type=%s state=%s"):format(
+                index,
+                FormatNumber(transition.elapsed),
+                SafeString(transition.restrictionType),
+                SafeString(transition.state)
+            )
+        end
+    end
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "[marks]"
+    if #self.marks == 0 then
+        lines[#lines + 1] = "none=true"
+    else
+        for index = 1, #self.marks do
+            local mark = self.marks[index]
+            lines[#lines + 1] = ("%d label=%s elapsed=%s observed=%s pending=%s interrupt=%s abilities=%s"):format(
+                index,
+                SafeString(mark.label),
+                FormatNumber(mark.elapsed),
+                SafeString(mark.counts.observedButtons),
+                SafeString(mark.counts.pendingButtons),
+                SafeString(mark.counts.interruptRecords),
+                SafeString(mark.counts.abilities)
+            )
+        end
+    end
+
+    lines[#lines + 1] = ""
+    AppendProfiler(lines, "start", self.startProfile)
+    lines[#lines + 1] = ""
+    AppendProfiler(lines, "end", self.endProfile)
+    lines[#lines + 1] = ""
+    AppendProfiler(lines, "delta", SnapshotDelta(self.startProfile, self.endProfile))
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "[stats]"
+    AppendMap(lines, "", endSummary.stats)
+
+    return table.concat(lines, "\n")
+end
+
+local function EnsureReportFrame()
+    if Probe.reportFrame then return Probe.reportFrame end
+    if type(CreateFrame) ~= "function" then return nil end
+
+    local frame = CreateFrame("Frame", "InterruptGlowRuntimeReportFrame", _G.UIParent, "BackdropTemplate")
+    frame:SetSize(820, 600)
+    frame:SetPoint("CENTER")
+    frame:SetFrameStrata("DIALOG")
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    frame:SetClampedToScreen(true)
+
+    if frame.SetBackdrop then
+        frame:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = true,
+            tileSize = 32,
+            edgeSize = 32,
+            insets = { left = 11, right = 12, top = 12, bottom = 11 },
+        })
+    end
+
+    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", 0, -16)
+    title:SetText("Interrupt Glow Runtime Capture")
+
+    local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", 24, -48)
+    scrollFrame:SetPoint("BOTTOMRIGHT", -38, 48)
+
+    local editBox = CreateFrame("EditBox", nil, scrollFrame)
+    editBox:SetMultiLine(true)
+    editBox:SetAutoFocus(false)
+    editBox:SetFontObject("ChatFontNormal")
+    editBox:SetWidth(740)
+    editBox:SetTextInsets(4, 4, 4, 4)
+    editBox:SetScript("OnEscapePressed", function() frame:Hide() end)
+    scrollFrame:SetScrollChild(editBox)
+
+    local close = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    close:SetSize(90, 24)
+    close:SetPoint("BOTTOMRIGHT", -24, 16)
+    close:SetText("Close")
+    close:SetScript("OnClick", function() frame:Hide() end)
+
+    frame.editBox = editBox
+    frame:Hide()
+    Probe.reportFrame = frame
+    return frame
+end
+
+function Probe:Show()
+    if not self.lastReport then
+        IG:Print("No completed runtime capture is available.")
+        return
+    end
+
+    local frame = EnsureReportFrame()
+    if not frame then
+        IG:Print("Runtime report UI is unavailable.")
+        return
+    end
+
+    frame.editBox:SetText(self.lastReport)
+    frame.editBox:HighlightText(0, 0)
+    frame.editBox:SetCursorPosition(0)
+    frame:Show()
+end
+
+function Probe:Stop()
+    if not self.active then
+        IG:Print("No runtime capture is active.")
+        return false
+    end
+
+    self:AddMark("final", false)
+    self.endProfile = CaptureProfilerSnapshot()
+    self.endSummary = CurrentSummary()
+    self.endedAt = IG:Now()
+    self.active = false
+    IG:StopProfileCounters(self.diagnosticsOwner)
+    self.lastReport = self:BuildReport()
+    IG:BumpStat("probe.stops")
+    IG:Print("Runtime capture completed: " .. SafeString(self.label))
+    self:Show()
+    return true
+end
+
+function Probe:Toggle(label)
+    if self.active then return self:Stop() end
+    return self:Start(label)
 end
