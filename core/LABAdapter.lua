@@ -28,22 +28,27 @@ local function IsButtonObject(value)
     return valueType == "table" or valueType == "userdata"
 end
 
+-- Returns stateType, stateAction, slot, identityKnown. Accessible nil/nil is a
+-- real empty identity and must clear the previous slot. Inaccessible fields are
+-- a separate fail-closed state; they also clear the old identity, but are marked
+-- restricted so one later readable update can be recognized as a transition.
 local function GetIdentity(button)
-    if not button then return nil, nil, nil end
+    if not button or not IG.CanAccess(button) then return nil, nil, nil, false end
 
     local stateType, typeKnown = IG:ReadMember(button, "_state_type")
     local stateAction, actionKnown = IG:ReadMember(button, "_state_action")
-    if not typeKnown or not actionKnown then return nil, nil, nil end
+    if not typeKnown or not actionKnown then return nil, nil, nil, false end
 
     local slot = nil
-    if stateType == "action" and IG.CanAccess(stateAction) then
+    if stateType == "action" then
         if type(stateAction) == "number" then
             slot = stateAction
         elseif type(stateAction) == "string" then
             slot = tonumber(stateAction)
         end
+        if type(slot) ~= "number" or slot <= 0 then slot = nil end
     end
-    return stateType, stateAction, slot
+    return stateType, stateAction, slot, true
 end
 
 local function RemoveFromSlot(button)
@@ -77,13 +82,14 @@ end
 local function CacheIdentity(record, button)
     if not record or not button then return false end
 
-    local stateType, stateAction, slot = GetIdentity(button)
-    if stateType == nil and stateAction == nil and slot == nil then return false end
-
-    local changed = record.labStateType ~= stateType
+    local stateType, stateAction, slot, identityKnown = GetIdentity(button)
+    local restricted = identityKnown ~= true
+    local changed = record.labIdentityRestricted ~= restricted
+        or record.labStateType ~= stateType
         or record.labStateAction ~= stateAction
         or record.labSlot ~= slot
 
+    record.labIdentityRestricted = restricted
     record.labStateType = stateType
     record.labStateAction = stateAction
     record.labSlot = slot
@@ -107,8 +113,8 @@ local function HookButton(button)
     if not button then return false end
     if hookedButtons[button] then return true end
 
-    local method = button.UpdateAction
-    if type(method) ~= "function" or type(hooksecurefunc) ~= "function" then
+    local method, methodKnown = IG:ReadMember(button, "UpdateAction")
+    if not methodKnown or type(method) ~= "function" or type(hooksecurefunc) ~= "function" then
         return false
     end
 
@@ -280,5 +286,14 @@ local originalDetach = Buttons.Detach
 function Buttons:Detach()
     if self.attached then slotEventFrame:UnregisterEvent("ACTIONBAR_SLOT_CHANGED") end
     for library in pairs(broadUpdateDisabled) do broadUpdateDisabled[library] = nil end
+    for button in pairs(buttonSlots) do RemoveFromSlot(button) end
     originalDetach(self)
 end
+
+IG:RegisterModule("LABAdapterPolicy", {
+    exactUpdateActionHooks = true,
+    accessibleEmptyIdentityClearsSlot = true,
+    inaccessibleIdentityFailsClosed = true,
+    staleSlotIndexesClearedOnDetach = true,
+    broadVisualUpdateCallbackRetiredWhenSafe = true,
+})
