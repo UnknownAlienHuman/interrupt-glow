@@ -10,6 +10,7 @@ core/Worker.lua
 core/Shared.lua
 core/DiagnosticsPolicy.lua
 core/Data.lua
+core/SpecInterruptCoveragePolicy.lua
 core/Debug.lua
 core/RuntimeProbe.lua
 core/RuntimeProbePolicy.lua
@@ -23,8 +24,10 @@ core/LABAdapter.lua
 core/ActionResolver.lua
 core/NativeActionQueuePolicy.lua
 core/Cooldown.lua
+core/SpellLossOfControlPolicy.lua
 core/ReadinessPolicy.lua
 core/Usability.lua
+core/ConditionalMacroPolicy.lua
 core/GCDSafetyPolicy.lua
 core/CachePolicy.lua
 core/AbilitySourcePolicy.lua
@@ -33,6 +36,7 @@ core/CastTracking.lua
 core/CDM.lua
 core/CDMPolicy.lua
 core/RuntimeInterruptPolicy.lua
+core/RuntimeLifecyclePolicy.lua
 core/Events.lua
 core/Slash.lua
 Options.lua
