@@ -35,6 +35,7 @@ local localTests = {
     "tests/runtime_probe.lua",
     "tests/runtime_probe_policy.lua",
     "tests/runtime_lifecycle_policy.lua",
+    "tests/runtime_event_sleep.lua",
     "tests/diagnostic_ownership.lua",
     "tests/native_callback_handles.lua",
     "tests/channel_guard.lua",
