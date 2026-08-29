@@ -84,11 +84,13 @@ end
 -- contract and is the safe discriminator between ordinary non-charge actions
 -- and a real charge ability whose currentCharges may be inaccessible.
 local function ReadChargeInfo(info, durationGetter, sourceID)
-    if info == nil then
-        return nil, nil, false, false, false, false
-    end
+    -- Contextual SecretValue tables may not even be compared with nil before an
+    -- accessibility check. Preserve strict access -> nil -> type/value ordering.
     if not IG.CanAccess(info) then
         return nil, nil, true, true, true, true
+    end
+    if info == nil then
+        return nil, nil, false, false, false, false
     end
 
     local maxCharges, maxKnown = IG:ReadMember(info, "maxCharges")
@@ -130,14 +132,14 @@ local function ReadChargeInfo(info, durationGetter, sourceID)
 end
 
 local function ReadLossOfControlState(info)
+    -- Get*LossOfControlCooldownInfo may return contextual secret data. Access is
+    -- checked before nil/type/field operations so the fail-closed branch itself
+    -- cannot trigger a forbidden SecretValue comparison.
+    if not IG.CanAccess(info) then
+        return "restricted"
+    end
     if info == nil then
         return "clear"
-    end
-    if not IG.CanAccess(info) then
-        -- LoC cooldown data is SecretWhenCooldownsRestricted. Inaccessibility is
-        -- not proof that the action is free to use; optimistic cooldown mode must
-        -- never bypass an unknown control-loss gate.
-        return "restricted"
     end
 
     local isActive, activeKnown = IG:ReadMember(info, "isActive")
