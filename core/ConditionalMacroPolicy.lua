@@ -26,6 +26,8 @@ local ACTION_ADAPTER = {
     buttonforge = true,
 }
 
+local originalMarkButtonDirty = IG.MarkButtonDirty
+
 local function ReadinessAwake()
     return type(IG.NeedsReadinessRuntime) == "function"
         and IG:NeedsReadinessRuntime() == true
@@ -69,7 +71,9 @@ local function ReadPhysicalSlot(button, record)
     local adapter = record.adapter
     if adapter == "native" then
         -- Native Blizzard action buttons expose an ordinary positive action
-        -- field. Avoid protected generic member reads in the mouseover callback.
+        -- field. Avoid protected generic member reads in the mouseover callback,
+        -- but still reject an inaccessible frame before indexing it.
+        if not IG.CanAccess(button) then return nil end
         local action = button.action
         if not IG.CanAccess(action) then return nil end
         return NormalizeSlot(action)
@@ -139,6 +143,38 @@ local function VisitSlot(slot, visitor)
     return count
 end
 
+local function ClearPendingIdentity(record)
+    if not record then return end
+    record.conditionalIdentityPending = false
+    if record.button then deferredButtons[record.button] = nil end
+end
+
+local function MarkIdentityPending(button)
+    local record = button and IG.ObservedButtons[button]
+    if not record then return false end
+
+    -- Invalidate before any dirty-queue dedupe. A second callback in the same
+    -- frame must never let ReconcileRecord consume a snapshot captured before
+    -- the latest mouseover/help/harm transition.
+    record.actionSnapshotFresh = false
+    deferredButtons[button] = true
+
+    local wasPending = record.conditionalIdentityPending == true
+    record.conditionalIdentityPending = true
+
+    -- The previous action branch may still be visibly highlighted. Hide it at
+    -- the callback boundary and keep the guard active until reconciliation.
+    if not wasPending
+        and record.isInterrupt == true
+        and record.overlay
+        and Glow
+        and type(Glow.ClearRecord) == "function"
+    then
+        Glow:ClearRecord(record)
+    end
+    return true
+end
+
 local function InvalidateSlot(slot)
     local count = VisitSlot(slot, function(button)
         IG:MarkButtonDirty(button)
@@ -148,11 +184,7 @@ local function InvalidateSlot(slot)
 end
 
 local function DeferButton(button)
-    local record = button and IG.ObservedButtons[button]
-    if record then
-        deferredButtons[button] = true
-        record.conditionalIdentityPending = true
-    end
+    MarkIdentityPending(button)
 end
 
 local function DeferSlot(slot)
@@ -185,16 +217,24 @@ end
 
 local function FlushDeferredButtons()
     if not Buttons.attached then
-        IG:WipeMap(deferredButtons)
+        for button in pairs(deferredButtons) do
+            ClearPendingIdentity(IG.ObservedButtons[button])
+            deferredButtons[button] = nil
+        end
         return 0
     end
 
     local count = 0
     for button in pairs(deferredButtons) do
-        deferredButtons[button] = nil
-        if IG.ObservedButtons[button] then
+        local record = IG.ObservedButtons[button]
+        if not record then
+            deferredButtons[button] = nil
+        elseif not IG.PendingButtons or not IG.PendingButtons[button] then
+            -- Retain the weak pending entry until ReconcileRecord completes. A
+            -- synchronous cast/visual refresh between this queue operation and
+            -- the next frame must still be unable to expose the stale branch.
             count = count + 1
-            IG:MarkButtonDirty(button)
+            originalMarkButtonDirty(IG, button)
         end
     end
 
@@ -204,10 +244,7 @@ end
 
 local originalReconcileRecord = Buttons.ReconcileRecord
 function Buttons:ReconcileRecord(record, ...)
-    if record then
-        record.conditionalIdentityPending = false
-        if record.button then deferredButtons[record.button] = nil end
-    end
+    ClearPendingIdentity(record)
     return originalReconcileRecord(self, record, ...)
 end
 
@@ -255,28 +292,36 @@ end
 local originalObserveButton = Buttons.ObserveButton
 function Buttons:ObserveButton(button, adapter, options)
     local record = originalObserveButton(self, button, adapter, options)
-    if record then RefreshButtonSlot(button, record) end
+    if record then
+        RefreshButtonSlot(button, record)
+        if Glow and type(Glow.AllowOverlayAccessRetry) == "function"
+            and Glow:AllowOverlayAccessRetry(record)
+            and not record.overlay
+        then
+            Glow:QueueShell(record, false)
+        end
+    end
     return record
 end
 
 -- Exact provider identity callbacks may fire continuously while mouseover/help/
--- harm context changes. When no cast or countdown consumes readiness, retain one
--- weak deferred record instead of waking the reconciliation worker every frame.
-local originalMarkButtonDirty = IG.MarkButtonDirty
+-- harm context changes. Every action-provider signal first invalidates the
+-- normalized identity and hides the old visual. When no cast or countdown
+-- consumes readiness, retain one weak deferred record instead of waking the
+-- reconciliation worker every frame.
 function IG:MarkButtonDirty(button)
-    local physicalButton = button and button.button or button
+    local physicalButton = button
     local record = physicalButton and IG.ObservedButtons[physicalButton]
 
     if record and (record.adapter == "lab" or record.adapter == "dominos") then
         RefreshButtonSlot(physicalButton, record)
     end
 
-    if record and ACTION_ADAPTER[record.adapter] and not ReadinessAwake() then
-        record.actionSnapshotFresh = false
-        DeferButton(physicalButton)
-        return
+    if record and ACTION_ADAPTER[record.adapter] then
+        MarkIdentityPending(physicalButton)
+        if not ReadinessAwake() then return end
     end
-    return originalMarkButtonDirty(self, button)
+    return originalMarkButtonDirty(self, physicalButton)
 end
 
 -- Keep the native callback free of action API work while readiness sleeps. The
@@ -291,9 +336,8 @@ function Buttons:OnNativeActionChanged(button, ...)
     end
 
     RefreshButtonSlot(button, record)
+    MarkIdentityPending(button)
     if not ReadinessAwake() then
-        record.actionSnapshotFresh = false
-        DeferButton(button)
         IG:BumpStat("events.nativeActionDeferred")
         return
     end
@@ -370,12 +414,19 @@ end
 
 local originalMarkAllButtonsDirty = IG.MarkAllButtonsDirty
 function IG:MarkAllButtonsDirty(...)
-    IG:WipeMap(deferredButtons)
+    -- A full rebuild will call the wrapped ReconcileRecord for every observed
+    -- button. Preserve the pending visual guard until those records are actually
+    -- reconciled instead of exposing stale macro identity in the interim.
     return originalMarkAllButtonsDirty(self, ...)
 end
 
 local originalDetach = Buttons.Detach
 function Buttons:Detach()
+    for _, record in pairs(IG.ObservedButtons) do
+        if record.conditionalIdentityPending == true then
+            record.conditionalIdentityPending = false
+        end
+    end
     IG:WipeMap(deferredButtons)
     for button in pairs(slotByButton) do RemoveButton(button) end
     return originalDetach(self)
@@ -405,9 +456,12 @@ end
 
 IG:RegisterModule("ConditionalMacroPolicy", {
     usesTargetedUsabilitySignal = true,
+    invalidatesSnapshotsBeforeActiveReconcile = true,
+    marksIdentityPendingForActiveChanges = true,
     defersIdentityWhileReadinessSleeps = true,
     flushesBeforeCooldownRefresh = true,
     hidesStaleVisualsUntilReconcile = true,
+    fullRebuildPreservesVisualGuard = true,
     publicHelpersUseMethodSemantics = true,
     parsesActionUsableChangeBatch = true,
     dirtyHookIsActionProviderOnly = true,
