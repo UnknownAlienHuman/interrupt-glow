@@ -132,6 +132,19 @@ function Buttons:ObserveButton(button, adapter, options)
     return record
 end
 
+-- LibActionButton's exact UpdateAction hook updates record.labSlot immediately
+-- before it queues the record. Refresh only that cached LAB identity here; do
+-- not add generic member reads to native/CDM/ButtonForge dirty paths.
+local originalMarkButtonDirty = IG.MarkButtonDirty
+function IG:MarkButtonDirty(button)
+    local physicalButton = button and button.button or button
+    local record = physicalButton and IG.ObservedButtons[physicalButton]
+    if record and record.adapter == "lab" then
+        RefreshButtonSlot(physicalButton, record)
+    end
+    return originalMarkButtonDirty(self, button)
+end
+
 -- Keep the native callback queue-only: the wrapper refreshes one ordinary slot
 -- field, but performs no C_ActionBar/GetActionInfo classification or cooldown
 -- work. The original callback still invalidates before dirty-queue dedupe.
@@ -164,7 +177,7 @@ IG:RegisterModule("ConditionalMacroPolicy", {
     usesTargetedUsabilitySignal = true,
     identityUpdatesWhileReadinessSleeps = true,
     parsesActionUsableChangeBatch = true,
-    wrapsGlobalDirtyQueue = false,
+    dirtyHookIsLABOnly = true,
     nativeCallbackReadsActionAPIs = false,
     slotIndexIsBounded = true,
     parsesMacroBodies = false,
