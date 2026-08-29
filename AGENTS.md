@@ -8,7 +8,7 @@
 - Interface: `120100`
 - Verified Blizzard source: `12.1.0.69497`
 - `wow-ui-source` commit: `027d26c3406d3de2cbd2b1f67d468fe033a1bcd4`
-- Shared engineering KB: `UnknownAlienHuman/wow-addon-engineering-kb@312085aa8d23dfe283b416ba0f394fef1cae22dd`
+- Shared engineering KB: `UnknownAlienHuman/wow-addon-engineering-kb@5a992ae702a278f3893c7e8f1b212583311438b5`
 
 Read this repository first. Then follow the current-first KB router and pinned Blizzard source. Historical documents are evidence, not current implementation authority.
 
@@ -53,6 +53,8 @@ Read this repository first. Then follow the current-first KB router and pinned B
 - Permanent `hooksecurefunc` hooks have a cheap module-attached guard.
 - New visual objects are created out of combat and reused.
 - `core/Worker.lua` maps one-shot work to `Enum.OnUpdateMode.RunOnce`, continuous active timing to `RunAlways`, and idle state to `Disabled`; Show/Hide exists only as a compatibility/test fallback.
+- The master switch detaches provider callbacks and target/focus watchers, stops addon workers, clears pending work, and unregisters all non-persistent runtime events. Only regen lifecycle and optional restriction telemetry remain registered while disabled.
+- Conditional native/LAB/Dominos/ButtonForge identity churn is retained in one bounded weak deferred set while neither a relevant cast nor cooldown text consumes readiness. The set is flushed before the same-frame cooldown pass when readiness wakes.
 - Target/focus identity changes reset channel-snapshot suppression; generic unit-state events do not.
 - Specialization changes prune dormant canonical abilities and reset source-readiness caches after all buttons reconcile. Same-spec macro churn retains dormant state to avoid GC churn.
 
