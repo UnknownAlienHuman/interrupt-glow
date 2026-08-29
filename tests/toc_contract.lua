@@ -36,6 +36,7 @@ local requiredOrder = {
     "core/CastTracking.lua",
     "core/CDM.lua",
     "core/CDMPolicy.lua",
+    "core/RuntimeInterruptPolicy.lua",
     "core/Events.lua",
 }
 
@@ -54,6 +55,7 @@ assert(positions["core/Glow.lua"] < positions["core/PrewarmPolicy.lua"])
 assert(positions["core/PrewarmPolicy.lua"] < positions["core/Buttons.lua"])
 assert(positions["core/AbilitySourcePolicy.lua"] < positions["core/CastTracking.lua"])
 assert(positions["core/CDM.lua"] < positions["core/CDMPolicy.lua"])
-assert(positions["core/CDMPolicy.lua"] < positions["core/Events.lua"])
+assert(positions["core/CDMPolicy.lua"] < positions["core/RuntimeInterruptPolicy.lua"])
+assert(positions["core/RuntimeInterruptPolicy.lua"] < positions["core/Events.lua"])
 
 print("TOC CONTRACT TEST PASSED")
