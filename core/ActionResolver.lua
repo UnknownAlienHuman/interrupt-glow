@@ -10,6 +10,12 @@ local pcall = pcall
 
 local originalResolveRecord = Buttons.ResolveRecord
 
+local function TrackHotPath(key)
+    if IG.DB.debug == true or IG.profileCountersEnabled == true then
+        IG:BumpStat(key)
+    end
+end
+
 local function PositiveSlot(value)
     local slot = IG:AsNumber(value)
     if type(slot) == "number" and slot > 0 then return slot end
@@ -209,8 +215,11 @@ function Buttons:ResolveRecord(record)
 end
 
 function Buttons:OnNativeActionChanged(button)
-    local record = self:ObserveButton(button, "native", { skipDirty = true })
-    if not record then return end
+    local record = button and IG.ObservedButtons[button]
+    if not record then
+        record = self:ObserveButton(button, "native", { skipDirty = true })
+        if not record then return end
+    end
 
     local slot = ResolveNativeSlot(button)
     if not slot then
@@ -219,7 +228,7 @@ function Buttons:OnNativeActionChanged(button)
         if StoreSnapshot(record, nil, nil, nil, nil, nil, false, nil) then
             record.actionSnapshotFresh = false
             IG:MarkButtonDirty(button)
-            IG:BumpStat("events.nativeActionBecameEmpty")
+            TrackHotPath("events.nativeActionBecameEmpty")
         end
         return
     end
@@ -229,10 +238,10 @@ function Buttons:OnNativeActionChanged(button)
     if StoreSnapshot(record, slot, actionType, id, subType, spellID, interrupt, assisted) then
         record.actionSnapshotFresh = true
         IG:MarkButtonDirty(button)
-        IG:BumpStat("events.nativeActionIdentityChanged")
+        TrackHotPath("events.nativeActionIdentityChanged")
     elseif interrupt == false then
-        IG:BumpStat("events.nativeFastNonInterrupt")
+        TrackHotPath("events.nativeFastNonInterrupt")
     else
-        IG:BumpStat("events.nativeActionIdentityUnchanged")
+        TrackHotPath("events.nativeActionIdentityUnchanged")
     end
 end
