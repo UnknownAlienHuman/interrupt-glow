@@ -21,6 +21,7 @@ local requiredOrder = {
     "core/Worker.lua",
     "core/Shared.lua",
     "core/Data.lua",
+    "core/SpecInterruptCoveragePolicy.lua",
     "core/RuntimeProbe.lua",
     "core/RuntimeProbePolicy.lua",
     "core/Glow.lua",
@@ -33,8 +34,10 @@ local requiredOrder = {
     "core/ActionResolver.lua",
     "core/NativeActionQueuePolicy.lua",
     "core/Cooldown.lua",
+    "core/SpellLossOfControlPolicy.lua",
     "core/ReadinessPolicy.lua",
     "core/Usability.lua",
+    "core/ConditionalMacroPolicy.lua",
     "core/GCDSafetyPolicy.lua",
     "core/CachePolicy.lua",
     "core/AbilitySourcePolicy.lua",
@@ -43,6 +46,7 @@ local requiredOrder = {
     "core/CDM.lua",
     "core/CDMPolicy.lua",
     "core/RuntimeInterruptPolicy.lua",
+    "core/RuntimeLifecyclePolicy.lua",
     "core/Events.lua",
 }
 
@@ -55,6 +59,7 @@ for index = 1, #requiredOrder do
     previousPosition = position
 end
 
+assert(positions["core/Data.lua"] < positions["core/SpecInterruptCoveragePolicy.lua"])
 assert(positions["core/RuntimeProbe.lua"] < positions["core/RuntimeProbePolicy.lua"])
 assert(positions["core/RuntimeProbePolicy.lua"] < positions["core/Glow.lua"])
 assert(positions["core/Glow.lua"] < positions["core/FrameAccessPolicy.lua"])
@@ -64,10 +69,14 @@ assert(positions["core/Buttons.lua"] < positions["core/ButtonForgePolicy.lua"])
 assert(positions["core/ButtonForgePolicy.lua"] < positions["core/NativeCallbackPolicy.lua"])
 assert(positions["core/ActionResolver.lua"] < positions["core/NativeActionQueuePolicy.lua"])
 assert(positions["core/NativeActionQueuePolicy.lua"] < positions["core/Cooldown.lua"])
+assert(positions["core/Cooldown.lua"] < positions["core/SpellLossOfControlPolicy.lua"])
+assert(positions["core/Usability.lua"] < positions["core/ConditionalMacroPolicy.lua"])
+assert(positions["core/ConditionalMacroPolicy.lua"] < positions["core/GCDSafetyPolicy.lua"])
 assert(positions["core/AbilitySourcePolicy.lua"] < positions["core/BoundSourcePolicy.lua"])
 assert(positions["core/BoundSourcePolicy.lua"] < positions["core/CastTracking.lua"])
 assert(positions["core/CDM.lua"] < positions["core/CDMPolicy.lua"])
 assert(positions["core/CDMPolicy.lua"] < positions["core/RuntimeInterruptPolicy.lua"])
-assert(positions["core/RuntimeInterruptPolicy.lua"] < positions["core/Events.lua"])
+assert(positions["core/RuntimeInterruptPolicy.lua"] < positions["core/RuntimeLifecyclePolicy.lua"])
+assert(positions["core/RuntimeLifecyclePolicy.lua"] < positions["core/Events.lua"])
 
 print("TOC CONTRACT TEST PASSED")
