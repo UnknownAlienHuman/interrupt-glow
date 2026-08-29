@@ -83,6 +83,7 @@ def check_toc() -> list[str]:
         "core/Glow.lua",
         "core/PrewarmPolicy.lua",
         "core/Buttons.lua",
+        "core/ButtonForgePolicy.lua",
         "core/NativeCallbackPolicy.lua",
         "core/LABAdapter.lua",
         "core/ActionResolver.lua",
@@ -139,12 +140,14 @@ def check_forbidden_hot_paths() -> list[str]:
 def check_action_feedback() -> list[str]:
     errors: list[str] = []
     resolver = read(ROOT / "core/ActionResolver.lua")
-    fast = section(resolver, "local function ReadActionSnapshot", "local function StoreSnapshot")
+    snapshot = section(resolver, "local function ReadActionSnapshot", "local function StoreSnapshot")
+    native_slot = section(resolver, "local function ResolveNativeSlot", "local function ResolveSlot")
 
     errors += require(
         resolver,
         (
             "local function PositiveSlot",
+            "local function ResolveNativeSlot",
             "actionSnapshotSpellID",
             "events.nativeFastNonInterrupt",
             "events.nativeActionBecameEmpty",
@@ -152,11 +155,19 @@ def check_action_feedback() -> list[str]:
         ),
         "Native action resolver",
     )
-    false_pos = fast.find("if interrupt == false then")
-    info_pos = fast.find("ReadActionInfo(slot, trustedSlot)")
-    assisted_pos = fast.find("ReadBooleanAPI(isAssisted")
+    errors += require(
+        native_slot,
+        ("local action = button.action", "IG.CanAccess(action)"),
+        "Native direct slot resolver",
+    )
+    if "IG:ReadMember" in native_slot or "pcall" in native_slot:
+        errors.append("Native slot resolver uses protected generic member access")
+
+    false_pos = snapshot.find("if interrupt == false then")
+    info_pos = snapshot.find("ReadActionInfo(slot, trustedSlot)")
+    assisted_pos = snapshot.find("ReadBooleanAPI(isAssisted")
     if false_pos < 0 or info_pos < 0 or false_pos > info_pos:
-        errors.append("Non-interrupt action feedback reads full action identity before returning")
+        errors.append("Non-interrupt action feedback reads full identity before returning")
     if false_pos < 0 or assisted_pos < 0 or false_pos > assisted_pos:
         errors.append("Non-interrupt action feedback queries Assisted Combat before returning")
 
@@ -165,6 +176,7 @@ def check_action_feedback() -> list[str]:
         test,
         (
             "one IsInterruptAction call only",
+            "protectedMemberReads == 0",
             "actionInfoCalls == 0",
             "getSpellCalls == 0",
             "ACTION RESOLVER FAST PATH TEST PASSED",
@@ -191,8 +203,9 @@ def check_secret_and_restricted_values() -> list[str]:
             "return SafeEventCastBarID(select(6, ...))",
             "channelSuppressed",
             "IsStaleCastEvent",
+            "if dead ~= false then return false end",
         ),
-        "Cast secret/channel boundary",
+        "Cast secret/channel/relation boundary",
     )
     selector = section(cast, "local function GetEventCastBarID", "local function IsStaleCastEvent")
     for forbidden in ("_castGUID", "_spellID", "_interruptedBy", "_complete"):
@@ -243,9 +256,10 @@ def check_secret_and_restricted_values() -> list[str]:
         (
             "if info == nil then",
             "if not IG.CanAccess(info) then",
+            "maxCharges ~= nil and maxCharges <= 0",
+            "if maxCharges == nil then",
+            "if currentCharges == nil then",
             "return nil, nil, true, true, true, true",
-            "currentCharges == nil",
-            "maxCharges == nil or maxCharges <= 0",
         ),
         "Charge provenance policy",
     )
@@ -310,8 +324,10 @@ def check_readiness_and_sources() -> list[str]:
             "IG:WipeMap(self.runtimeInterrupts)",
             "function Buttons:ReconcileAll()",
             "RecordHasActionSlot",
+            "RefreshActiveCDMIdentities",
             "clearsProofOnRegistryRebuild = true",
             "actionSlotsSeedBeforeSecondaryCopies = true",
+            "refreshesCDMAfterActionSeed = true",
             "propagatesNewRuntimeFamilies = true",
             "revalidatesCooldownEventMatches = true",
             "avoidsStickySeedState = true",
@@ -361,24 +377,24 @@ def check_readiness_and_sources() -> list[str]:
         (
             "record.cdmCanonicalSpellID",
             "usesCapturedPoolIdentity = true",
-            "refreshesActiveItemsAfterSpecData = true",
+            "specRefreshOwnedByRuntimeInterruptPolicy = true",
         ),
         "Cooldown Viewer identity policy",
     )
+    if "RefreshActiveSpec" in cdm_policy or "ObserveExistingItems()" in cdm_policy:
+        errors.append("CDMPolicy still owns a duplicate pre-action spec refresh")
     return errors
 
 
-def check_lifecycle_and_diagnostics() -> list[str]:
+def check_provider_and_lifecycle_policies() -> list[str]:
     errors: list[str] = []
     shared = read(ROOT / "core/Shared.lua")
     worker = read(ROOT / "core/Worker.lua")
     prewarm = read(ROOT / "core/PrewarmPolicy.lua")
     native = read(ROOT / "core/NativeCallbackPolicy.lua")
     lab = read(ROOT / "core/LABAdapter.lua")
+    buttonforge = read(ROOT / "core/ButtonForgePolicy.lua")
     options = read(ROOT / "Options.lua")
-    diagnostics = read(ROOT / "core/DiagnosticsPolicy.lua")
-    probe = read(ROOT / "core/RuntimeProbe.lua")
-    probe_policy = read(ROOT / "core/RuntimeProbePolicy.lua")
 
     errors += require(
         shared,
@@ -412,10 +428,26 @@ def check_lifecycle_and_diagnostics() -> list[str]:
             "buttonsBySlot",
             "DisableBroadUpdateIfFullyHooked",
             "ForEachButtonTable",
+            "DiscoverLibraryButtons",
+            "originalAttachLABLibrary(self, library, false, false)",
             'library.UnregisterCallback(Buttons, "OnButtonUpdate")',
         ),
-        "LAB callback policy",
+        "LAB callback/discovery policy",
     )
+    errors += require(
+        buttonforge,
+        (
+            "buttonForgeDeallocated",
+            "defersDeallocationReconcile = true",
+            "deduplicatesDeallocation = true",
+            "survivesEarlyGlobalRemoval = true",
+            "IG:MarkButtonDirty(button)",
+        ),
+        "ButtonForge lifecycle policy",
+    )
+    if "UnbindRecord" in buttonforge:
+        errors.append("ButtonForge deallocation mutates canonical binding synchronously")
+
     errors += require(
         options,
         (
@@ -427,14 +459,27 @@ def check_lifecycle_and_diagnostics() -> list[str]:
         ),
         "Settings/default lifecycle",
     )
+    return errors
+
+
+def check_diagnostics_and_pins() -> list[str]:
+    errors: list[str] = []
+    diagnostics = read(ROOT / "core/DiagnosticsPolicy.lua")
+    probe = read(ROOT / "core/RuntimeProbe.lua")
+    probe_policy = read(ROOT / "core/RuntimeProbePolicy.lua")
+
     errors += require(
         diagnostics,
         ("profileCounterOwner", "StartProfileCounters(owner)", "StopProfileCounters(owner)"),
         "Diagnostic ownership",
     )
-    for scope, text in (("RuntimeProbe", probe), ("AGENTS", read(ROOT / "AGENTS.md"))):
+    for scope, text in (
+        ("RuntimeProbe", probe),
+        ("AGENTS", read(ROOT / "AGENTS.md")),
+        ("AGENT_GUIDE", read(ROOT / "AGENT_GUIDE.md")),
+    ):
         if CURRENT_KB_COMMIT not in text:
-            errors.append(f"{scope} is not pinned to the current KB commit")
+            errors.append(f"{scope} is not pinned to current KB commit")
     errors += require(
         probe_policy,
         (
@@ -458,11 +503,14 @@ def check_tests_and_no_ci() -> list[str]:
             errors.append(f"Syntax checker does not include {relative}")
 
     focused = {
-        "tests/action_resolver_fast_path.lua": "ACTION RESOLVER FAST PATH TEST PASSED",
-        "tests/runtime_interrupt_policy.lua": "RUNTIME INTERRUPT POLICY TEST PASSED",
+        "tests/action_resolver_fast_path.lua": "protectedMemberReads == 0",
+        "tests/runtime_interrupt_policy.lua": "refreshesCDMAfterActionSeed == true",
         "tests/charge_fail_closed.lua": "CHARGE FAIL-CLOSED TEST PASSED",
         "tests/loc_fail_closed.lua": "LOSS OF CONTROL FAIL-CLOSED TEST PASSED",
-        "tests/toc_contract.lua": "core/RuntimeInterruptPolicy.lua",
+        "tests/unit_relation_fail_closed.lua": "UNIT RELATION FAIL-CLOSED TEST PASSED",
+        "tests/buttonforge_policy.lua": "deduplicatesDeallocation == true",
+        "tests/cdm_policy.lua": "specRefreshOwnedByRuntimeInterruptPolicy == true",
+        "tests/toc_contract.lua": "core/ButtonForgePolicy.lua",
         "tests/options_lifecycle.lua": "DB.debugKeep == 400",
     }
     for relative, assertion in focused.items():
@@ -483,7 +531,8 @@ def main() -> int:
         + check_action_feedback()
         + check_secret_and_restricted_values()
         + check_readiness_and_sources()
-        + check_lifecycle_and_diagnostics()
+        + check_provider_and_lifecycle_policies()
+        + check_diagnostics_and_pins()
         + check_tests_and_no_ci()
     )
     if errors:
