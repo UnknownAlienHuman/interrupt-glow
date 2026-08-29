@@ -8,6 +8,7 @@ local interruptCalls = 0
 local assistedCalls = 0
 local actionInfoCalls = 0
 local getSpellCalls = 0
+local protectedMemberReads = 0
 
 local currentInterrupt = false
 local currentAssisted = false
@@ -26,6 +27,7 @@ InterruptGlow = {
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:ReadMember(object, key)
+    protectedMemberReads = protectedMemberReads + 1
     if object == nil then return nil, false end
     return object[key], true
 end
@@ -92,12 +94,14 @@ assert(interruptCalls == 1)
 assert(assistedCalls == 0)
 assert(actionInfoCalls == 0)
 assert(getSpellCalls == 0)
+assert(protectedMemberReads == 0, "native slot used protected generic member reads")
 assert(dirtyCalls == 1)
 
 -- Repeated identical forced feedback does not wake the dirty worker.
 Buttons:OnNativeActionChanged(button)
 assert(interruptCalls == 2)
 assert(assistedCalls == 0 and actionInfoCalls == 0 and getSpellCalls == 0)
+assert(protectedMemberReads == 0)
 assert(dirtyCalls == 1)
 
 -- Interrupt branch pays the full identity cost once and stores the resolved
@@ -108,6 +112,7 @@ assert(interruptCalls == 3)
 assert(assistedCalls == 1)
 assert(actionInfoCalls == 1)
 assert(getSpellCalls == 1)
+assert(protectedMemberReads == 0)
 assert(dirtyCalls == 2)
 
 local record = assert(InterruptGlow.ObservedButtons[button])
@@ -118,6 +123,7 @@ assert(sourceKind == "action" and sourceID == 7)
 assert(spellID == 1766 and canonicalSpellID == 1766)
 assert(interruptCalls == 3 and assistedCalls == 1)
 assert(actionInfoCalls == 1 and getSpellCalls == 1)
+assert(protectedMemberReads == 0)
 assert(fallbackCalls == 0, "fresh native snapshot was re-read through the base resolver")
 
 -- Returning to the non-interrupt branch is again classification-only.
@@ -125,6 +131,7 @@ currentInterrupt = false
 Buttons:OnNativeActionChanged(button)
 assert(interruptCalls == 4)
 assert(assistedCalls == 1 and actionInfoCalls == 1 and getSpellCalls == 1)
+assert(protectedMemberReads == 0)
 assert(dirtyCalls == 3)
 
 -- Empty buttons normalize once instead of waking on every forced update.
@@ -134,5 +141,6 @@ assert(dirtyCalls == 4)
 Buttons:OnNativeActionChanged(button)
 assert(dirtyCalls == 4)
 assert(interruptCalls == 4)
+assert(protectedMemberReads == 0)
 
 print("ACTION RESOLVER FAST PATH TEST PASSED")
