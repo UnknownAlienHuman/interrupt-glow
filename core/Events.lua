@@ -36,8 +36,18 @@ local EVENTS = {
     "ADDON_RESTRICTION_STATE_CHANGED",
 }
 
+local function RuntimeActive()
+    local lifecycle = IG.RuntimeLifecycle
+    if lifecycle and type(lifecycle.IsActive) == "function" then
+        return lifecycle:IsActive()
+    end
+    return IG.DB and IG.DB.enabled == true
+end
+
 local function RuntimeNeedsReadiness()
-    return IG.NeedsReadinessRuntime and IG:NeedsReadinessRuntime() == true
+    return RuntimeActive()
+        and IG.NeedsReadinessRuntime
+        and IG:NeedsReadinessRuntime() == true
 end
 
 local function RegisterRuntimeEvents()
@@ -48,11 +58,11 @@ local function RegisterRuntimeEvents()
     frame:RegisterUnitEvent("UNIT_PET", "player")
     frame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "pet")
 
-    -- Generated 12.1 documentation gives these events no unit payload/filter.
-    -- RegisterUnitEvent(..., "player") can therefore suppress the invalidation
-    -- entirely. LoC is a hard readiness gate and must use ordinary registration.
-    frame:RegisterEvent("LOSS_OF_CONTROL_ADDED")
-    frame:RegisterEvent("LOSS_OF_CONTROL_UPDATE")
+    -- Both events carry unitTarget and Blizzard's own ActionButton event frame
+    -- registers them for player. Keep the invalidation scoped to player LoC;
+    -- party/raid crowd-control changes must not wake every interrupt ability.
+    frame:RegisterUnitEvent("LOSS_OF_CONTROL_ADDED", "player")
+    frame:RegisterUnitEvent("LOSS_OF_CONTROL_UPDATE", "player")
 end
 
 local function InitializeRuntime()
@@ -61,13 +71,17 @@ local function InitializeRuntime()
     IG.playerLoginSeen = true
     RegisterRuntimeEvents()
 
-    if IG.Data then IG.Data:RefreshActiveSpec() end
-    if IG.Buttons then IG.Buttons:Attach(true) end
-    if IG.CastTracking then IG.CastTracking:Attach() end
-    if IG.CDM then IG.CDM:Attach(true) end
-    if IG.Glow then IG.Glow:CreatePendingOverlays() end
+    if IG.RuntimeLifecycle and type(IG.RuntimeLifecycle.Initialize) == "function" then
+        IG.RuntimeLifecycle:Initialize()
+    else
+        if IG.Data then IG.Data:RefreshActiveSpec() end
+        if IG.Buttons then IG.Buttons:Attach(true) end
+        if IG.CastTracking then IG.CastTracking:Attach() end
+        if IG.CDM then IG.CDM:Attach(true) end
+        if IG.Glow then IG.Glow:CreatePendingOverlays() end
+        IG:MarkCooldownDirty(false)
+    end
 
-    IG:MarkCooldownDirty(false)
     if IG.DB.debug and IG.Debug then IG.Debug:Log("init", "version=" .. tostring(IG.version)) end
 end
 
@@ -97,6 +111,36 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if not IG.runtimeInitialized then return end
 
+    if event == "PLAYER_REGEN_ENABLED" then
+        if IG.RuntimeLifecycle and type(IG.RuntimeLifecycle.OnCombatEnded) == "function" then
+            IG.RuntimeLifecycle:OnCombatEnded()
+        elseif RuntimeActive() and IG.Glow then
+            IG.Glow:CreatePendingOverlays()
+        end
+        if IG.Options and type(IG.Options.OnCombatEnded) == "function" then
+            IG.Options:OnCombatEnded()
+        end
+        return
+    end
+
+    if event == "ADDON_RESTRICTION_STATE_CHANGED" then
+        local restrictionType, state = ...
+        if IG.RuntimeProbe then
+            IG.RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
+        end
+        if RuntimeActive() then
+            IG:BumpStat("events.restrictionChanged")
+            IG:MarkCastDirty()
+            IG:MarkCooldownDirty(false)
+        end
+        return
+    end
+
+    -- The master switch detaches target/focus and provider callbacks. The shared
+    -- event frame remains registered so Settings and regen lifecycle still work,
+    -- but all runtime event traffic becomes an immediate no-op while inactive.
+    if not RuntimeActive() then return end
+
     if event == "PLAYER_ENTERING_WORLD" then
         if IG.Buttons then IG.Buttons:RefreshPetButtons() end
         if IG.CastTracking and type(IG.CastTracking.ResetAllIdentities) == "function" then
@@ -105,14 +149,6 @@ frame:SetScript("OnEvent", function(_, event, ...)
             IG:MarkCastDirty()
         end
         IG:MarkCooldownDirty(false)
-        return
-    end
-
-    if event == "PLAYER_REGEN_ENABLED" then
-        if IG.Glow then IG.Glow:CreatePendingOverlays() end
-        if IG.Options and type(IG.Options.OnCombatEnded) == "function" then
-            IG.Options:OnCombatEnded()
-        end
         return
     end
 
@@ -211,7 +247,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "ACTION_USABLE_CHANGED" then
-        if RuntimeNeedsReadiness() and IG.Usability then
+        if IG.Usability then
+            -- Identity changes for conditional macros must be consumed even
+            -- while no relevant cast is active. MarkCooldownDirty itself keeps
+            -- readiness work asleep when there is nothing to display.
             IG.Usability:OnActionUsableChanged(...)
         end
         return
@@ -244,16 +283,6 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if event == "PET_BAR_UPDATE_COOLDOWN" or event == "PET_BAR_UPDATE_USABLE" then
         IG:MarkCooldownDirty(false)
         return
-    end
-
-    if event == "ADDON_RESTRICTION_STATE_CHANGED" then
-        local restrictionType, state = ...
-        if IG.RuntimeProbe then
-            IG.RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
-        end
-        IG:BumpStat("events.restrictionChanged")
-        IG:MarkCastDirty()
-        IG:MarkCooldownDirty(false)
     end
 end)
 
