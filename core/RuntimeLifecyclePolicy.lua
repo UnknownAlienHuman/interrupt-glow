@@ -11,6 +11,12 @@ IG:RegisterModule("RuntimeLifecyclePolicy", Lifecycle)
 
 local type = type
 
+local function SetRuntimeEventsEnabled(enabled)
+    if type(IG.SetRuntimeEventsEnabled) == "function" then
+        IG:SetRuntimeEventsEnabled(enabled)
+    end
+end
+
 local function ClearDirtyState()
     if IG.PendingButtons then IG:WipeMap(IG.PendingButtons) end
 
@@ -65,6 +71,10 @@ end
 function Lifecycle:Deactivate()
     self.enablePending = false
     local wasActive = self.active == true
+
+    -- Stop new native event traffic before provider/cast callback teardown. A
+    -- signal already queued by the client is still rejected by RuntimeActive().
+    SetRuntimeEventsEnabled(false)
 
     if wasActive then
         if IG.CDM and type(IG.CDM.Detach) == "function" then IG.CDM:Detach() end
@@ -123,6 +133,7 @@ function Lifecycle:Activate()
     end
 
     self.active = true
+    SetRuntimeEventsEnabled(true)
 
     if IG.Glow and type(IG.Glow.CreatePendingOverlays) == "function" then
         IG.Glow:CreatePendingOverlays()
@@ -177,6 +188,7 @@ end
 
 Lifecycle.masterDisableDetachesProviders = true
 Lifecycle.masterDisableDetachesCastWatchers = true
+Lifecycle.masterDisableUnregistersRuntimeEvents = true
 Lifecycle.masterDisableStopsWorkers = true
 Lifecycle.enableDiscoveryIsOutOfCombat = true
 Lifecycle.scheduledFlushIsAllowedToSelfDisable = true
