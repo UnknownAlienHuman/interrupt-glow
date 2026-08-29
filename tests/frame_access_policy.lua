@@ -7,6 +7,7 @@ local createdTextures = 0
 local stats = {}
 local secretValue = {}
 local inaccessibleButton = {}
+local inaccessibleAllowed = false
 
 InterruptGlow = {
     modules = {},
@@ -17,7 +18,9 @@ InterruptGlow = {
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value)
-    return value ~= secretValue and value ~= inaccessibleButton
+    if value == secretValue then return false end
+    if value == inaccessibleButton and not inaccessibleAllowed then return false end
+    return true
 end
 function InterruptGlow:ReadMember(container, key)
     if not self.CanAccess(container) or container == nil then return nil, false end
@@ -45,7 +48,7 @@ local function NewTexture()
 end
 
 function CreateFrame(_, _, parent)
-    assert(parent ~= inaccessibleButton, "created a child on an inaccessible frame")
+    assert(parent ~= inaccessibleButton or inaccessibleAllowed, "created a child on an inaccessible frame")
     createFrameCalls = createFrameCalls + 1
     return {
         SetAllPoints = function() end,
@@ -56,13 +59,18 @@ function CreateFrame(_, _, parent)
     }
 end
 
+local Glow = InterruptGlow.Glow
+function Glow:QueueShell(record, urgent)
+    if urgent then return self:CreateShell(record) end
+    record.overlayQueued = true
+    self.prewarmQueued[record] = true
+end
+
 local loader, loadError = loadfile(ROOT .. "/core/FrameAccessPolicy.lua")
 assert(loader, loadError)
 loader()
 
-local Glow = InterruptGlow.Glow
-
-local function AssertBlocked(button)
+local function AssertDeferred(button)
     local record = {
         button = button,
         overlayPending = true,
@@ -72,17 +80,38 @@ local function AssertBlocked(button)
     local framesBefore = createFrameCalls
     assert(Glow:CreateShell(record) == nil)
     assert(record.overlay == nil)
-    assert(record.overlayForbidden == true)
-    assert(record.overlayPending == false and record.overlayQueued == false)
+    assert(record.overlayForbidden ~= true)
+    assert(record.overlayAccessDeferred == true)
+    assert(record.overlayPending == true and record.overlayQueued == false)
     assert(Glow.prewarmQueued[record] == nil)
+    assert(createFrameCalls == framesBefore)
+    return record
+end
+
+local deferredRecord = AssertDeferred(inaccessibleButton)
+AssertDeferred({ IsForbidden = function() error("foreign frame query failed") end })
+AssertDeferred({ IsForbidden = function() return secretValue end })
+
+local function AssertForbidden(button)
+    local record = { button = button, overlayPending = true, overlayQueued = true }
+    Glow.prewarmQueued[record] = true
+    local framesBefore = createFrameCalls
+    assert(Glow:CreateShell(record) == nil)
+    assert(record.overlayForbidden == true)
+    assert(record.overlayAccessDeferred == false)
+    assert(record.overlayPending == false and record.overlayQueued == false)
     assert(createFrameCalls == framesBefore)
 end
 
-AssertBlocked(inaccessibleButton)
-AssertBlocked({ IsForbidden = function() error("foreign frame query failed") end })
-AssertBlocked({ IsForbidden = function() return secretValue end })
-AssertBlocked({ IsForbidden = function() return true end })
-AssertBlocked({ IsForbidden = "not-a-function" })
+AssertForbidden({ IsForbidden = function() return true end })
+AssertForbidden({ IsForbidden = "not-a-function" })
+
+-- A transiently inaccessible button is retried once when it becomes an urgent
+-- interrupt candidate out of combat. It was not permanently blacklisted.
+inaccessibleAllowed = true
+assert(Glow:QueueShell(deferredRecord, true) ~= nil)
+assert(deferredRecord.overlayAccessDeferred == false)
+assert(deferredRecord.overlayForbidden ~= true)
 
 local allowedButton = {
     IsForbidden = function() return false end,
@@ -92,19 +121,22 @@ local allowedRecord = { button = allowedButton }
 local overlay = assert(Glow:CreateShell(allowedRecord))
 assert(overlay == allowedRecord.overlay)
 assert(overlay.target and overlay.focus)
-assert(createFrameCalls == 2)
-assert(createdTextures == 2)
-assert((stats["ui.shellsForbidden"] or 0) == 5)
-assert((stats["ui.shellsCreated"] or 0) == 1)
 
 -- Frames without an IsForbidden method remain supported when the frame itself is
 -- ordinary and readable.
 local ordinaryRecord = { button = { GetFrameLevel = function() return 1 end } }
 assert(Glow:CreateShell(ordinaryRecord) ~= nil)
-assert(createFrameCalls == 4 and createdTextures == 4)
+
+assert(createFrameCalls == 6)
+assert(createdTextures == 6)
+assert((stats["ui.shellsDeferred"] or 0) == 3)
+assert((stats["ui.shellsForbidden"] or 0) == 2)
+assert((stats["ui.shellsCreated"] or 0) == 3)
 
 local policy = assert(InterruptGlow.modules.FrameAccessPolicy)
 assert(policy.inaccessibleForeignFrameFailsClosed == true)
+assert(policy.transientAccessFailureIsRetryable == true)
+assert(policy.confirmedForbiddenIsPermanent == true)
 assert(policy.forbiddenQueryMustReturnOrdinaryBoolean == true)
 assert(policy.ownsShellCreationBoundary == true)
 
