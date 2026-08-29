@@ -10,6 +10,12 @@ local nativeCalls = 0
 local usabilityCalls = 0
 local protectedReads = 0
 local hookCalls = 0
+local clearVisualCalls = 0
+local refreshUnitCalls = 0
+local refreshAllCalls = 0
+local refreshRecordCalls = 0
+local reconcileCalls = 0
+local reconcileSawPending = nil
 local stats = {}
 local secretValue = {}
 
@@ -30,6 +36,7 @@ InterruptGlow = {
         attached = true,
     },
     Usability = {},
+    Glow = {},
 }
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
@@ -69,12 +76,6 @@ function InterruptGlow:MarkAllButtonsDirty()
     allButtonsDirtyCalls = allButtonsDirtyCalls + 1
 end
 
-local function ClearPending()
-    for button in pairs(InterruptGlow.PendingButtons) do
-        InterruptGlow.PendingButtons[button] = nil
-    end
-end
-
 local Buttons = InterruptGlow.Buttons
 function Buttons:ObserveButton(button, adapter)
     local record = InterruptGlow.ObservedButtons[button]
@@ -89,8 +90,48 @@ end
 function Buttons:OnNativeActionChanged()
     nativeCalls = nativeCalls + 1
 end
+function Buttons:ReconcileRecord(record)
+    reconcileCalls = reconcileCalls + 1
+    reconcileSawPending = record and record.conditionalIdentityPending == true
+end
 function Buttons:Detach()
     self.attached = false
+end
+
+local Glow = InterruptGlow.Glow
+function Glow:ClearRecord(record)
+    clearVisualCalls = clearVisualCalls + 1
+    record.visualVisible = false
+end
+function Glow:RefreshRecord(record)
+    refreshRecordCalls = refreshRecordCalls + 1
+    record.visualVisible = true
+end
+function Glow:RefreshUnit()
+    refreshUnitCalls = refreshUnitCalls + 1
+    for _, record in pairs(InterruptGlow.ObservedButtons) do
+        self:RefreshRecord(record)
+    end
+end
+function Glow:RefreshAll()
+    refreshAllCalls = refreshAllCalls + 1
+    for _, record in pairs(InterruptGlow.ObservedButtons) do
+        self:RefreshRecord(record)
+    end
+end
+
+local function ReconcilePending()
+    for button in pairs(InterruptGlow.PendingButtons) do
+        InterruptGlow.PendingButtons[button] = nil
+        local record = InterruptGlow.ObservedButtons[button]
+        if record then Buttons:ReconcileRecord(record) end
+    end
+end
+
+local function ClearPending()
+    for button in pairs(InterruptGlow.PendingButtons) do
+        InterruptGlow.PendingButtons[button] = nil
+    end
 end
 
 local dominosButton = {}
@@ -130,12 +171,23 @@ loader()
 local native = { action = 7 }
 local nativeRecord = Buttons:ObserveButton(native, "native")
 assert(nativeRecord ~= nil)
+nativeRecord.visualVisible = true
 
 -- With no relevant cast/countdown, ACTION_USABLE_CHANGED stores one weak button
 -- and skips the base ability scan and dirty worker entirely.
 assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = 7 } }) == false)
 assert(usabilityCalls == 0)
 assert(dirtyCalls == 0)
+assert(nativeRecord.conditionalIdentityPending == true)
+
+-- A new relevant cast refreshes unit visuals synchronously before the queued
+-- button reconcile. A pending conditional identity must never flash the stale
+-- interrupt branch during that window.
+local clearBefore = clearVisualCalls
+Glow:RefreshUnit("target")
+assert(refreshUnitCalls == 1)
+assert(clearVisualCalls > clearBefore)
+assert(nativeRecord.visualVisible == false)
 
 -- CastTracking requests cooldown readiness only after normalized cast state is
 -- relevant. Deferred identity flushes first and is queued for the same frame.
@@ -143,7 +195,16 @@ readinessAwake = true
 assert(InterruptGlow:MarkCooldownDirty(false) == true)
 assert(cooldownDirtyCalls == 1)
 assert(dirtyCalls == 1)
-ClearPending()
+assert(nativeRecord.conditionalIdentityPending == true)
+ReconcilePending()
+assert(reconcileCalls == 1)
+assert(reconcileSawPending == false)
+assert(nativeRecord.conditionalIdentityPending == false)
+
+-- Once reconciled, ordinary visual refresh resumes.
+Glow:RefreshRecord(nativeRecord)
+assert(refreshRecordCalls >= 1)
+assert(nativeRecord.visualVisible == true)
 
 -- While readiness is consumed, the original usability gate and targeted slot
 -- invalidation both remain active.
@@ -167,15 +228,24 @@ ClearPending()
 -- The same callback becomes a zero-action-API deferred record while sleeping.
 readinessAwake = false
 native.action = 13
+nativeRecord.visualVisible = true
 Buttons:OnNativeActionChanged(native)
 assert(nativeCalls == 1)
 assert(dirtyCalls == 3)
+assert(nativeRecord.conditionalIdentityPending == true)
 assert(Buttons:InvalidateConditionalMacroSlot(8) == 0)
+clearBefore = clearVisualCalls
+Glow:RefreshAll()
+assert(refreshAllCalls == 1)
+assert(clearVisualCalls > clearBefore)
+assert(nativeRecord.visualVisible == false)
 readinessAwake = true
 InterruptGlow:MarkCooldownDirty(false)
 assert(cooldownDirtyCalls == 2)
 assert(dirtyCalls == 4)
-ClearPending()
+ReconcilePending()
+assert(nativeRecord.conditionalIdentityPending == false)
+assert(reconcileSawPending == false)
 
 -- LibActionButton updates record.labSlot before MarkButtonDirty. The targeted
 -- wrapper refreshes cached identity, but only wakes reconciliation when needed.
@@ -225,11 +295,13 @@ ClearPending()
 readinessAwake = false
 InterruptGlow:MarkButtonDirty(native)
 assert(dirtyCalls == 11)
+assert(nativeRecord.conditionalIdentityPending == true)
 readinessAwake = true
 InterruptGlow:MarkCooldownDirty(false)
 assert(cooldownDirtyCalls == 3)
 assert(dirtyCalls == 12)
-ClearPending()
+ReconcilePending()
+assert(nativeRecord.conditionalIdentityPending == false)
 
 -- Restricted payloads and fields never enter the index or become table keys.
 readinessAwake = false
@@ -248,6 +320,8 @@ local policy = assert(InterruptGlow.modules.ConditionalMacroPolicy)
 assert(policy.usesTargetedUsabilitySignal == true)
 assert(policy.defersIdentityWhileReadinessSleeps == true)
 assert(policy.flushesBeforeCooldownRefresh == true)
+assert(policy.hidesStaleVisualsUntilReconcile == true)
+assert(policy.publicHelpersUseMethodSemantics == true)
 assert(policy.parsesActionUsableChangeBatch == true)
 assert(policy.dirtyHookIsActionProviderOnly == true)
 assert(policy.nativeCallbackReadsActionAPIs == false)
