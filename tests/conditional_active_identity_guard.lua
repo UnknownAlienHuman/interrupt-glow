@@ -13,6 +13,7 @@ local refreshUnitCalls = 0
 local reconcileCalls = 0
 local reconcileSawPending = nil
 local reconcileSawFreshSnapshot = nil
+local failNextReconcile = false
 
 InterruptGlow = {
     modules = {},
@@ -71,6 +72,10 @@ function Buttons:ReconcileRecord(record)
     reconcileCalls = reconcileCalls + 1
     reconcileSawPending = record.conditionalIdentityPending == true
     reconcileSawFreshSnapshot = record.actionSnapshotFresh == true
+    if failNextReconcile then
+        failNextReconcile = false
+        error("forced reconcile failure")
+    end
 end
 function Buttons:AttachDominosNow() end
 function Buttons:Detach() self.attached = false end
@@ -90,8 +95,6 @@ function Glow:RefreshRecord(record)
 end
 function Glow:RefreshUnit()
     refreshUnitCalls = refreshUnitCalls + 1
-    -- Match the real Glow:RefreshUnit boundary: it writes candidates directly
-    -- and therefore can try to expose stale record state before reconciliation.
     for record in pairs(InterruptGlow.InterruptRecords) do
         record.visualVisible = true
     end
@@ -121,8 +124,8 @@ local function ReconcilePending()
     end
 end
 
--- Active ACTION_USABLE_CHANGED must invalidate the normalized action snapshot,
--- mark identity pending and hide the old interrupt visual before next-frame work.
+-- Active ACTION_USABLE_CHANGED invalidates the normalized action snapshot,
+-- marks identity pending and hides the old interrupt visual before next-frame work.
 assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = 7 } }) == true)
 assert(usabilityBaseCalls == 1)
 assert(dirtyCalls == 1)
@@ -130,8 +133,6 @@ assert(record.actionSnapshotFresh == false)
 assert(record.conditionalIdentityPending == true)
 assert(record.visualVisible == false)
 
--- A synchronous unit refresh is allowed to write the old candidate first, but
--- the policy must clear it again before returning to the renderer.
 local clearsBeforeRefresh = clearCalls
 Glow:RefreshUnit("target")
 assert(refreshUnitCalls == 1)
@@ -140,9 +141,10 @@ assert(record.visualVisible == false)
 
 ReconcilePending()
 assert(reconcileCalls == 1)
-assert(reconcileSawPending == false)
+assert(reconcileSawPending == true)
 assert(reconcileSawFreshSnapshot == false)
 assert(record.conditionalIdentityPending == false)
+assert(record.visualVisible == true)
 
 -- The exact native callback has the same active-cast guard.
 record.actionSnapshotFresh = true
@@ -154,16 +156,36 @@ assert(record.actionSnapshotFresh == false)
 assert(record.conditionalIdentityPending == true)
 assert(record.visualVisible == false)
 ReconcilePending()
+assert(record.conditionalIdentityPending == false)
+assert(record.visualVisible == true)
+
+-- Resolver failure must not remove the visual guard. The old branch remains
+-- hidden on later unit refreshes until a successful reconciliation completes.
+record.actionSnapshotFresh = true
+record.visualVisible = true
+Buttons:OnNativeActionChanged(button)
+assert(dirtyCalls == 3)
+assert(record.conditionalIdentityPending == true)
+InterruptGlow.PendingButtons[button] = nil
+failNextReconcile = true
+local ok, err = pcall(Buttons.ReconcileRecord, Buttons, record)
+assert(ok == false and tostring(err):find("forced reconcile failure", 1, true))
+assert(record.conditionalIdentityPending == true)
+assert(record.visualVisible == false)
+Glow:RefreshUnit("target")
+assert(record.visualVisible == false)
+Buttons:ReconcileRecord(record)
+assert(record.conditionalIdentityPending == false)
+assert(record.visualVisible == true)
 
 -- While readiness sleeps, callbacks do not wake reconciliation. A later full
--- rebuild must preserve the pending visual guard instead of deleting its weak
--- deferred entry before the new cast can flush it.
+-- rebuild preserves the pending visual guard until the actual reconcile.
 readinessAwake = false
 record.actionSnapshotFresh = true
 record.visualVisible = true
 Buttons:OnNativeActionChanged(button)
-assert(nativeBaseCalls == 1)
-assert(dirtyCalls == 2)
+assert(nativeBaseCalls == 2)
+assert(dirtyCalls == 3)
 assert(record.actionSnapshotFresh == false)
 assert(record.conditionalIdentityPending == true)
 assert(record.visualVisible == false)
@@ -176,15 +198,16 @@ assert(record.visualVisible == false)
 readinessAwake = true
 InterruptGlow:MarkCooldownDirty(false)
 assert(cooldownDirtyCalls == 1)
-assert(dirtyCalls == 3)
+assert(dirtyCalls == 4)
 assert(record.conditionalIdentityPending == true)
 ReconcilePending()
 assert(record.conditionalIdentityPending == false)
-assert(reconcileSawPending == false)
+assert(reconcileSawPending == true)
 assert(reconcileSawFreshSnapshot == false)
+assert(record.visualVisible == true)
 
--- Detach clears any retained pending marker so a later lifecycle activation
--- starts from a normal full discovery/reconcile boundary.
+-- Detach clears retained pending markers so a later activation starts from a
+-- normal full discovery/reconcile boundary.
 readinessAwake = false
 Buttons:OnNativeActionChanged(button)
 assert(record.conditionalIdentityPending == true)
@@ -194,6 +217,9 @@ assert(record.conditionalIdentityPending == false)
 local policy = assert(InterruptGlow.modules.ConditionalMacroPolicy)
 assert(policy.invalidatesSnapshotsBeforeActiveReconcile == true)
 assert(policy.marksIdentityPendingForActiveChanges == true)
+assert(policy.retainsVisualGuardThroughReconcile == true)
+assert(policy.failedReconcileRemainsFailClosed == true)
+assert(policy.separatesActiveGuardFromSleepingQueue == true)
 assert(policy.defersIdentityWhileReadinessSleeps == true)
 assert(policy.flushesBeforeCooldownRefresh == true)
 assert(policy.hidesStaleVisualsUntilReconcile == true)
