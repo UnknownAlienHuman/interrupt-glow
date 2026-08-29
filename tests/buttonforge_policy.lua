@@ -32,6 +32,9 @@ function InterruptGlow.Buttons:ObserveButtonForgeName(name)
         isInterrupt = true,
     }
 end
+function InterruptGlow.Buttons:ResolveButtonForge(record)
+    return record.buttonForgeSpellID ~= nil
+end
 function InterruptGlow.Buttons:OnButtonForgeEvent()
     delegatedEvents = delegatedEvents + 1
 end
@@ -44,6 +47,7 @@ local Buttons = InterruptGlow.Buttons
 Buttons:ObserveButtonForgeName(buttonName)
 local record = assert(InterruptGlow.ObservedButtons[button])
 assert(record.buttonForgeName == buttonName)
+assert(record.buttonForgeDeallocated == false)
 
 -- Simulate ButtonForge clearing its global before sending deallocation. The
 -- policy-owned weak name map must still locate the observed physical button.
@@ -53,21 +57,34 @@ assert(record.buttonForgeObject == nil)
 assert(record.buttonForgeMode == nil)
 assert(record.buttonForgeMacroMode == nil)
 assert(record.buttonForgeSpellID == nil)
+assert(record.buttonForgeDeallocated == true)
 assert(record.isInterrupt == true,
     "ButtonForge deallocation unbound synchronously inside provider callback")
 assert(dirtyCalls == 1)
 assert(delegatedEvents == 0)
 
--- Duplicate deallocation is a no-op once ordinary identity has already cleared.
-record.isInterrupt = false
+-- Duplicate deallocation before the addon flush must remain a no-op even though
+-- isInterrupt is still true until deferred reconciliation runs.
 Buttons:OnButtonForgeEvent("BUTTON_DEALLOCATED", buttonName)
 assert(dirtyCalls == 1)
+
+-- Re-allocation re-arms the lifecycle and a resolved current identity clears the
+-- dedupe marker.
+_G[buttonName] = button
+record.buttonForgeObject = object
+record.buttonForgeMode = "spell"
+record.buttonForgeSpellID = 1766
+Buttons:ObserveButtonForgeName(buttonName)
+assert(record.buttonForgeDeallocated == false)
+assert(Buttons:ResolveButtonForge(record) == true)
+assert(record.buttonForgeDeallocated == false)
 
 Buttons:OnButtonForgeEvent("BUTTON_ALLOCATED", buttonName)
 assert(delegatedEvents == 1)
 
 local policy = assert(InterruptGlow.modules.ButtonForgePolicy)
 assert(policy.defersDeallocationReconcile == true)
+assert(policy.deduplicatesDeallocation == true)
 assert(policy.survivesEarlyGlobalRemoval == true)
 
 print("BUTTONFORGE POLICY TEST PASSED")
