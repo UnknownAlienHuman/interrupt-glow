@@ -4,18 +4,14 @@ if not IG or not IG.Buttons or not IG.Usability then return end
 local Buttons = IG.Buttons
 local Usability = IG.Usability
 local pairs = pairs
+local next = next
 local type = type
 local tonumber = tonumber
 
 -- Conditional macro resolution can change when mouseover/help/harm context
--- changes without changing the physical action slot. ACTION_USABLE_CHANGED is
--- the bounded current-client signal already consumed by the readiness layer.
--- Maintain an O(1) slot -> observed-button index so that the same event can
--- request identity reconciliation for only the affected physical buttons.
---
--- This preserves in-combat heal/interrupt macro switching without restoring a
--- frame scan, a 1..540 slot scan, macro-body parsing, or LibActionButton's broad
--- visual-update callback.
+-- changes without changing the physical action slot. Keep a bounded
+-- slot -> observed-button index and consume the current ACTION_USABLE_CHANGED
+-- batch without scanning action slots or parsing macro bodies.
 local slotByButton = setmetatable({}, { __mode = "k" })
 local buttonsBySlot = {}
 
@@ -44,18 +40,26 @@ local function ReadPhysicalSlot(button, record)
     local slot = record and NormalizeSlot(record.labSlot)
     if slot then return slot end
 
-    local action, actionKnown = IG:ReadMember(button, "action")
-    if actionKnown then
-        slot = NormalizeSlot(action)
-        if slot then return slot end
+    slot = record and NormalizeSlot(record.dominosSlot)
+    if slot then return slot end
+
+    if record and record.adapter == "native" then
+        -- Native Blizzard action buttons expose an ordinary positive action
+        -- field. Avoid protected generic member reads in the mouseover callback.
+        local action = button.action
+        if not IG.CanAccess(action) then return nil end
+        return NormalizeSlot(action)
     end
 
     local stateType, typeKnown = IG:ReadMember(button, "_state_type")
     local stateAction, actionStateKnown = IG:ReadMember(button, "_state_action")
     if typeKnown and actionStateKnown and stateType == "action" then
-        return NormalizeSlot(stateAction)
+        slot = NormalizeSlot(stateAction)
+        if slot then return slot end
     end
 
+    local action, actionKnown = IG:ReadMember(button, "action")
+    if actionKnown then return NormalizeSlot(action) end
     return nil
 end
 
@@ -107,6 +111,20 @@ local function InvalidateSlot(slot)
     return count
 end
 
+local function InvalidateChanges(changes)
+    if not IG.CanAccess(changes) or type(changes) ~= "table" then return 0 end
+
+    local count = 0
+    for _, change in pairs(changes) do
+        local slot, slotKnown = IG:ReadMember(change, "slot")
+        if slotKnown then
+            slot = IG:AsNumber(slot)
+            if type(slot) == "number" then count = count + InvalidateSlot(slot) end
+        end
+    end
+    return count
+end
+
 local originalObserveButton = Buttons.ObserveButton
 function Buttons:ObserveButton(button, adapter, options)
     local record = originalObserveButton(self, button, adapter, options)
@@ -114,22 +132,21 @@ function Buttons:ObserveButton(button, adapter, options)
     return record
 end
 
-local originalMarkButtonDirty = IG.MarkButtonDirty
-function IG:MarkButtonDirty(button)
-    local physicalButton = button and button.button or button
-    if physicalButton then
-        RefreshButtonSlot(physicalButton, IG.ObservedButtons[physicalButton])
-    end
-    return originalMarkButtonDirty(self, button)
+-- Keep the native callback queue-only: the wrapper refreshes one ordinary slot
+-- field, but performs no C_ActionBar/GetActionInfo classification or cooldown
+-- work. The original callback still invalidates before dirty-queue dedupe.
+local originalOnNativeActionChanged = Buttons.OnNativeActionChanged
+function Buttons:OnNativeActionChanged(button, ...)
+    local result = originalOnNativeActionChanged(self, button, ...)
+    local record = button and IG.ObservedButtons[button]
+    if record then RefreshButtonSlot(button, record) end
+    return result
 end
 
 local originalOnActionUsableChanged = Usability.OnActionUsableChanged
-function Usability:OnActionUsableChanged(slot, ...)
-    -- Preserve the readiness module's filtering first, then request a physical
-    -- identity refresh for the same accessible slot. The shared dirty queue
-    -- coalesces repeated signals to one reconciliation per button per frame.
-    local result = originalOnActionUsableChanged(self, slot, ...)
-    InvalidateSlot(slot)
+function Usability:OnActionUsableChanged(changes, ...)
+    local result = originalOnActionUsableChanged(self, changes, ...)
+    InvalidateChanges(changes)
     return result
 end
 
@@ -141,9 +158,14 @@ end
 
 Buttons.RefreshConditionalMacroSlot = RefreshButtonSlot
 Buttons.InvalidateConditionalMacroSlot = InvalidateSlot
+Buttons.InvalidateConditionalMacroChanges = InvalidateChanges
 
 IG:RegisterModule("ConditionalMacroPolicy", {
     usesTargetedUsabilitySignal = true,
+    identityUpdatesWhileReadinessSleeps = true,
+    parsesActionUsableChangeBatch = true,
+    wrapsGlobalDirtyQueue = false,
+    nativeCallbackReadsActionAPIs = false,
     slotIndexIsBounded = true,
     parsesMacroBodies = false,
     scansActionSlots = false,
