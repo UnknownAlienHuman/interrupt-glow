@@ -24,7 +24,6 @@ core/LABAdapter.lua
 core/ActionResolver.lua
 core/NativeActionQueuePolicy.lua
 core/Cooldown.lua
-core/SpellLossOfControlPolicy.lua
 core/ReadinessPolicy.lua
 core/Usability.lua
 core/ConditionalMacroPolicy.lua
