@@ -16,6 +16,13 @@ local function PositiveSlot(value)
     return nil
 end
 
+local function ResolveNativeSlot(button)
+    if not button then return nil end
+    local action = button.action
+    if not IG.CanAccess(action) then return nil end
+    return PositiveSlot(action)
+end
+
 local function ResolveSlot(button)
     local stateType, stateTypeKnown = IG:ReadMember(button, "_state_type")
     if stateTypeKnown and stateType == "action" then
@@ -176,8 +183,12 @@ function Buttons:ResolveRecord(record)
         return originalResolveRecord(self, record)
     end
 
-    local slot = ResolveSlot(record.button)
-    if not slot then return originalResolveRecord(self, record) end
+    local trustedSlot = record.adapter == "native"
+    local slot = trustedSlot and ResolveNativeSlot(record.button) or ResolveSlot(record.button)
+    if not slot then
+        if trustedSlot then return false end
+        return originalResolveRecord(self, record)
+    end
 
     local actionType, id, subType, spellID, interrupt, assisted
     if record.actionSnapshotFresh == true and record.actionSnapshotSlot == slot then
@@ -189,7 +200,6 @@ function Buttons:ResolveRecord(record)
         interrupt = record.actionSnapshotInterrupt
         assisted = record.actionSnapshotAssisted
     else
-        local trustedSlot = record.adapter == "native"
         actionType, id, subType, spellID, interrupt, assisted =
             ReadActionSnapshot(slot, trustedSlot)
         StoreSnapshot(record, slot, actionType, id, subType, spellID, interrupt, assisted)
@@ -202,7 +212,7 @@ function Buttons:OnNativeActionChanged(button)
     local record = self:ObserveButton(button, "native", { skipDirty = true })
     if not record then return end
 
-    local slot = ResolveSlot(button)
+    local slot = ResolveNativeSlot(button)
     if not slot then
         -- Empty native buttons can receive repeated forced updates. Normalize the
         -- empty state once instead of waking the dirty worker every time.
