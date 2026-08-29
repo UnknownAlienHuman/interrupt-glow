@@ -1,4 +1,4 @@
-# One-time release transport. Delete after v1.1.0-beta.6 is published.
+# One-time release transport. Delete after v1.1.0-beta.6 is published. PR trigger revision 2.
 name: One-shot release package
 
 on:
