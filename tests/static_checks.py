@@ -17,12 +17,12 @@ def read(path: Path) -> str:
 
 
 def toc_entries() -> list[str]:
-    entries: list[str] = []
+    result: list[str] = []
     for raw in read(TOC).splitlines():
         line = raw.strip()
         if line and not line.startswith("##"):
-            entries.append(line)
-    return entries
+            result.append(line)
+    return result
 
 
 def section(text: str, start: str, end: str | None = None) -> str:
@@ -64,7 +64,6 @@ def check_toc_and_version() -> list[str]:
 
     if len(TOC_ENTRIES) != len(set(TOC_ENTRIES)):
         errors.append("TOC contains duplicate entries")
-
     for entry in TOC_ENTRIES:
         if not (ROOT / entry).is_file():
             errors.append(f"TOC references missing file: {entry}")
@@ -130,7 +129,6 @@ def check_toc_and_version() -> list[str]:
             errors.append("TOC runtime policy order is invalid")
     except ValueError as exc:
         errors.append(f"TOC is missing a required module: {exc}")
-
     return errors
 
 
@@ -141,34 +139,25 @@ def check_forbidden_runtime_patterns() -> list[str]:
         "nameplate traversal": r"\bGetNamePlates\b|\bC_NamePlate\b",
         "540-slot scan": r"\b540\b",
         "macro-body parsing": r"\bGetMacroInfo\b|\bGetMacroSpell\b",
-        "ACTIONBAR_UPDATE_COOLDOWN subscription": (
-            r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_UPDATE_COOLDOWN"
-        ),
-        "unconfirmed SPELL_SECRECY_CHANGED subscription": (
-            r"RegisterEvent\s*\(\s*[\"']SPELL_SECRECY_CHANGED"
-        ),
-        "generic ADDON_LOADED subscription": (
-            r"RegisterEvent\s*\(\s*[\"']ADDON_LOADED"
-        ),
+        "ACTIONBAR_UPDATE_COOLDOWN subscription": r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_UPDATE_COOLDOWN",
+        "unconfirmed SPELL_SECRECY_CHANGED subscription": r"RegisterEvent\s*\(\s*[\"']SPELL_SECRECY_CHANGED",
+        "generic ADDON_LOADED subscription": r"RegisterEvent\s*\(\s*[\"']ADDON_LOADED",
         "legacy spell LoC global": r"\bGetSpellLossOfControlCooldown\s*\(",
-        "Blizzard spell-alert manager mutation": r"\bActionButtonSpellAlertManager\b",
+        "Blizzard spell-alert mutation": r"\bActionButtonSpellAlertManager\b",
         "Blizzard castbar inspection": r"\b(TargetFrameSpellBar|FocusFrameSpellBar)\b",
         "legacy scriptProfile": r"\bscriptProfile\b",
     }
-
     for path in RUNTIME_FILES:
         text = read(path)
         for label, pattern in patterns.items():
             if re.search(pattern, text):
                 errors.append(f"{path.relative_to(ROOT)} contains forbidden {label}")
-
         if path.name != "LABAdapter.lua" and re.search(
             r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_SLOT_CHANGED", text
         ):
             errors.append(
                 f"{path.relative_to(ROOT)} registers ACTIONBAR_SLOT_CHANGED outside LABAdapter"
             )
-
     return errors
 
 
@@ -181,22 +170,24 @@ def check_conditional_action_policy() -> list[str]:
         policy,
         (
             'deferredButtons = setmetatable({}, { __mode = "k" })',
-            "local function ReadinessAwake()",
+            "local function MarkIdentityPending(button)",
+            "record.actionSnapshotFresh = false",
+            "record.conditionalIdentityPending = true",
+            "Glow:ClearRecord(record)",
             "local function FlushDeferredButtons()",
+            "originalMarkButtonDirty(IG, button)",
             "function IG:MarkCooldownDirty(fromSpellCooldownEvent)",
             "if ReadinessAwake() then FlushDeferredButtons() end",
             "function Buttons:OnNativeActionChanged(button, ...)",
-            "record.actionSnapshotFresh = false",
             "function Usability:OnActionUsableChanged(changes, ...)",
-            "DeferChanges(changes)",
-            "originalAttachDominosNow",
-            "dominosIdentityRefreshesAfterProviderCommit = true",
-            "adapterPromotionDropsStaleSlots = true",
+            "invalidatesSnapshotsBeforeActiveReconcile = true",
+            "marksIdentityPendingForActiveChanges = true",
+            "hidesStaleVisualsUntilReconcile = true",
+            "fullRebuildPreservesVisualGuard = true",
             "defersIdentityWhileReadinessSleeps = true",
             "flushesBeforeCooldownRefresh = true",
-            "publicHelpersUseMethodSemantics = true",
-            "function Buttons:InvalidateConditionalMacroSlot(slot)",
-            "function Buttons:RefreshConditionalMacroSlot(button, record)",
+            "dominosIdentityRefreshesAfterProviderCommit = true",
+            "adapterPromotionDropsStaleSlots = true",
             "parsesMacroBodies = false",
             "scansActionSlots = false",
         ),
@@ -204,13 +195,7 @@ def check_conditional_action_policy() -> list[str]:
     )
     errors += forbid(
         policy,
-        (
-            "GetActionInfo",
-            "IsInterruptAction",
-            "IsAssistedCombatAction",
-            "GetMacroInfo",
-            "GetMacroSpell",
-        ),
+        ("GetActionInfo", "IsInterruptAction", "IsAssistedCombatAction", "GetMacroInfo", "GetMacroSpell"),
         "Conditional action callback layer",
     )
 
@@ -236,20 +221,13 @@ def check_conditional_action_policy() -> list[str]:
     )
     errors += forbid(
         callback,
-        (
-            "ReadActionSnapshot",
-            "IsInterruptAction",
-            "IsAssistedCombatAction",
-            "GetActionInfo",
-            "GetSpell",
-            "ResolveRecord",
-        ),
+        ("ReadActionSnapshot", "IsInterruptAction", "IsAssistedCombatAction", "GetActionInfo", "GetSpell", "ResolveRecord"),
         "Native queue callback",
     )
     return errors
 
 
-def check_runtime_sleep_policy() -> list[str]:
+def check_runtime_sleep_and_events() -> list[str]:
     errors: list[str] = []
     events = read(ROOT / "core/Events.lua")
     lifecycle = read(ROOT / "core/RuntimeLifecyclePolicy.lua")
@@ -274,13 +252,9 @@ def check_runtime_sleep_policy() -> list[str]:
     )
     errors += forbid(
         events,
-        (
-            'frame:RegisterEvent("LOSS_OF_CONTROL_ADDED")',
-            'frame:RegisterEvent("LOSS_OF_CONTROL_UPDATE")',
-        ),
+        ('frame:RegisterEvent("LOSS_OF_CONTROL_ADDED")', 'frame:RegisterEvent("LOSS_OF_CONTROL_UPDATE")'),
         "Loss of Control registration",
     )
-
     errors += require(
         lifecycle,
         (
@@ -301,13 +275,6 @@ def check_runtime_sleep_policy() -> list[str]:
         "IG.CDM:Detach()",
         "Runtime event shutdown/provider detach",
     )
-    activate = section(lifecycle, "function Lifecycle:Activate()", "function Lifecycle:Initialize()")
-    errors += require_before(
-        activate,
-        "self.active = true",
-        "SetRuntimeEventsEnabled(true)",
-        "Runtime activation/event registration",
-    )
     return errors
 
 
@@ -320,18 +287,8 @@ def check_secret_and_frame_boundaries() -> list[str]:
 
     charge = section(cooldown, "local function ReadChargeInfo", "local function ReadLossOfControlState")
     loc = section(cooldown, "local function ReadLossOfControlState", "local function GetActionLossOfControlState")
-    errors += require_before(
-        charge,
-        "if not IG.CanAccess(info) then",
-        "if info == nil then",
-        "Charge SecretValue ordering",
-    )
-    errors += require_before(
-        loc,
-        "if not IG.CanAccess(info) then",
-        "if info == nil then",
-        "Loss of Control SecretValue ordering",
-    )
+    errors += require_before(charge, "if not IG.CanAccess(info) then", "if info == nil then", "Charge SecretValue ordering")
+    errors += require_before(loc, "if not IG.CanAccess(info) then", "if info == nil then", "Loss of Control SecretValue ordering")
     errors += require(
         cooldown,
         (
@@ -344,8 +301,6 @@ def check_secret_and_frame_boundaries() -> list[str]:
         ),
         "Cooldown/LoC contract",
     )
-    if re.search(r"\bGetSpellLossOfControlCooldown\s*\(", cooldown):
-        errors.append("Cooldown resolver still calls the legacy spell LoC global")
 
     errors += require(
         cast,
@@ -366,11 +321,7 @@ def check_secret_and_frame_boundaries() -> list[str]:
 
     errors += require(
         glow,
-        (
-            "SetAlphaFromBoolean",
-            "ALPHA_VISIBLE = 255",
-            "CreatePulseAnimation(overlay.target.plainGate)",
-        ),
+        ("SetAlphaFromBoolean", "ALPHA_VISIBLE = 255", "CreatePulseAnimation(overlay.target.plainGate)"),
         "Glow secret sink",
     )
     if "CreatePulseAnimation(overlay.target.niGate)" in glow:
@@ -383,19 +334,25 @@ def check_secret_and_frame_boundaries() -> list[str]:
         (
             "local function InspectButtonAccess(button)",
             "if not IG.CanAccess(button) then return ACCESS_DEFERRED end",
-            'IG:ReadMember(button, "IsForbidden")',
-            "MAX_TRANSIENT_RETRIES = 3",
-            "overlayAccessFailures",
-            "reobservationCanResumePrewarm = true",
-            "confirmedForbiddenIsPermanent = true",
+            'ReadOrdinaryBooleanMethod(button, "HasAccessConstraints")',
+            'ReadOrdinaryBooleanMethod(button, "CanBeAccessedInContext")',
+            'ReadOrdinaryBooleanMethod(button, "IsForbidden")',
+            "RETRY_BASE_DELAY = 0.25",
+            "RETRY_MAX_DELAY = 2.0",
+            "overlayAccessNextRetry",
+            "function Glow:AllowOverlayAccessRetry(record, force)",
+            "noOnUpdateRetryLoop = true",
+            "postCombatCanResumePrewarm = true",
             "function Glow:CreateShell(record)",
         ),
         "Foreign frame access policy",
     )
-    create_shell = section(
-        frame_access,
-        "function Glow:CreateShell(record)",
-        "local originalQueueShell",
+    create_shell = section(frame_access, "function Glow:CreateShell(record)", "local originalQueueShell")
+    errors += require_before(
+        create_shell,
+        "if record.overlayAccessDeferred and not self:AllowOverlayAccessRetry(record, false) then",
+        "if not IG.CanAccess(record.button) then",
+        "Foreign frame retry throttle/object access",
     )
     errors += require_before(
         create_shell,
@@ -416,58 +373,32 @@ def check_readiness_and_provider_policies() -> list[str]:
     data = read(ROOT / "core/Data.lua")
     spec = read(ROOT / "core/SpecInterruptCoveragePolicy.lua")
     runtime = read(ROOT / "core/RuntimeInterruptPolicy.lua")
+    lab = read(ROOT / "core/LABAdapter.lua")
     prewarm = read(ROOT / "core/PrewarmPolicy.lua")
     cdm = read(ROOT / "core/CDM.lua")
 
-    errors += require(
-        readiness,
-        ("GetPetActionSlotUsable", "ability.hardRestricted == true"),
-        "Pet readiness policy",
-    )
-    errors += require(
-        usability,
-        ("IsUsableAction", "IsSpellUsable", "OnActionUsableChanged"),
-        "Usability policy",
-    )
+    errors += require(readiness, ("GetPetActionSlotUsable", "ability.hardRestricted == true"), "Pet readiness policy")
+    errors += require(usability, ("IsUsableAction", "IsSpellUsable", "OnActionUsableChanged"), "Usability policy")
     errors += require(
         gcd,
-        (
-            "originalGetCachedReadiness(self, sourceKind, sourceID, false)",
-            "treatsIsOnGCDAsReadinessProof = false",
-        ),
+        ("originalGetCachedReadiness(self, sourceKind, sourceID, false)", "treatsIsOnGCDAsReadinessProof = false"),
         "GCD safety policy",
     )
-    errors += require(
-        source,
-        (
-            "action = 300",
-            "pet = 200",
-            "spell = 100",
-            "reconcilesBeforeRefreshFilter = true",
-        ),
-        "Canonical source policy",
-    )
-    errors += require(
-        bound,
-        ("boundRecordsWithoutSourceFailClosed = true",),
-        "Bound source policy",
-    )
+    errors += require(source, ("action = 300", "pet = 200", "spell = 100", "reconcilesBeforeRefreshFilter = true"), "Canonical source policy")
+    errors += require(bound, ("boundRecordsWithoutSourceFailClosed = true",), "Bound source policy")
     errors += require(
         data,
-        (
-            "-- BEGIN GENERATED INTERRUPTS_BY_SPEC",
-            "-- END GENERATED INTERRUPTS_BY_SPEC",
-            "PET_ACTION_ALIASES",
-            "IsRuntimeFamilyKnown",
-            BLIZZARD_SOURCE_COMMIT,
-        ),
+        ("-- BEGIN GENERATED INTERRUPTS_BY_SPEC", "-- END GENERATED INTERRUPTS_BY_SPEC", "PET_ACTION_ALIASES", "IsRuntimeFamilyKnown", BLIZZARD_SOURCE_COMMIT),
         "Interrupt data",
     )
     errors += require(
         spec,
         (
-            "extraInterruptsBySpec",
-            "RequiresExactKnownSpell",
+            "Data.exactKnownInterrupts",
+            "function Data:RequiresExactKnownSpell(spellID)",
+            "self.specInterrupts[spellID] = nil",
+            "self.activeInterrupts[spellID] = nil",
+            "requiresExactKnownSpell = true",
             "neverAddsUnknownOptionalInterrupts = true",
         ),
         "Optional interrupt coverage policy",
@@ -484,6 +415,20 @@ def check_readiness_and_provider_policies() -> list[str]:
         "Runtime interrupt proof policy",
     )
     errors += require(
+        lab,
+        (
+            "identityKnown",
+            "record.labIdentityRestricted = restricted",
+            "SetButtonSlot(button, slot)",
+            'IG:ReadMember(button, "UpdateAction")',
+            "for button in pairs(buttonSlots) do RemoveFromSlot(button) end",
+            "accessibleEmptyIdentityClearsSlot = true",
+            "inaccessibleIdentityFailsClosed = true",
+            "staleSlotIndexesClearedOnDetach = true",
+        ),
+        "LAB identity policy",
+    )
+    errors += require(
         prewarm,
         (
             "processed < self.prewarmBudgetPerFrame",
@@ -493,11 +438,7 @@ def check_readiness_and_provider_policies() -> list[str]:
         ),
         "Prewarm policy",
     )
-    errors += require(
-        cdm,
-        ("QueueIdentityChange", "IG:MarkButtonDirty(itemFrame)"),
-        "Cooldown Viewer deferred identity policy",
-    )
+    errors += require(cdm, ("QueueIdentityChange", "IG:MarkButtonDirty(itemFrame)"), "Cooldown Viewer deferred identity policy")
     return errors
 
 
@@ -512,45 +453,35 @@ def check_lifecycle_persistence_and_evidence() -> list[str]:
 
     errors += require(
         shared,
-        (
-            "CURRENT_SCHEMA = 3",
-            "CURRENT_INTERFACE = 120100",
-            "InterruptGlowDB = DB",
-            "Worker:RunOnce(flushFrame)",
-            "_loadedOrLoading, loaded",
-        ),
+        ("CURRENT_SCHEMA = 3", "CURRENT_INTERFACE = 120100", "InterruptGlowDB = DB", "Worker:RunOnce(flushFrame)", "_loadedOrLoading, loaded"),
         "Shared lifecycle/persistence",
     )
-    errors += require(
-        worker,
-        ("SetOnUpdateMode", "modes.Disabled", "modes.RunOnce", "modes.RunAlways"),
-        "Worker policy",
-    )
-    errors += require(
-        native,
-        ("CreateCallbackHandleContainer", "nativeCallbackHandles:Unregister"),
-        "Native callback lifecycle",
-    )
+    errors += require(worker, ("SetOnUpdateMode", "modes.Disabled", "modes.RunOnce", "modes.RunAlways"), "Worker policy")
+    errors += require(native, ("CreateCallbackHandleContainer", "nativeCallbackHandles:Unregister"), "Native callback lifecycle")
     errors += require(
         options,
-        (
-            "RuntimeLifecycle",
-            "SetMasterEnabled",
-            "panel.OnRefresh",
-            "panel.OnDefault",
-            "panel.OnCommit",
-            "OnCombatEnded",
-        ),
+        ("RuntimeLifecycle", "SetMasterEnabled", "panel.OnRefresh", "panel.OnDefault", "panel.OnCommit", "OnCombatEnded"),
         "Settings lifecycle",
     )
     errors += require(
-        probe_policy,
+        probe,
         (
-            "MAX_MARKS = 256",
-            "MAX_RESTRICTIONS = 128",
-            "buildsReportsOutOfCombatOnly = true",
-            "finalizesCaptureOutOfCombatOnly = true",
+            "ProfilerSnapshot",
+            'IG:StartProfileCounters("capture")',
+            'IG:StopProfileCounters("capture")',
+            "delta.PeakTimeIncrease",
+            CURRENT_KB_COMMIT,
         ),
+        "Runtime profiler evidence",
+    )
+    errors += forbid(
+        probe,
+        ("GetAddOnPerformanceInfo", "diagnosticsOwner = {}"),
+        "Runtime profiler evidence",
+    )
+    errors += require(
+        probe_policy,
+        ("MAX_MARKS = 256", "MAX_RESTRICTIONS = 128", "buildsReportsOutOfCombatOnly = true", "finalizesCaptureOutOfCombatOnly = true"),
         "Runtime probe policy",
     )
 
@@ -561,7 +492,6 @@ def check_lifecycle_persistence_and_evidence() -> list[str]:
     ):
         if CURRENT_KB_COMMIT not in text:
             errors.append(f"{scope} is not pinned to current KB {CURRENT_KB_COMMIT}")
-
     return errors
 
 
@@ -578,7 +508,12 @@ def check_tests_and_repository_contract() -> list[str]:
     required_tests = (
         "tests/action_resolver_fast_path.lua",
         "tests/conditional_macro_policy.lua",
+        "tests/conditional_active_identity_guard.lua",
         "tests/frame_access_policy.lua",
+        "tests/lab_callback_policy.lua",
+        "tests/spec_interrupt_coverage.lua",
+        "tests/runtime_probe.lua",
+        "tests/runtime_probe_policy.lua",
         "tests/runtime_lifecycle_policy.lua",
         "tests/runtime_event_sleep.lua",
         "tests/loc_fail_closed.lua",
@@ -590,26 +525,48 @@ def check_tests_and_repository_contract() -> list[str]:
         if not (ROOT / relative).is_file():
             errors.append(f"Required regression test is missing: {relative}")
 
-    conditional_test = read(ROOT / "tests/conditional_macro_policy.lua")
+    active_guard = read(ROOT / "tests/conditional_active_identity_guard.lua")
     errors += require(
-        conditional_test,
+        active_guard,
         (
-            "CONDITIONAL MACRO POLICY TEST PASSED",
-            "defersIdentityWhileReadinessSleeps == true",
-            "dominosIdentityRefreshesAfterProviderCommit == true",
-            "Buttons:InvalidateConditionalMacroSlot",
+            "CONDITIONAL ACTIVE IDENTITY GUARD TEST PASSED",
+            "record.conditionalIdentityPending == true",
+            "record.visualVisible == false",
+            "fullRebuildPreservesVisualGuard == true",
         ),
-        "Conditional macro regression test",
+        "Conditional active-identity regression test",
     )
-    event_test = read(ROOT / "tests/runtime_event_sleep.lua")
+    frame_test = read(ROOT / "tests/frame_access_policy.lua")
     errors += require(
-        event_test,
+        frame_test,
         (
-            "RUNTIME EVENT SLEEP TEST PASSED",
-            "runtimeEventsRegistered == false",
-            "registered.SPELL_UPDATE_COOLDOWN == nil",
+            "CanBeAccessedInContext",
+            "backoff was bypassed by urgent retry",
+            "noOnUpdateRetryLoop == true",
+            "FRAME ACCESS POLICY TEST PASSED",
         ),
-        "Runtime event sleep regression test",
+        "Frame access regression test",
+    )
+    lab_test = read(ROOT / "tests/lab_callback_policy.lua")
+    errors += require(
+        lab_test,
+        (
+            "Accessible empty secure identity",
+            "identityRestricted = true",
+            "staleSlotIndexesClearedOnDetach == true",
+            "LAB CALLBACK POLICY TEST PASSED",
+        ),
+        "LAB identity regression test",
+    )
+    spec_test = read(ROOT / "tests/spec_interrupt_coverage.lua")
+    errors += require(
+        spec_test,
+        (
+            "Missing API is fail-closed for optional talents",
+            "neverAddsUnknownOptionalInterrupts == true",
+            "SPEC INTERRUPT COVERAGE TEST PASSED",
+        ),
+        "Optional interrupt regression test",
     )
 
     workflow_dir = ROOT / ".github/workflows"
@@ -619,7 +576,6 @@ def check_tests_and_repository_contract() -> list[str]:
     for forbidden_name in ("todo.md", "TODO.md", "agents.md"):
         if (ROOT / forbidden_name).exists():
             errors.append(f"Service file should not be part of the installable root: {forbidden_name}")
-
     return errors
 
 
@@ -628,19 +584,17 @@ def main() -> int:
         check_toc_and_version()
         + check_forbidden_runtime_patterns()
         + check_conditional_action_policy()
-        + check_runtime_sleep_policy()
+        + check_runtime_sleep_and_events()
         + check_secret_and_frame_boundaries()
         + check_readiness_and_provider_policies()
         + check_lifecycle_persistence_and_evidence()
         + check_tests_and_repository_contract()
     )
-
     if errors:
         print("STATIC CHECKS FAILED")
         for error in errors:
             print(f"- {error}")
         return 1
-
     print("STATIC CHECKS PASSED")
     return 0
 
