@@ -16,8 +16,20 @@ function Buttons:ObserveButtonForgeName(buttonName)
     local record = button and IG.ObservedButtons[button]
     if record then
         record.buttonForgeName = buttonName
+        record.buttonForgeDeallocated = false
         buttonsByName[buttonName] = button
     end
+end
+
+local originalResolveButtonForge = Buttons.ResolveButtonForge
+function Buttons:ResolveButtonForge(record)
+    if record and (record.buttonForgeObject ~= nil
+        or record.buttonForgeMode ~= nil
+        or record.buttonForgeSpellID ~= nil)
+    then
+        record.buttonForgeDeallocated = false
+    end
+    return originalResolveButtonForge(self, record)
 end
 
 local originalOnButtonForgeEvent = Buttons.OnButtonForgeEvent
@@ -30,13 +42,9 @@ function Buttons:OnButtonForgeEvent(event, buttonName)
     local button = _G[buttonName] or buttonsByName[buttonName]
     local record = button and IG.ObservedButtons[button]
     buttonsByName[buttonName] = nil
-    if not record then return end
+    if not record or record.buttonForgeDeallocated == true then return end
 
-    local changed = record.buttonForgeObject ~= nil
-        or record.buttonForgeMode ~= nil
-        or record.buttonForgeMacroMode ~= nil
-        or record.buttonForgeSpellID ~= nil
-        or record.isInterrupt == true
+    record.buttonForgeDeallocated = true
 
     -- Provider callbacks may execute inside ButtonForge allocation/deallocation
     -- stacks. Clear only ordinary cached identity here; canonical unbind and
@@ -46,13 +54,12 @@ function Buttons:OnButtonForgeEvent(event, buttonName)
     record.buttonForgeMacroMode = nil
     record.buttonForgeSpellID = nil
 
-    if changed then
-        IG:MarkButtonDirty(button)
-        IG:BumpStat("events.buttonForgeDeallocated")
-    end
+    IG:MarkButtonDirty(button)
+    IG:BumpStat("events.buttonForgeDeallocated")
 end
 
 IG:RegisterModule("ButtonForgePolicy", {
     defersDeallocationReconcile = true,
+    deduplicatesDeallocation = true,
     survivesEarlyGlobalRemoval = true,
 })
