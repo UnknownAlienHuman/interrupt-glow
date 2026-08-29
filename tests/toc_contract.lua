@@ -34,7 +34,6 @@ local requiredOrder = {
     "core/ActionResolver.lua",
     "core/NativeActionQueuePolicy.lua",
     "core/Cooldown.lua",
-    "core/SpellLossOfControlPolicy.lua",
     "core/ReadinessPolicy.lua",
     "core/Usability.lua",
     "core/ConditionalMacroPolicy.lua",
@@ -69,7 +68,7 @@ assert(positions["core/Buttons.lua"] < positions["core/ButtonForgePolicy.lua"])
 assert(positions["core/ButtonForgePolicy.lua"] < positions["core/NativeCallbackPolicy.lua"])
 assert(positions["core/ActionResolver.lua"] < positions["core/NativeActionQueuePolicy.lua"])
 assert(positions["core/NativeActionQueuePolicy.lua"] < positions["core/Cooldown.lua"])
-assert(positions["core/Cooldown.lua"] < positions["core/SpellLossOfControlPolicy.lua"])
+assert(positions["core/Cooldown.lua"] < positions["core/ReadinessPolicy.lua"])
 assert(positions["core/Usability.lua"] < positions["core/ConditionalMacroPolicy.lua"])
 assert(positions["core/ConditionalMacroPolicy.lua"] < positions["core/GCDSafetyPolicy.lua"])
 assert(positions["core/AbilitySourcePolicy.lua"] < positions["core/BoundSourcePolicy.lua"])
