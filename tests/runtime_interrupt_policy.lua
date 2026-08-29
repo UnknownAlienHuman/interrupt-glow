@@ -43,6 +43,7 @@ function InterruptGlow.Data:RefreshActiveSpec()
 end
 function InterruptGlow.Data:LearnRuntimeInterrupt(spellID)
     self.runtimeInterrupts[spellID] = spellID
+    self.cooldownSpellMatchCache[spellID] = true
     return spellID
 end
 function InterruptGlow.Data:GetCanonicalSpellID(spellID)
@@ -99,6 +100,7 @@ local specID, changed = Data:RefreshActiveSpec()
 assert(specID == 258 and changed == false)
 assert(refreshCalls == 1)
 assert((Data.runtimeProofRevision or 0) == revisionBefore + 1)
+assert(Data.negativeCooldownSpellMatchCount == 0)
 
 Buttons:ReconcileAll()
 assert(reconcileOrder[1] == "action")
@@ -116,14 +118,36 @@ assert(allButtonsDirty == 2)
 Data:LearnRuntimeInterrupt(9002)
 assert(allButtonsDirty == 2, "existing runtime proof scheduled duplicate full rebuild")
 
--- Raw runtime map presence is not sufficient after configuration churn.
-Data.runtimeInterrupts[7777] = 7777
-Data.cooldownSpellMatchCache[7777] = nil
-knownFamilies[7777] = nil
+-- Raw runtime map presence is not sufficient without current-family validation.
+Data.runtimeInterrupts[8888] = 8888
+knownFamilies[8888] = nil
+assert(Data:MatchesCurrentInterrupt(8888) == false)
+assert(Data.negativeCooldownSpellMatches[8888] == true)
+
+-- A genuinely new authoritative family clears stale negative alias results.
 assert(Data:MatchesCurrentInterrupt(7777) == false)
+assert(Data.negativeCooldownSpellMatches[7777] == true)
 knownFamilies[7777] = true
-Data.cooldownSpellMatchCache[7777] = nil
+Data:LearnRuntimeInterrupt(7777)
+assert(Data.negativeCooldownSpellMatches[7777] == nil)
 assert(Data:MatchesCurrentInterrupt(7777) == true)
+
+-- Unrelated spell IDs are bounded to 128 negatives; the 129th resets the tiny
+-- cache rather than growing for the whole application session.
+for spellID = 10001, 10128 do
+    assert(Data:MatchesCurrentInterrupt(spellID) == false)
+end
+assert(Data.negativeCooldownSpellMatchCount == 128)
+assert(Data:MatchesCurrentInterrupt(10129) == false)
+assert(Data.negativeCooldownSpellMatchCount == 1)
+assert(Data.negativeCooldownSpellMatches[10129] == true)
+assert(Data.negativeCooldownSpellMatches[10001] == nil)
+
+-- A registry/config rebuild clears both runtime proof and negative cache.
+Data:RefreshActiveSpec()
+assert(next(Data.runtimeInterrupts) == nil)
+assert(next(Data.negativeCooldownSpellMatches) == nil)
+assert(Data.negativeCooldownSpellMatchCount == 0)
 
 local policy = assert(InterruptGlow.modules.RuntimeInterruptPolicy)
 assert(policy.clearsProofOnRegistryRebuild == true)
@@ -131,6 +155,7 @@ assert(policy.actionSlotsSeedBeforeSecondaryCopies == true)
 assert(policy.refreshesCDMAfterActionSeed == true)
 assert(policy.propagatesNewRuntimeFamilies == true)
 assert(policy.revalidatesCooldownEventMatches == true)
+assert(policy.negativeMatchLimit == 128)
 assert(policy.avoidsStickySeedState == true)
 
 print("RUNTIME INTERRUPT POLICY TEST PASSED")
