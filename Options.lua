@@ -130,7 +130,7 @@ function Options:Build()
         strictNI,
         -10,
         "Allow glow when cooldown readiness is fully restricted",
-        "Compatibility mode. It may allow a cooldown-readiness false positive, but never overrides blocked or inaccessible usability, pet state, or Loss of Control.",
+        "Compatibility mode. It may allow a cooldown-readiness false positive, but never overrides blocked or inaccessible charges, usability, pet state, or Loss of Control.",
         function() return DB.optimisticRestrictedCooldown end,
         function(value)
             DB.optimisticRestrictedCooldown = value
@@ -201,6 +201,8 @@ local function ResetDefaults()
     DB.strictNI = true
     DB.optimisticRestrictedCooldown = false
     DB.debug = false
+    DB.debugChat = false
+    DB.debugKeep = 400
     if IG.CDM then IG.CDM:SetEnabled(true) end
     ApplyDefaultsOrFullRefresh()
     Options:Refresh()
