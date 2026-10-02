@@ -38,3 +38,4 @@
 - `tests/runtime_probe.lua` — report schema, policy, profiler-delta and restriction-context reset.
 - `tests/native_callback_handles.lua` — attach-once/detach/reattach callback lifecycle.
 - `tests/channel_guard.lua` — phantom snapshot and stale stop-event protection.
+- `tests/lab_registration_policy.lua` — provider-neutral late-library and LoadOnDemand discovery without polling or a generic load event.
