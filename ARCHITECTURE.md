@@ -32,6 +32,7 @@ Blizzard callback / fixed-unit event / targeted slot diff / post-hook
 - `core/Buttons.lua` — provider registries, classification and shared canonical ability records.
 - `core/NativeCallbackPolicy.lua` — managed EventRegistry callback ownership.
 - `core/LABAdapter.lua` — exact LAB action hooks and changed-slot diff routing.
+- `core/LABRegistrationPolicy.lua` — provider-neutral late LAB discovery through LibStub registration and LoadOnDemand completion hooks.
 - `core/ActionResolver.lua` — current action snapshot, Assisted Combat exclusion and interrupt classification.
 - `core/Cooldown.lua` — per-source duration/charge/LoC readiness primitives.
 - `core/ReadinessPolicy.lua` — hard pet/LoC restrictions and one visual pass per batch.
@@ -48,7 +49,9 @@ Blizzard callback / fixed-unit event / targeted slot diff / post-hook
 
 Public callbacks and registries take priority over hooks. Native action feedback uses callback-handle containers when available. Permanent `hooksecurefunc` integrations attach once and have a cheap attached-state guard.
 
-Optional providers wait for verified load surfaces. Existing registries are enumerated once; no provider is polled. Visual objects are created outside combat and reused.
+Existing LibActionButton registries are enumerated once. Later libraries are discovered by their own registration name after initialization, while LoadOnDemand completion triggers one bounded registry rescan. This is provider-neutral and uses neither provider polling nor a generic `ADDON_LOADED` subscription.
+
+Other optional providers wait for verified load surfaces. Existing registries are enumerated once; no provider is polled. Visual objects are created outside combat and reused.
 
 One-shot workers use `RunOnce`; continuous deadline/restricted timing uses `RunAlways` only while needed; idle workers use `Disabled`. The Show/Hide branch is a compatibility/test fallback, not the Retail 12.1 path.
 
