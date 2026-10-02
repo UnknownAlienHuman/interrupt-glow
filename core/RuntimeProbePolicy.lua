@@ -11,7 +11,6 @@ local MAX_MARKS = 256
 local MAX_RESTRICTIONS = 128
 local PROVIDERS = {
     "Bartender4",
-    "ElvUI",
     "Dominos",
     "ButtonForge",
     "Blizzard_CooldownViewer",
