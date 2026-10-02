@@ -21,7 +21,6 @@ core/Buttons.lua
 core/ButtonForgePolicy.lua
 core/NativeCallbackPolicy.lua
 core/LABAdapter.lua
-core/LABRegistrationPolicy.lua
 core/ActionResolver.lua
 core/NativeActionQueuePolicy.lua
 core/Cooldown.lua

@@ -13,7 +13,6 @@
 - `core/Buttons.lua` — provider registries, ButtonForge/Dominos/pet/CDM adapters and canonical ability records.
 - `core/NativeCallbackPolicy.lua` — callback-handle lifecycle for `ActionButton.OnActionChanged`.
 - `core/LABAdapter.lua` — exact LibActionButton action hooks and changed-slot routing.
-- `core/LABRegistrationPolicy.lua` — provider-neutral late LibActionButton discovery through library registration and LoadOnDemand completion hooks.
 - `core/ActionResolver.lua` — deduplicated current action feedback, Assisted Combat exclusion and interrupt classification.
 - `core/Cooldown.lua` — duration/charge/LoC readiness primitives and accessible deadlines.
 - `core/ReadinessPolicy.lua` — hard pet/LoC restrictions and non-duplicating visual scheduling.
@@ -38,4 +37,3 @@
 - `tests/runtime_probe.lua` — report schema, policy, profiler-delta and restriction-context reset.
 - `tests/native_callback_handles.lua` — attach-once/detach/reattach callback lifecycle.
 - `tests/channel_guard.lua` — phantom snapshot and stale stop-event protection.
-- `tests/lab_registration_policy.lua` — provider-neutral late-library and LoadOnDemand discovery without polling or a generic load event.

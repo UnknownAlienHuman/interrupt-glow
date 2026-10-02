@@ -31,7 +31,6 @@ local localTests = {
     "tests/conditional_active_identity_guard.lua",
     "tests/frame_access_policy.lua",
     "tests/lab_callback_policy.lua",
-    "tests/lab_registration_policy.lua",
     "tests/buttonforge_policy.lua",
     "tests/restricted_success_event.lua",
     "tests/runtime_probe.lua",
