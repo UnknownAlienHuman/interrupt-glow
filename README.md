@@ -29,7 +29,7 @@ active deadlines -> RunAlways
 idle             -> Disabled
 ```
 
-Gameplay events and provider discovery wait for `PLAYER_LOGIN`. Existing provider registries are enumerated once; Bartender, ElvUI, Dominos, ButtonForge and Cooldown Viewer use verified load-order callbacks. Settings controls, report UI and overlays are created outside combat and reused.
+Gameplay events and provider discovery wait for `PLAYER_LOGIN`. Existing provider registries are enumerated once; LibActionButton, Dominos, ButtonForge and Cooldown Viewer integrations use verified load-order callbacks. Settings controls, report UI and overlays are created outside combat and reused.
 
 Global cooldown is ignored through:
 
@@ -84,7 +84,7 @@ Reports include build/interface, SavedVariables schema, provider state and versi
 ## Supported button systems
 
 - Blizzard action bars
-- LibActionButton consumers, including Bartender and ElvUI variants
+- LibActionButton consumers
 - Dominos
 - ButtonForge
 - Pet action buttons
