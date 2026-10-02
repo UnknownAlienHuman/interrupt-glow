@@ -20,7 +20,7 @@ Interrupt Glow includes a session-only in-client evidence collector. It is disab
 
 - `build`: current WoW build, Interface, addon version, pinned Blizzard source, KB commit, SavedVariables schema/producer;
 - `context`: instance type/difficulty, combat state and observed restriction transitions;
-- `providers`: loaded/attached state for native bars, Bartender, ElvUI, Dominos, ButtonForge and Cooldown Viewer;
+- `providers`: loaded/attached state for native bars, LibActionButton, Dominos, ButtonForge and Cooldown Viewer;
 - `workers`: OnUpdateMode support, dirty state, prewarm queue state and active runtime timing state;
 - `policies`: conservative GCD readiness policy;
 - `capture`: scenario label, duration and markers;
