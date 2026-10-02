@@ -922,7 +922,6 @@ function Buttons:Attach(discoverExisting)
     self:AttachDominos(discoverExisting == true)
     self:AttachButtonForge(discoverExisting == true)
     self:WaitForKnownLABProvider("Bartender4")
-    self:WaitForKnownLABProvider("ElvUI")
 
     if discoverExisting then
         IG:BumpStat("startup.discoveryPasses")
