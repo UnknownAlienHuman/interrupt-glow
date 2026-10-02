@@ -34,7 +34,6 @@ local format = string.format
 local KB_COMMIT = "5a992ae702a278f3893c7e8f1b212583311438b5"
 local PROVIDERS = {
     "Bartender4",
-    "ElvUI",
     "Dominos",
     "ButtonForge",
     "Blizzard_CooldownViewer",
