@@ -94,11 +94,11 @@ Repeat after leaving combat, changing target/focus, opening/closing Settings and
 
 ## SavedVariables migration test
 
-Before reload, preserve a copy of `InterruptGlowDB`. After beta.8 loads, the report must show:
+Before reload, preserve a copy of `InterruptGlowDB`. After beta.9 loads, the report must show:
 
 ```text
 savedSchema=4
-savedProducerVersion=1.1.0-beta.8
+savedProducerVersion=1.1.0-beta.9
 savedInterface=120105
 ```
 
@@ -128,6 +128,12 @@ Confirm no addon-visible channel/glow resurrects after stop, and retire the work
 ## Appearance and preview
 
 Open `/iglow` at the intended UI scale. Verify labels fit the Settings canvas, cyan target and amber focus highlights render correctly, and disabling animation stops only the ordinary parent animation. Start the preview outside combat; entering combat or disabling the addon must stop it. Settings first opened in combat must create no controls until combat ends.
+
+## Existing visual access transitions
+
+On a named client/build and provider, observe an already-created highlight, countdown and animation across a real object-access restriction transition. A denied destination must receive no further setters or timer-driven access retries. If all copies are denied, the timing worker must sleep. Do not force forbidden aspects or query opaque output to manufacture evidence.
+
+Repeat with the button unbound and the addon disabled during the restriction. On an ordinary restriction/provider/out-of-combat recovery signal, any now-accessible old display must clear; active records must refresh current cast/readiness before showing again. Confirmed forbidden destinations must remain skipped. Offline permission mocks cover control flow only; this client scenario remains NOT-RUN.
 
 ## Evidence boundary
 

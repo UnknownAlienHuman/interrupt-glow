@@ -32,6 +32,8 @@ The normal path does not enumerate frames or nameplates, scan all action slots, 
 
 Duration getters use `ignoreGCD=true`; no GCD hint map exists. A successful cast only invalidates affected readiness. Inaccessible charges, usability and Loss of Control stay fail-closed. No timer probes denied object access or treats opaque visual output as feedback.
 
+Permission checks also cover already-created visual destinations. Once denied, a record makes no further object queries from render/timing passes until an explicit recovery signal. If every bound copy of an ability is blocked, its deadlines and fallback polling do not keep the worker awake; an unblocked sibling retains normal timing work.
+
 A pending conditional identity suppresses its previous highlight/countdown until reconciliation succeeds. This guard also applies when a unit refresh occurs between the provider callback and the dirty pass.
 
 ## Measurement protocol

@@ -51,6 +51,8 @@ Potentially secret cast `notInterruptible` has one direct presentation route: `U
 
 Addon visuals are created outside combat and reused. Prewarm counts every inspected queue record, including skipped records. A denied foreign owner is not retried by an OnUpdate loop. CDM acquire/reset hooks only capture ordinary identity and queue reconciliation; the addon does not change visuals inside Blizzard's pool-reset stack.
 
+Existing visual destinations are access-checked again before mutation. Denial invalidates ordinary presentation caches and suspends that record; a wholly blocked ability cannot keep the timing worker awake. Conditional denial is retried only at explicit provider, restriction, settings or out-of-combat boundaries. Recovery clears the old display before requesting fresh cast/readiness state, including cleanup of records unbound or disabled during the denial. Confirmed forbidden objects remain skipped.
+
 ## Readiness and cast lifecycle
 
 The duration getters receive `ignoreGCD=true`. `isOnGCD` and successful-cast events never prove readiness. Inaccessible usability, charges or Loss of Control are hard fail-closed gates, including when cooldown compatibility is enabled.

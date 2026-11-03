@@ -24,7 +24,6 @@ local math_ceil = math.ceil
 local pairs = pairs
 local type = type
 local pcall = pcall
-local next = next
 
 local UNITS = { "target", "focus" }
 local ALPHA_HIDDEN = 0
@@ -107,29 +106,60 @@ local function ReadOrdinaryBooleanMethod(object, methodName)
     return value, true, false
 end
 
-local function InspectButtonAccess(button)
+local function InspectObjectAccess(object)
     -- Accessibility precedes every comparison, method lookup and call.
-    if not IG.CanAccess(button) then return ACCESS_DEFERRED end
-    if button == nil then return ACCESS_DEFERRED end
+    if not IG.CanAccess(object) then return ACCESS_DEFERRED end
+    if object == nil then return ACCESS_DEFERRED end
 
     local constrained, constraintsKnown, constraintsMalformed =
-        ReadOrdinaryBooleanMethod(button, "HasAccessConstraints")
+        ReadOrdinaryBooleanMethod(object, "HasAccessConstraints")
     if constraintsMalformed then return ACCESS_FORBIDDEN end
     if not constraintsKnown then return ACCESS_DEFERRED end
 
+    -- An explicitly forbidden object also reports context denial. Classify it
+    -- first so a later lifecycle signal cannot turn it into a retry target.
+    local forbidden, forbiddenKnown, forbiddenMalformed =
+        ReadOrdinaryBooleanMethod(object, "IsForbidden")
+    if forbiddenMalformed then return ACCESS_FORBIDDEN end
+    if not forbiddenKnown then return ACCESS_DEFERRED end
+    if forbidden == true then return ACCESS_FORBIDDEN end
+
     if constrained == true then
         local accessible, contextKnown, contextMalformed =
-            ReadOrdinaryBooleanMethod(button, "CanBeAccessedInContext")
+            ReadOrdinaryBooleanMethod(object, "CanBeAccessedInContext")
         if contextMalformed then return ACCESS_FORBIDDEN end
         if not contextKnown or accessible ~= true then return ACCESS_DEFERRED end
     end
 
-    local forbidden, forbiddenKnown, forbiddenMalformed =
-        ReadOrdinaryBooleanMethod(button, "IsForbidden")
-    if forbiddenMalformed then return ACCESS_FORBIDDEN end
-    if not forbiddenKnown then return ACCESS_DEFERRED end
-    if forbidden == true then return ACCESS_FORBIDDEN end
     return ACCESS_ALLOWED
+end
+
+-- Parent/anchor restrictions can change after construction. Check the exact
+-- destination now; a denied record sleeps until an explicit owner transition.
+local function CanUseVisual(record, object)
+    if record.visualAccessBlocked then return false end
+    local access = InspectObjectAccess(object)
+    if access == ACCESS_ALLOWED then return true end
+
+    record.visualAccessBlocked = access
+    record.lastCooldownText = nil
+    local overlay = record.overlay
+    if overlay then
+        for index = 1, #UNITS do
+            local branch = overlay[UNITS[index]]
+            if branch then branch.candidate = nil end
+        end
+    end
+    IG:BumpStat("ui.visualAccessDenied")
+    return false
+end
+
+local function HasAvailableRecord(ability)
+    for record in pairs(ability.records) do
+        if not record.visualAccessBlocked and not record.overlayAccessDeferred
+            and not record.overlayForbidden then return true end
+    end
+    return false
 end
 
 local function SafeFrameLevel(button)
@@ -187,13 +217,14 @@ local function CreateUnitBranch(button, unit)
     }
 end
 
-local function CreatePulseAnimation(region)
-    if not region or type(region.CreateAnimationGroup) ~= "function" then
+local function CreatePulseAnimation(record, region)
+    if not CanUseVisual(record, region) or type(region.CreateAnimationGroup) ~= "function" then
         return nil
     end
 
     local ok, group = pcall(region.CreateAnimationGroup, region)
-    if not ok or not group or type(group.CreateAnimation) ~= "function" then
+    if not ok or not IG.CanAccess(group) or group == nil
+        or not CanUseVisual(record, group) or type(group.CreateAnimation) ~= "function" then
         return nil
     end
 
@@ -205,9 +236,10 @@ local function CreatePulseAnimation(region)
     return group
 end
 
-local function SetCandidate(branch, candidate)
+local function SetCandidate(record, branch, candidate)
     if not branch or branch.candidate == candidate then return end
-    branch.candidate = candidate
+    if not CanUseVisual(record, branch.plainGate) then return end
+    if branch.animation and not CanUseVisual(record, branch.animation) then return end
     branch.plainGate:SetAlpha(candidate and 1 or 0)
 
     if candidate then
@@ -217,6 +249,7 @@ local function SetCandidate(branch, candidate)
         if branch.animation then branch.animation:Stop() end
         IG:BumpStat("ui.hideTransitions")
     end
+    branch.candidate = candidate
 end
 
 local function ReadinessPending(record)
@@ -307,7 +340,7 @@ function Glow:CreateShell(record)
     end
     if record.button == nil then return nil end
 
-    local access = InspectButtonAccess(record.button)
+    local access = InspectObjectAccess(record.button)
     if access == ACCESS_FORBIDDEN then
         MarkOverlayForbidden(record)
         IG:BumpStat("ui.shellsForbidden")
@@ -400,6 +433,7 @@ end
 
 function Glow:EnsureCooldownText(record)
     if not IG.DB.cdText or not record or record.cooldownTextForbidden then return nil end
+    if record.visualAccessBlocked then return nil end
     local overlay = record.overlay
     if not overlay then return nil end
     if overlay.cooldownText then return overlay.cooldownText end
@@ -408,7 +442,7 @@ function Glow:EnsureCooldownText(record)
         record.cooldownTextPending = true
         return nil
     end
-    local access = InspectButtonAccess(record.button)
+    local access = InspectObjectAccess(record.button)
     if access == ACCESS_FORBIDDEN then
         record.cooldownTextForbidden = true
         record.cooldownTextPending = false
@@ -435,6 +469,7 @@ function Glow:EnsureCooldownText(record)
         IG:BumpStat("ui.cooldownTextCreateFailed")
         return nil
     end
+    if not CanUseVisual(record, text) then return nil end
     text:SetPoint("CENTER", record.button, "CENTER", 0, 0)
     text:SetJustifyH("CENTER")
     text:SetText("")
@@ -447,7 +482,7 @@ end
 
 function Glow:EnsureInterruptVisuals(record)
     local overlay = record and (record.overlay or self:CreateShell(record))
-    if not overlay then return false end
+    if not overlay or record.visualAccessBlocked then return false end
 
     local changed = false
     if not overlay.enhanced then
@@ -458,15 +493,24 @@ function Glow:EnsureInterruptVisuals(record)
 
         -- Animate the ordinary parent gate, never the child texture carrying a
         -- possible Alpha secret aspect.
-        overlay.target.animation = CreatePulseAnimation(overlay.target.plainGate)
-        overlay.focus.animation = CreatePulseAnimation(overlay.focus.plainGate)
+        overlay.target.animation = overlay.target.animation
+            or CreatePulseAnimation(record, overlay.target.plainGate)
+        overlay.focus.animation = overlay.focus.animation
+            or CreatePulseAnimation(record, overlay.focus.plainGate)
+        if record.visualAccessBlocked then
+            record.enhancementPending = true
+            return false
+        end
         overlay.enhanced = true
         record.enhancementPending = false
         IG:BumpStat("ui.interruptVisualsCreated")
         changed = true
 
-        if IG.DB.animateGlow ~= false and overlay.target.candidate and overlay.target.animation then overlay.target.animation:Play() end
-        if IG.DB.animateGlow ~= false and overlay.focus.candidate and overlay.focus.animation then overlay.focus.animation:Play() end
+        for index = 1, #UNITS do
+            local branch = overlay[UNITS[index]]
+            if IG.DB.animateGlow ~= false and branch.candidate and branch.animation
+                and CanUseVisual(record, branch.animation) then branch.animation:Play() end
+        end
     end
 
     if IG.DB.cdText and not overlay.cooldownText then
@@ -480,6 +524,7 @@ function Glow:CreatePendingOverlays()
 
     local changed = false
     for _, record in pairs(IG.ObservedButtons) do
+        self:RetryRecordVisuals(record)
         if record.overlayAccessDeferred then self:AllowOverlayAccessRetry(record, true) end
         if record.isInterrupt and not record.overlay then
             changed = self:CreateShell(record) ~= nil or changed
@@ -498,6 +543,7 @@ end
 function Glow:EnsureCooldownTexts()
     if not IG.DB.cdText or IG:IsInCombat() then return end
     for record in pairs(IG.InterruptRecords) do
+        self:RetryRecordVisuals(record)
         record.cooldownTextAccessDeferred = false
         self:EnsureCooldownText(record)
     end
@@ -508,11 +554,32 @@ function Glow:ClearRecord(record)
     local overlay = record and record.overlay
     if not overlay then return end
 
-    SetCandidate(overlay.target, false)
-    SetCandidate(overlay.focus, false)
-    if overlay.cooldownText then overlay.cooldownText:SetText("") end
-    record.lastCooldownText = ""
+    SetCandidate(record, overlay.target, false)
+    SetCandidate(record, overlay.focus, false)
+    if overlay.cooldownText and CanUseVisual(record, overlay.cooldownText) then
+        overlay.cooldownText:SetText("")
+        record.lastCooldownText = ""
+    end
     self:UpdateRuntimeDriver()
+end
+
+function Glow:RetryRecordVisuals(record)
+    if record.visualAccessBlocked ~= ACCESS_DEFERRED then return end
+    record.visualAccessBlocked = nil
+    -- Clear an old display even if its provider unbound it or the addon was
+    -- disabled while access was denied. Fresh cast state owns the next show.
+    self:ClearRecord(record)
+    if not record.visualAccessBlocked and record.isInterrupt and IG.DB.enabled == true
+        and IG.RuntimeLifecycle and IG.RuntimeLifecycle:IsActive() then
+        self:EnsureInterruptVisuals(record)
+        IG:MarkCastDirty()
+        IG:MarkCooldownDirty()
+        IG:MarkVisualDirty()
+    end
+end
+
+function Glow:RetryDeferredVisuals()
+    for _, record in pairs(IG.ObservedButtons) do self:RetryRecordVisuals(record) end
 end
 
 function Glow:ApplyStoredInterruptibilityToRecord(record)
@@ -525,6 +592,7 @@ function Glow:ApplyStoredInterruptibilityToRecord(record)
         local state = IG.CastState[unit]
         local branch = overlay[unit]
         if state and branch then
+            if not CanUseVisual(record, branch.niGate) then return false end
             if not state.active or state.niState == "none" or state.niState == "interruptible" then
                 branch.niGate:SetAlpha(1)
             elseif state.niState == "not-interruptible" then
@@ -548,7 +616,7 @@ function Glow:ApplyUnitInterruptibility(unit, rawNotInterruptible, active)
     local testMode = IG.testMode == true
     for record in pairs(IG.InterruptRecords) do
         local branch = record.overlay and record.overlay[unit]
-        if branch then
+        if branch and CanUseVisual(record, branch.niGate) then
             if not active or testMode then
                 branch.niGate:SetAlpha(1)
             elseif IG.CanAccess(rawNotInterruptible) then
@@ -624,7 +692,7 @@ function Glow:RefreshRecord(record)
 
     for index = 1, #UNITS do
         local unit = UNITS[index]
-        SetCandidate(record.overlay[unit], CandidateFor(record, unit))
+        SetCandidate(record, record.overlay[unit], CandidateFor(record, unit))
     end
     self:RefreshCooldownText(record, IG:Now())
 end
@@ -632,7 +700,7 @@ end
 function Glow:RefreshUnit(unit)
     if unit ~= "target" and unit ~= "focus" then return end
     for record in pairs(IG.InterruptRecords) do
-        if record.overlay then SetCandidate(record.overlay[unit], CandidateFor(record, unit)) end
+        if record.overlay then SetCandidate(record, record.overlay[unit], CandidateFor(record, unit)) end
     end
     self:UpdateRuntimeDriver()
 end
@@ -647,6 +715,7 @@ function Glow:RefreshCooldownText(record, now)
     local text = record.overlay and record.overlay.cooldownText
     if IG.DB.enabled and IG.DB.cdText and not text then text = self:EnsureCooldownText(record) end
     if not text then return false end
+    if not CanUseVisual(record, text) then return false end
 
     if IG.DB.enabled ~= true
         or not IG.DB.cdText
@@ -724,7 +793,7 @@ runtimeFrame:SetScript("OnUpdate", function(_, elapsed)
     local needsPoll = false
 
     for _, ability in pairs(IG.AbilityStates) do
-        if next(ability.records) ~= nil then
+        if HasAvailableRecord(ability) then
             local deadline = ability.deadline
             if type(deadline) == "number" and (relevantCast or allowCountdown) then
                 keepRunning = true
@@ -762,7 +831,7 @@ function Glow:UpdateRuntimeDriver()
     end
 
     for _, ability in pairs(IG.AbilityStates) do
-        if next(ability.records) ~= nil then
+        if HasAvailableRecord(ability) then
             if type(ability.deadline) == "number" and (relevantCast or allowCountdown) then
                 self:SetRuntimeWorkerEnabled(true)
                 return
@@ -801,11 +870,12 @@ end
 function Glow:SetAnimationEnabled(enabled)
     IG.DB.animateGlow = enabled == true
     for _, record in pairs(IG.ObservedButtons) do
+        self:RetryRecordVisuals(record)
         local overlay = record.overlay
         if overlay then
             for index = 1, #UNITS do
                 local branch = overlay[UNITS[index]]
-                if branch.animation then
+                if branch.animation and CanUseVisual(record, branch.animation) then
                     if IG.DB.animateGlow and branch.candidate then
                         branch.animation:Play()
                     else

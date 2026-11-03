@@ -73,6 +73,7 @@ function IG.Glow:SetRuntimeWorkerEnabled(enabled)
 end
 function IG.Glow:RefreshAll() Count("refreshVisuals") end
 function IG.Glow:CreatePendingOverlays() Count("createPending") end
+function IG.Glow:RetryDeferredVisuals() Count("retryDeferredVisuals") end
 
 SlashCmdList = {}
 local function Load(relative)
