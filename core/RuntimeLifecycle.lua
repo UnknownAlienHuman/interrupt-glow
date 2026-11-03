@@ -170,6 +170,7 @@ function Lifecycle:SetEnabled(enabled)
 end
 
 function Lifecycle:OnCombatEnded()
+    if IG.Glow then IG.Glow:RetryDeferredVisuals() end
     if not self.initialized or IG.DB.enabled ~= true then return false end
     if self.enablePending or not self.active then return self:Activate() end
 

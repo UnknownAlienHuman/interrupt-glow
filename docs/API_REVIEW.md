@@ -1,6 +1,6 @@
 # Retail 12.1.5 source review
 
-Checked **2026-11-02**. The fetched `Gethe/wow-ui-source` **live** branch resolves to `d07eb00237d8891f153215db98a5df880a26cfe5`, commit **12.1.5 (70688)** dated 2026-10-31. Shared guidance: `UnknownAlienHuman/wow-addon-engineering-kb@b03e1635d0ff8bcd6be4f4dfac589dafec4e5e83`.
+Checked **2026-11-02**, source heads rechecked **2026-11-03**. The fetched `Gethe/wow-ui-source` **live** branch resolves to `d07eb00237d8891f153215db98a5df880a26cfe5`, commit **12.1.5 (70688)** dated 2026-10-31. Shared guidance: `UnknownAlienHuman/wow-addon-engineering-kb@b03e1635d0ff8bcd6be4f4dfac589dafec4e5e83`.
 
 This is source evidence for Retail. Interface **120105** is the selected patch-family declaration. `GetBuildInfo`, rendering, restriction, taint and performance checks in the actual client are **NOT-RUN**.
 
@@ -14,6 +14,8 @@ All source paths below refer to the same [Blizzard UI commit](https://github.com
 | `Blizzard_APIDocumentationGenerated/SpellDocumentation.lua` | `GetSpellCooldownDuration(spellID, ignoreGCD)` retains the same contract. A cooldown status marked on GCD does not establish personal-cooldown readiness. |
 | `Blizzard_APIDocumentationGenerated/UnitDocumentation.lua` | Cast events are secret-capable; `castBarID` is explicitly NeverSecret. Consume only that sequence identity from stop payloads. |
 | `Blizzard_APIDocumentationGenerated/SecretPredicateAPIDocumentation.lua` | Spell/action cooldown and unit casting predicates remain available for scoped diagnostics. Their results are access-gated. |
+| `Blizzard_APIDocumentationGenerated/SimpleFrameScriptObjectAPIDocumentation.lua` | `CanBeAccessedInContext`, `HasAccessConstraints` and `IsForbidden` describe current-context access and can return secret values. Existing child destinations are checked before mutation; construction-time success is not later permission. |
+| `Blizzard_APIDocumentationGenerated/SimpleRegionAPIDocumentation.lua` and `SimpleAnimGroupAPIDocumentation.lua` | `SetAlphaFromBoolean` remains a direct opaque sink. Its destination and ordinary animation groups still require current object access. Secret alpha is neither read back nor used to control animation. |
 | `Blizzard_ActionBar/Shared/ActionButton.lua` | `ActionBarActionButtonMixin:UpdateAction` emits `ActionButton.OnActionChanged` except for the Assisted Combat rotation action. The callback is not a universal third-party button feed. |
 | `Blizzard_CooldownViewer/CooldownViewer.lua` | `CooldownViewerMixin:OnAcquireItemFrame` remains an internal acquisition hook. |
 | `Blizzard_CooldownViewer/CooldownViewerItemData.lua` | `OnCooldownIDSet` and `ResetCooldownData` remain the inspected pooled-identity hooks. These internal hooks are version-sensitive, not a promised public extension API. |
@@ -35,9 +37,10 @@ The current KB spell-secrecy registry recommends `SPELL_SECRECY_CHANGED`, but th
 
 ## Offline validation
 
-The revised beta.8 tree was checked on 2026-11-03 with `/usr/bin/texlua` reporting **Lua 5.3**:
+The beta.9 tree was checked on 2026-11-03 with `/usr/bin/texlua` reporting **Lua 5.3**:
 
-- `python3 tools/test.py`: **44/44** behavioral tests passed, syntax passed for **64** TOC/test files, static invariants passed. The modeled integration loads the real TOC; fixtures do not load deleted policy wrappers. Coverage includes slash lifecycle, authoritative LAB identity, shared slot routing, opaque-readiness sleep, diagnostic access failures and coalesced invalidations.
+- `python3 tools/test.py`: **45/45** behavioral tests passed, syntax passed for **65** TOC/test files, static invariants passed. The modeled integration loads the real TOC. Coverage includes lifecycle, provider identity, opaque readiness, diagnostic access and post-creation visual permission transitions, including worker sleep and disabled/unbound cleanup.
+- The new visual-access regression fails against the prior merged `824c8e971d65efbb23a33e1397c47c7797301cc5` implementation with a denied-destination mutation, then passes against the fix. Permission predicates/setter failures are modeled; this is not evidence of a named-client occurrence.
 - `python3 tools/sync_interrupts.py --source <pinned TrackedCooldowns.lua> --check`: all **34** specialization entries matched the source blob above.
 - `git diff --check`: passed.
 

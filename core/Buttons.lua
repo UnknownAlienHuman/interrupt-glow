@@ -426,6 +426,7 @@ end
 
 function Buttons:ReconcileRecord(record)
     if not record then return end
+    if IG.Glow then IG.Glow:RetryRecordVisuals(record) end
 
     local isInterrupt, sourceKind, sourceID, spellID, canonicalSpellID = self:ResolveRecord(record)
     isInterrupt = isInterrupt == true

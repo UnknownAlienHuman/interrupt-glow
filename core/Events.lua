@@ -144,6 +144,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if IG.RuntimeProbe then
             IG.RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
         end
+        if IG.Glow then IG.Glow:RetryDeferredVisuals() end
         if RuntimeActive() then
             IG:BumpStat("events.restrictionChanged")
             IG:MarkCastDirty()

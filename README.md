@@ -1,6 +1,6 @@
 # Interrupt Glow
 
-**1.1.0-beta.8 · WoW Retail 12.1.5 · Interface 120105**
+**1.1.0-beta.9 · WoW Retail 12.1.5 · Interface 120105**
 
 Highlights your interrupt buttons when a hostile **target** or **focus** is casting and the interrupt is ready. Target highlights are cyan; focus highlights are amber. The pulse can be switched off for a steady highlight.
 

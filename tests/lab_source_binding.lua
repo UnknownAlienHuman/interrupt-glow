@@ -35,6 +35,7 @@ function IG.Glow:QueueShell() end
 function IG.Glow:EnsureInterruptVisuals() end
 function IG.Glow:ApplyStoredInterruptibilityToRecord() return true end
 function IG.Glow:RefreshRecord() end
+function IG.Glow:RetryRecordVisuals() end
 function IG.Glow:ClearRecord() end
 function IG.Data:GetCanonicalSpellID(id)
     if id == 1766 then return 1766 end

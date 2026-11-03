@@ -76,6 +76,7 @@ function InterruptGlow.Glow:SetRuntimeWorkerEnabled(enabled)
 end
 function InterruptGlow.Glow:RefreshAll() Count("refreshVisuals") end
 function InterruptGlow.Glow:CreatePendingOverlays() Count("createPending") end
+function InterruptGlow.Glow:RetryDeferredVisuals() Count("retryDeferredVisuals") end
 
 local loader, loadError = loadfile(ROOT .. "/core/RuntimeLifecycle.lua")
 assert(loader, loadError)
@@ -125,6 +126,14 @@ assert(Lifecycle:SetEnabled(false) == false)
 assert(calls.buttonsDetach == 1 and calls.castDetach == 1 and calls.cdmDetach == 1)
 assert(calls.eventsDisable == 1)
 
+-- A regen boundary retries deferred visual cleanup even while the master
+-- setting remains disabled; it does not reattach runtime providers.
+combat = false
+assert(Lifecycle:OnCombatEnded() == false)
+assert(calls.retryDeferredVisuals == 1)
+assert(not Lifecycle:IsActive() and not runtimeEventsEnabled)
+assert(calls.buttonsAttach == 1 and calls.eventsEnable == 1)
+
 -- Enabling in combat records the setting but defers provider discovery, event
 -- registration and visual construction until PLAYER_REGEN_ENABLED.
 combat = true
@@ -143,6 +152,7 @@ assert(runtimeEventsEnabled == true and calls.eventsEnable == 2)
 assert(calls.specRefresh == 2)
 assert(calls.buttonsAttach == 2 and calls.castAttach == 2 and calls.cdmAttach == 2)
 assert(calls.createPending == 2)
+assert(calls.retryDeferredVisuals == 2)
 
 assert(InterruptGlow.RuntimeLifecycle == Lifecycle)
 assert(type(Lifecycle.Deactivate) == "function")

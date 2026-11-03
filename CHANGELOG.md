@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0-beta.9 — 2026-11-03
+
+- Recheck current object access before changing existing highlight gates, countdown text or animations; construction-time permission is not reused.
+- Suspend denied visual records without timer retries, and stop timing work when every copy of an ability is blocked. Explicit provider, restriction, settings and out-of-combat transitions may recheck conditional denial; confirmed forbidden objects remain skipped.
+- Clear stale presentation caches on denial and repaint from fresh state after recovery. Recovery also clears old visuals if the button was unbound or the addon was disabled meanwhile.
+- Add regression coverage for permission loss after shell creation, exact child-object denial, event-driven recovery and worker sleep. Client restriction, rendering and taint checks remain NOT-RUN.
+
 ## 1.1.0-beta.8 — 2026-11-02
 
 - Target Retail 12.1.5 / Interface 120105; review current Blizzard source 12.1.5.70688 and verify the unchanged 34-specialization interrupt snapshot.

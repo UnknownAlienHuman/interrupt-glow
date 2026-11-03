@@ -8,6 +8,7 @@ local stats = {}
 local markCastCalls = 0
 local markCooldownCalls = 0
 local restrictionCalls = 0
+local deferredVisualRetries = 0
 local regenCalls = 0
 local onEvent
 
@@ -42,6 +43,7 @@ EventUtil = {
 InterruptGlow = {
     DB = { enabled = false, debug = false },
     RuntimeProbe = {},
+    Glow = {},
 }
 function InterruptGlow:BumpStat(key)
     stats[key] = (stats[key] or 0) + 1
@@ -50,6 +52,9 @@ function InterruptGlow:MarkCastDirty() markCastCalls = markCastCalls + 1 end
 function InterruptGlow:MarkCooldownDirty() markCooldownCalls = markCooldownCalls + 1 end
 function InterruptGlow.RuntimeProbe:OnRestrictionStateChanged()
     restrictionCalls = restrictionCalls + 1
+end
+function InterruptGlow.Glow:RetryDeferredVisuals()
+    deferredVisualRetries = deferredVisualRetries + 1
 end
 
 local runtimeActive = false
@@ -119,6 +124,8 @@ onEvent(frame, "SPELL_UPDATE_COOLDOWN", 1766, 1766, 1, 1)
 assert(markCastCalls == 0 and markCooldownCalls == 0)
 onEvent(frame, "ADDON_RESTRICTION_STATE_CHANGED", "cooldown", true)
 assert(restrictionCalls == 1)
+assert(deferredVisualRetries == 1,
+    "restriction transition did not retry deferred visual access while disabled")
 assert(markCastCalls == 0 and markCooldownCalls == 0)
 onEvent(frame, "PLAYER_REGEN_ENABLED")
 assert(regenCalls == 1)
