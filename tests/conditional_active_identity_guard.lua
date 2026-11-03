@@ -3,229 +3,125 @@ local ROOT = arg[1] or "."
 _G = _G or _ENV
 
 local readinessAwake = true
+local currentInterrupt = true
+local failActionInfo = false
 local dirtyCalls = 0
-local cooldownDirtyCalls = 0
-local allDirtyCalls = 0
-local nativeBaseCalls = 0
-local usabilityBaseCalls = 0
+local interruptCalls = 0
+local actionInfoCalls = 0
 local clearCalls = 0
-local refreshUnitCalls = 0
-local reconcileCalls = 0
-local reconcileSawPending = nil
-local reconcileSawFreshSnapshot = nil
-local failNextReconcile = false
 
 InterruptGlow = {
+    DB = { enabled = true, cdText = false },
     modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     PendingButtons = setmetatable({}, { __mode = "k" }),
     InterruptRecords = setmetatable({}, { __mode = "k" }),
-    Buttons = { attached = true },
+    AbilityStates = {},
     Usability = {},
     Glow = {},
+    Data = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
-function InterruptGlow.CanAccess() return true end
-function InterruptGlow:ReadMember(object, key)
-    if not object then return nil, false end
+local IG = InterruptGlow
+function IG:RegisterModule(name, module) self.modules[name] = module end
+function IG.CanAccess(_) return true end
+function IG:ReadMember(object, key)
+    if object == nil then return nil, false end
     return object[key], true
 end
-function InterruptGlow:AsNumber(value)
+function IG:AsNumber(value)
     if type(value) == "number" then return value end
     if type(value) == "string" then return tonumber(value) end
 end
-function InterruptGlow:WipeMap(map)
-    for key in pairs(map) do map[key] = nil end
-end
-function InterruptGlow:BumpStat() end
-function InterruptGlow:NeedsReadinessRuntime() return readinessAwake end
-function InterruptGlow:MarkButtonDirty(button)
-    if self.PendingButtons[button] then return end
+function IG:BumpStat() end
+function IG:WipeMap(map) for key in pairs(map) do map[key] = nil end end
+function IG:NeedsReadinessRuntime() return readinessAwake end
+function IG:QueueButtonForReconcile(button)
+    if self.PendingButtons[button] then return false end
     self.PendingButtons[button] = true
     dirtyCalls = dirtyCalls + 1
-end
-function InterruptGlow:MarkCooldownDirty()
-    cooldownDirtyCalls = cooldownDirtyCalls + 1
     return true
 end
-function InterruptGlow:MarkAllButtonsDirty()
-    allDirtyCalls = allDirtyCalls + 1
+function IG:MarkButtonDirty(button)
+    if self.ConditionalActions and not self.ConditionalActions:QueueButton(button) then return end
+    self:QueueButtonForReconcile(button)
 end
-
-local Buttons = InterruptGlow.Buttons
-function Buttons:ObserveButton(button, adapter)
-    local record = InterruptGlow.ObservedButtons[button]
-    if not record then
-        record = { button = button, adapter = adapter }
-        InterruptGlow.ObservedButtons[button] = record
-    end
-    return record
-end
-function Buttons:OnNativeActionChanged(button)
-    nativeBaseCalls = nativeBaseCalls + 1
-    local record = InterruptGlow.ObservedButtons[button]
-    record.actionSnapshotFresh = false
-    InterruptGlow:MarkButtonDirty(button)
-end
-function Buttons:ReconcileRecord(record)
-    reconcileCalls = reconcileCalls + 1
-    reconcileSawPending = record.conditionalIdentityPending == true
-    reconcileSawFreshSnapshot = record.actionSnapshotFresh == true
-    if failNextReconcile then
-        failNextReconcile = false
-        error("forced reconcile failure")
-    end
-end
-function Buttons:AttachDominosNow() end
-function Buttons:Detach() self.attached = false end
-
-function InterruptGlow.Usability:OnActionUsableChanged()
-    usabilityBaseCalls = usabilityBaseCalls + 1
-    return true
-end
-
-local Glow = InterruptGlow.Glow
-function Glow:ClearRecord(record)
+function IG.Glow:QueueShell() end
+function IG.Glow:AllowOverlayAccessRetry() return true end
+function IG.Glow:ClearRecord(record)
     clearCalls = clearCalls + 1
     record.visualVisible = false
 end
-function Glow:RefreshRecord(record)
-    record.visualVisible = true
+function IG.Data:GetCanonicalSpellID(spellID)
+    if spellID == 1766 then return 1766 end
 end
-function Glow:RefreshUnit()
-    refreshUnitCalls = refreshUnitCalls + 1
-    for record in pairs(InterruptGlow.InterruptRecords) do
-        record.visualVisible = true
-    end
-end
-function Glow:RefreshAll()
-    for record in pairs(InterruptGlow.InterruptRecords) do
-        record.visualVisible = true
-    end
+function IG.Data:LearnRuntimeInterrupt(spellID) return spellID end
+
+C_ActionBar = {
+    IsInterruptAction = function(slot)
+        assert(slot == 7)
+        interruptCalls = interruptCalls + 1
+        return currentInterrupt
+    end,
+    IsAssistedCombatAction = function() return false end,
+    GetSpell = function() return 1766 end,
+}
+function GetActionInfo()
+    actionInfoCalls = actionInfoCalls + 1
+    if failActionInfo then error("forced action snapshot error") end
+    return "spell", 1766, nil
 end
 
-local loader, loadError = loadfile(ROOT .. "/core/ConditionalMacroPolicy.lua")
-assert(loader, loadError)
-loader()
+local buttonsLoader, buttonsError = loadfile(ROOT .. "/core/Buttons.lua")
+assert(buttonsLoader, buttonsError)
+buttonsLoader()
+local resolverLoader, resolverError = loadfile(ROOT .. "/core/ActionResolver.lua")
+assert(resolverLoader, resolverError)
+resolverLoader()
+local actionsLoader, actionsError = loadfile(ROOT .. "/core/ConditionalActions.lua")
+assert(actionsLoader, actionsError)
+actionsLoader()
 
+local Buttons = assert(IG.Buttons)
+local Actions = assert(IG.ConditionalActions)
+Buttons.attached = true
+Buttons.nativeAttached = true
 local button = { action = 7 }
-local record = assert(Buttons:ObserveButton(button, "native"))
-record.isInterrupt = true
-record.overlay = {}
-record.actionSnapshotFresh = true
-record.visualVisible = true
-InterruptGlow.InterruptRecords[record] = true
+local record = {
+    button = button,
+    adapter = "native",
+    isInterrupt = true,
+    overlay = {},
+    visualVisible = true,
+}
+IG.ObservedButtons[button] = record
+Actions:Observe(button, record)
 
-local function ReconcilePending()
-    for pendingButton in pairs(InterruptGlow.PendingButtons) do
-        InterruptGlow.PendingButtons[pendingButton] = nil
-        Buttons:ReconcileRecord(assert(InterruptGlow.ObservedButtons[pendingButton]))
-    end
-end
-
--- Active ACTION_USABLE_CHANGED invalidates the normalized action snapshot,
--- marks identity pending and hides the old interrupt visual before next-frame work.
-assert(InterruptGlow.Usability:OnActionUsableChanged({ { slot = 7 } }) == true)
-assert(usabilityBaseCalls == 1)
-assert(dirtyCalls == 1)
-assert(record.actionSnapshotFresh == false)
-assert(record.conditionalIdentityPending == true)
-assert(record.visualVisible == false)
-
-local clearsBeforeRefresh = clearCalls
-Glow:RefreshUnit("target")
-assert(refreshUnitCalls == 1)
-assert(clearCalls > clearsBeforeRefresh)
-assert(record.visualVisible == false)
-
-ReconcilePending()
-assert(reconcileCalls == 1)
-assert(reconcileSawPending == true)
-assert(reconcileSawFreshSnapshot == false)
-assert(record.conditionalIdentityPending == false)
-assert(record.visualVisible == true)
-
--- The exact native callback has the same active-cast guard.
-record.actionSnapshotFresh = true
-record.visualVisible = true
+-- The callback invalidates before queue dedupe, hides the old visual, and
+-- leaves all action APIs for the addon-owned reconcile.
 Buttons:OnNativeActionChanged(button)
-assert(nativeBaseCalls == 1)
-assert(dirtyCalls == 2)
-assert(record.actionSnapshotFresh == false)
-assert(record.conditionalIdentityPending == true)
-assert(record.visualVisible == false)
-ReconcilePending()
+assert(record.conditionalIdentityPending == true and record.visualVisible == false)
+assert(clearCalls == 1 and dirtyCalls == 1)
+assert(interruptCalls == 0 and actionInfoCalls == 0)
+for _ = 1, 100 do Buttons:OnNativeActionChanged(button) end
+assert(dirtyCalls == 1 and interruptCalls == 0 and actionInfoCalls == 0)
+
+-- If resolution errors, the pending visual guard survives subsequent refreshes.
+IG.PendingButtons[button] = nil
+failActionInfo = true
+local ok, err = pcall(IG.ActionResolver.ResolveRecord, IG.ActionResolver, record)
+assert(ok == false and tostring(err):find("forced action snapshot error", 1, true))
+assert(record.conditionalIdentityPending == true and record.visualVisible == false)
+
+-- A successful reconcile uses the latest identity once, then clears the guard.
+failActionInfo = false
+local isInterrupt, sourceKind, sourceID, spellID, canonicalSpellID =
+    IG.ActionResolver:ResolveRecord(record)
+assert(isInterrupt == true)
+assert(sourceKind == "action" and sourceID == 7)
+assert(spellID == 1766 and canonicalSpellID == 1766)
+assert(interruptCalls == 2 and actionInfoCalls == 2)
+Actions:Reconciled(record)
 assert(record.conditionalIdentityPending == false)
-assert(record.visualVisible == true)
-
--- Resolver failure must not remove the visual guard. The old branch remains
--- hidden on later unit refreshes until a successful reconciliation completes.
-record.actionSnapshotFresh = true
-record.visualVisible = true
-Buttons:OnNativeActionChanged(button)
-assert(dirtyCalls == 3)
-assert(record.conditionalIdentityPending == true)
-InterruptGlow.PendingButtons[button] = nil
-failNextReconcile = true
-local ok, err = pcall(Buttons.ReconcileRecord, Buttons, record)
-assert(ok == false and tostring(err):find("forced reconcile failure", 1, true))
-assert(record.conditionalIdentityPending == true)
-assert(record.visualVisible == false)
-Glow:RefreshUnit("target")
-assert(record.visualVisible == false)
-Buttons:ReconcileRecord(record)
-assert(record.conditionalIdentityPending == false)
-assert(record.visualVisible == true)
-
--- While readiness sleeps, callbacks do not wake reconciliation. A later full
--- rebuild preserves the pending visual guard until the actual reconcile.
-readinessAwake = false
-record.actionSnapshotFresh = true
-record.visualVisible = true
-Buttons:OnNativeActionChanged(button)
-assert(nativeBaseCalls == 2)
-assert(dirtyCalls == 3)
-assert(record.actionSnapshotFresh == false)
-assert(record.conditionalIdentityPending == true)
-assert(record.visualVisible == false)
-
-InterruptGlow:MarkAllButtonsDirty()
-assert(allDirtyCalls == 1)
-Glow:RefreshUnit("target")
-assert(record.visualVisible == false)
-
-readinessAwake = true
-InterruptGlow:MarkCooldownDirty(false)
-assert(cooldownDirtyCalls == 1)
-assert(dirtyCalls == 4)
-assert(record.conditionalIdentityPending == true)
-ReconcilePending()
-assert(record.conditionalIdentityPending == false)
-assert(reconcileSawPending == true)
-assert(reconcileSawFreshSnapshot == false)
-assert(record.visualVisible == true)
-
--- Detach clears retained pending markers so a later activation starts from a
--- normal full discovery/reconcile boundary.
-readinessAwake = false
-Buttons:OnNativeActionChanged(button)
-assert(record.conditionalIdentityPending == true)
-Buttons:Detach()
-assert(record.conditionalIdentityPending == false)
-
-local policy = assert(InterruptGlow.modules.ConditionalMacroPolicy)
-assert(policy.invalidatesSnapshotsBeforeActiveReconcile == true)
-assert(policy.marksIdentityPendingForActiveChanges == true)
-assert(policy.retainsVisualGuardThroughReconcile == true)
-assert(policy.failedReconcileRemainsFailClosed == true)
-assert(policy.separatesActiveGuardFromSleepingQueue == true)
-assert(policy.defersIdentityWhileReadinessSleeps == true)
-assert(policy.flushesBeforeCooldownRefresh == true)
-assert(policy.hidesStaleVisualsUntilReconcile == true)
-assert(policy.fullRebuildPreservesVisualGuard == true)
-assert(policy.nativeCallbackReadsActionAPIs == false)
-assert(policy.parsesMacroBodies == false)
-assert(policy.scansActionSlots == false)
+assert(clearCalls == 1)
 
 print("CONDITIONAL ACTIVE IDENTITY GUARD TEST PASSED")

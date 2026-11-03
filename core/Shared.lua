@@ -15,8 +15,8 @@ local pairs = pairs
 local next = next
 local math_floor = math.floor
 
-local CURRENT_SCHEMA = 3
-local CURRENT_INTERFACE = 120100
+local CURRENT_SCHEMA = 4
+local CURRENT_INTERFACE = 120105
 local rawDB = type(InterruptGlowDB) == "table" and InterruptGlowDB or {}
 
 local function ReadBoolean(key, defaultValue)
@@ -43,6 +43,7 @@ local DB = {
     interface = CURRENT_INTERFACE,
     enabled = ReadBoolean("enabled", true),
     cdText = ReadBoolean("cdText", false),
+    animateGlow = ReadBoolean("animateGlow", true),
     cdm = ReadBoolean("cdm", true),
     strictNI = ReadBoolean("strictNI", true),
     optimisticRestrictedCooldown = ReadBoolean("optimisticRestrictedCooldown", false),
@@ -67,11 +68,17 @@ IG.runtimeInitialized = false
 IG.playerLoginSeen = false
 
 local canaccessvalue = _G.canaccessvalue
+local canaccesstable = _G.canaccesstable
 local function CanAccess(value)
     if type(canaccessvalue) ~= "function" then return true end
     return canaccessvalue(value) == true
 end
 IG.CanAccess = CanAccess
+
+function IG.CanAccessTable(value)
+    if not CanAccess(value) or type(value) ~= "table" then return false end
+    return type(canaccesstable) ~= "function" or canaccesstable(value) == true
+end
 
 local function ReadIndex(container, key)
     return container[key]
@@ -79,6 +86,9 @@ end
 
 function IG:ReadMember(container, key)
     if not CanAccess(container) or container == nil then return nil, false end
+    if type(container) == "table" and not self.CanAccessTable(container) then
+        return nil, false
+    end
     local ok, value = pcall(ReadIndex, container, key)
     if not ok or not CanAccess(value) then return nil, false end
     return value, true
@@ -117,15 +127,79 @@ function IG:IsAddOnFullyLoaded(addOnName)
     return ok and loaded == true
 end
 
-function IG:Print(message)
-    local chat = _G.DEFAULT_CHAT_FRAME
-    if not chat or not chat.AddMessage then return end
-    chat:AddMessage("|cff66ccffInterruptGlow|r: " .. tostring(message or ""))
+-- Internal per-path counters are diagnostic instrumentation, not production
+-- logic. Keep them completely dormant unless debug logging or one explicit
+-- diagnostic owner has acquired the counter window.
+IG.profileCountersEnabled = false
+IG.profileCounterOwner = nil
+
+local function NormalizeOwner(owner)
+    return type(owner) == "string" and owner ~= "" and owner or "manual"
 end
 
 function IG:BumpStat(key, amount)
-    amount = amount or 1
+    if self.DB.debug ~= true and self.profileCountersEnabled ~= true then return end
+    if type(key) ~= "string" then return end
+
+    amount = type(amount) == "number" and amount or 1
     self.Stats[key] = (self.Stats[key] or 0) + amount
+end
+
+function IG:StartProfileCounters(owner)
+    owner = NormalizeOwner(owner)
+    local currentOwner = self.profileCounterOwner
+    if currentOwner ~= nil and currentOwner ~= owner then
+        return false, currentOwner
+    end
+
+    self:WipeMap(self.Stats)
+    self.profileCounterOwner = owner
+    self.profileCountersEnabled = true
+    return true, owner
+end
+
+function IG:StopProfileCounters(owner)
+    owner = NormalizeOwner(owner)
+    local currentOwner = self.profileCounterOwner
+    if currentOwner ~= nil and currentOwner ~= owner then
+        return false, currentOwner
+    end
+
+    self.profileCounterOwner = nil
+    self.profileCountersEnabled = false
+    return true, nil
+end
+
+function IG:ResetProfileCounters(owner)
+    owner = NormalizeOwner(owner)
+    local currentOwner = self.profileCounterOwner
+    if currentOwner ~= nil and currentOwner ~= owner then
+        return false, currentOwner
+    end
+
+    self:WipeMap(self.Stats)
+    return true, currentOwner
+end
+
+function IG:Print(message)
+    local chat = _G.DEFAULT_CHAT_FRAME
+    if not chat or type(chat.AddMessage) ~= "function" then return end
+
+    local text
+    if not self.CanAccess(message) then
+        text = "<inaccessible>"
+    else
+        local valueType = type(message)
+        if message == nil then
+            text = ""
+        elseif valueType == "string" or valueType == "number" or valueType == "boolean" then
+            text = tostring(message)
+        else
+            text = "<" .. valueType .. ">"
+        end
+    end
+
+    chat:AddMessage("|cff66ccffInterruptGlow|r: " .. text)
 end
 
 function IG:WipeMap(map)
@@ -192,10 +266,15 @@ function IG:RequestFlush()
     ScheduleFlushWorker()
 end
 
-function IG:MarkButtonDirty(button)
-    if not button then return end
+function IG:QueueButtonForReconcile(button)
     self.PendingButtons[button] = true
     self:RequestFlush()
+end
+
+function IG:MarkButtonDirty(button)
+    if not CanAccess(button) or button == nil then return end
+    if self.ConditionalActions and not self.ConditionalActions:QueueButton(button) then return end
+    self:QueueButtonForReconcile(button)
 end
 
 function IG:MarkSpecDirty()
@@ -216,15 +295,12 @@ end
 function IG:MarkCooldownDirty(fromSpellCooldownEvent)
     if not self:NeedsReadinessRuntime() then
         self._dirty.cooldown = false
-        if self.Cooldown and self.Cooldown.ClearGCDHints then self.Cooldown:ClearGCDHints() end
         return false
     end
 
+    if self.ConditionalActions then self.ConditionalActions:FlushDeferred() end
     self._dirty.cooldown = true
     MarkActiveAbilitiesReadinessPending()
-    if not fromSpellCooldownEvent and self.Cooldown and self.Cooldown.ClearGCDHints then
-        self.Cooldown:ClearGCDHints()
-    end
     self:RequestFlush()
     return true
 end
@@ -284,12 +360,17 @@ function IG:Flush()
         if CastTracking then CastTracking:RefreshAll() end
     end
 
+    -- A cast snapshot can wake deferred identities after the first identity
+    -- phase. Reconcile them before evaluating cooldowns in this same pass.
+    if dirty.cooldown and self.ConditionalActions then
+        self.ConditionalActions:FlushDeferred()
+        if next(self.PendingButtons) ~= nil and Buttons then Buttons:ReconcilePending() end
+    end
+
     if dirty.cooldown then
         dirty.cooldown = false
         if self:NeedsReadinessRuntime() and Cooldown then
             Cooldown:RefreshAll()
-        elseif Cooldown and Cooldown.ClearGCDHints then
-            Cooldown:ClearGCDHints()
         end
     end
 

@@ -16,7 +16,7 @@ function GetSpellLossOfControlCooldown()
 end
 
 C_Spell = {
-    GetSpellLossOfControlCooldown = function(spellID)
+    GetSpellLossOfControlCooldownInfo = function(spellID)
         assert(spellID == 1766)
         currentCalls = currentCalls + 1
         return locInfo
@@ -73,7 +73,7 @@ assert(legacyCalls == 0)
 assert(cooldownCalls == 0)
 
 Cooldown.generation = Cooldown.generation + 1
-C_Spell.GetSpellLossOfControlCooldown = function(spellID)
+C_Spell.GetSpellLossOfControlCooldownInfo = function(spellID)
     assert(spellID == 1766)
     currentCalls = currentCalls + 1
     return nil

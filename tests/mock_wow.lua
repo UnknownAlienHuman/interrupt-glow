@@ -16,6 +16,7 @@ local fontCount = 0
 local animationCount = 0
 local castingInfoCalls = 0
 local channelInfoCalls = 0
+local interruptActionCalls = 0
 local actionCooldownCalls = 0
 local actionDurationCalls = 0
 local actionUsableCalls = 0
@@ -107,6 +108,7 @@ function ChargeDuration:GetRemainingDuration() return self.data.remaining or 0 e
 
 C_ActionBar = {
     IsInterruptAction = function(slot)
+        interruptActionCalls = interruptActionCalls + 1
         local data = actionData[slot]
         return data and data.interrupt == true or false
     end,
@@ -232,6 +234,8 @@ local function newRegion(parent)
     function region:SetJustifyH(_) end
     function region:SetWidth(_) end
     function region:SetHeight(_) end
+    function region:SetWordWrap(_) end
+    function region:GetWidth() return 720 end
     function region:SetSize(_, _) end
     function region:SetTextInsets(...) end
     function region:SetMultiLine(_) end
@@ -401,6 +405,9 @@ for _, path in ipairs(files) do
 end
 local IG = _G.InterruptGlow
 assert(IG == addonTable, "addon namespace mismatch")
+assert(InterruptGlowDB == IG.DB, "SavedVariables were not migrated before runtime modules loaded")
+assert(IG.DB.schema == 4 and IG.DB.interface == 120105)
+assert(IG.DB.debug == true and IG.DB.animateGlow == true)
 
 local function flush_all()
     for _ = 1, 80 do
@@ -464,13 +471,19 @@ assert(record1.ability == record2.ability and record1.ability == labRecord.abili
 assert(record1.ready == true and record2.ready == true, "initial readiness cache is broken")
 assert(record1.ability.readinessPending ~= true, "startup readiness remained pending")
 assert(record1.overlay and record1.overlay.enhanced == true)
-assert(ordinaryRecord.overlay and ordinaryRecord.overlay.enhanced == false, "ordinary shell must stay lightweight")
+assert(ordinaryRecord.overlay and ordinaryRecord.overlay.enhanced == true, "observed buttons must receive reusable visuals")
 assert(fontCount == 0, "cooldown text and options UI allocated at login")
 assert(not (LAB.callbacks.OnButtonUpdate and LAB.callbacks.OnButtonUpdate[IG.Buttons]), "broad LAB callback was retained")
 
--- Unchanged native feedback must not enter the dirty queue.
-EventRegistry:TriggerEvent("ActionButton.OnActionChanged", native1)
-assert(IG.PendingButtons[native1] == nil and not IG:HasDirtyWork(), "unchanged native action was queued")
+-- Native feedback is queue-only and repeated signals coalesce before the
+-- addon-owned pass performs exactly one fresh action classification.
+local classificationsBeforeNativeFeedback = interruptActionCalls
+for _ = 1, 100 do EventRegistry:TriggerEvent("ActionButton.OnActionChanged", native1) end
+assert(IG.PendingButtons[native1] == true, "native feedback was not queued for reconciliation")
+assert(interruptActionCalls == classificationsBeforeNativeFeedback, "native callback classified the action synchronously")
+flush_all()
+assert(interruptActionCalls == classificationsBeforeNativeFeedback + 1, "native callback burst did not coalesce to one classification")
+assert(record1.isInterrupt == true)
 
 -- Stable LAB slots receive resolved macro feedback from the event's exact slot.
 actionData[6] = { actionType = "macro", id = 2061, subType = "spell", interrupt = false, usable = true }
@@ -751,8 +764,11 @@ flush_all()
 assert(bfRecord.isInterrupt == true, "ButtonForge did not rebind")
 spellUsable[15487] = false
 IG.Cooldown.generation = IG.Cooldown.generation + 1
-local directSpellReady = IG.Cooldown:GetCachedReadiness("spell", 15487, false)
-assert(directSpellReady == false and spellUsableCalls > 0, "direct spell usability was not enforced")
+assert(bfRecord.ability ~= nil)
+bfRecord.ability.sourceKind = "spell"
+bfRecord.ability.sourceID = 15487
+IG.Cooldown:RefreshAbility(bfRecord.ability)
+assert(bfRecord.ready == false and spellUsableCalls > 0, "direct spell usability was not enforced")
 spellUsable[15487] = nil
 
 -- Cooldown Viewer is not force-loaded and observes only interrupt items.
@@ -805,7 +821,7 @@ IG.CastTracking:RefreshUnit("target")
 cooldownData.zero = false
 cooldownData.remaining = 4
 cooldownData.active = true
-local cdTextControl = assert(IG.Options.controls[2])
+local cdTextControl = assert(IG.Options.controls[4])
 cdTextControl:SetChecked(true)
 cdTextControl.scripts.OnClick(cdTextControl)
 assert(record1.ability.readinessPending == true, "countdown enable did not mark readiness pending")
@@ -841,4 +857,4 @@ fire("PLAYER_REGEN_ENABLED")
 flush_all()
 assert(lateRecord.overlay ~= nil)
 
-print("MOCK WOW BETA2 TESTS PASSED")
+print("MODELED TOC INTEGRATION TESTS PASSED")

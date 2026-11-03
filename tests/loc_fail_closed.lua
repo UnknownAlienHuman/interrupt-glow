@@ -30,6 +30,7 @@ function zeroDuration:IsZero() return true end
 function zeroDuration:GetRemainingDuration() return 0 end
 
 C_ActionBar = {
+    IsUsableAction = function() return true, false end,
     GetActionLossOfControlCooldownInfo = function() return actionLoC end,
     GetActionCharges = function() return nil end,
     GetActionCooldownDuration = function() return zeroDuration end,
@@ -37,6 +38,7 @@ C_ActionBar = {
 }
 
 C_Spell = {
+    IsSpellUsable = function() return true, false end,
     GetSpellLossOfControlCooldownInfo = function() return spellLoC end,
     GetSpellCharges = function() return nil end,
     GetSpellCooldownDuration = function() return zeroDuration end,
@@ -52,6 +54,9 @@ function GetPetActionCooldown() return 0, 0, 1 end
 local loader, loadError = loadfile(ROOT .. "/core/Cooldown.lua")
 assert(loader, loadError)
 loader()
+local usabilityLoader, usabilityError = loadfile(ROOT .. "/core/Usability.lua")
+assert(usabilityLoader, usabilityError)
+usabilityLoader()
 
 local Cooldown = assert(InterruptGlow.Cooldown)
 

@@ -3,67 +3,49 @@ local ROOT = arg[1] or "."
 _G = _G or _ENV
 
 local dirtyCalls = 0
-local fallbackCalls = 0
+local memberReads = 0
 local interruptCalls = 0
 local assistedCalls = 0
 local actionInfoCalls = 0
 local getSpellCalls = 0
-local protectedMemberReads = 0
-local observeCalls = 0
-
 local currentInterrupt = false
 local currentAssisted = false
-local currentActionType = "macro"
-local currentActionID = 42
-local currentActionSubType = "spell"
 local currentSpellID = 1766
 
+InterruptGlowDB = { enabled = true, cdText = false }
 InterruptGlow = {
-    DB = { debug = false },
-    profileCountersEnabled = false,
+    DB = InterruptGlowDB,
     modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     PendingButtons = setmetatable({}, { __mode = "k" }),
-    Buttons = {},
+    InterruptRecords = setmetatable({}, { __mode = "k" }),
+    AbilityStates = {},
+    Glow = {},
     Data = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
-function InterruptGlow.CanAccess(_) return true end
-function InterruptGlow:ReadMember(object, key)
-    protectedMemberReads = protectedMemberReads + 1
+local IG = InterruptGlow
+function IG:RegisterModule(name, module) self.modules[name] = module end
+function IG.CanAccess(_) return true end
+function IG:ReadMember(object, key)
+    memberReads = memberReads + 1
     if object == nil then return nil, false end
     return object[key], true
 end
-function InterruptGlow:AsNumber(value)
+function IG:AsNumber(value)
     if type(value) == "number" then return value end
     if type(value) == "string" then return tonumber(value) end
 end
-function InterruptGlow:MarkButtonDirty(button)
+function IG:BumpStat() end
+function IG:MarkButtonDirty(button)
     if self.PendingButtons[button] then return end
     self.PendingButtons[button] = true
     dirtyCalls = dirtyCalls + 1
 end
-function InterruptGlow:BumpStat() end
-
-function InterruptGlow.Data:GetCanonicalSpellID(spellID)
+function IG.Glow:QueueShell() end
+function IG.Data:GetCanonicalSpellID(spellID)
     if spellID == 1766 then return 1766 end
 end
-function InterruptGlow.Data:LearnRuntimeInterrupt(spellID) return spellID end
-
-function InterruptGlow.Buttons:ResolveRecord()
-    fallbackCalls = fallbackCalls + 1
-    return false
-end
-function InterruptGlow.Buttons:ObserveButton(button, adapter)
-    observeCalls = observeCalls + 1
-    local record = InterruptGlow.ObservedButtons[button]
-    if not record then
-        record = { button = button, adapter = adapter }
-        InterruptGlow.ObservedButtons[button] = record
-    end
-    return record
-end
+function IG.Data:LearnRuntimeInterrupt(spellID) return spellID end
 
 C_ActionBar = {
     IsInterruptAction = function(slot)
@@ -82,92 +64,75 @@ C_ActionBar = {
         return currentSpellID
     end,
 }
-
 function GetActionInfo(slot)
     assert(slot == 7)
     actionInfoCalls = actionInfoCalls + 1
-    return currentActionType, currentActionID, currentActionSubType
+    return "macro", 42, "spell"
 end
 
+local buttonsLoader, buttonsError = loadfile(ROOT .. "/core/Buttons.lua")
+assert(buttonsLoader, buttonsError)
+buttonsLoader()
 local resolverLoader, resolverError = loadfile(ROOT .. "/core/ActionResolver.lua")
 assert(resolverLoader, resolverError)
 resolverLoader()
 
-local queueLoader, queueError = loadfile(ROOT .. "/core/NativeActionQueuePolicy.lua")
-assert(queueLoader, queueError)
-queueLoader()
-
-local Buttons = InterruptGlow.Buttons
+local Buttons = assert(IG.Buttons)
+Buttons.attached = true
+Buttons.nativeAttached = true
 local button = { action = 7 }
 
--- The potentially mouseover-driven callback performs no action classification.
--- It observes once, invalidates the snapshot, and queues one physical button.
+-- The native callback only observes and queues. It does not inspect action
+-- identity, even when many callbacks arrive before the addon flushes its queue.
 Buttons:OnNativeActionChanged(button)
+local record = assert(IG.ObservedButtons[button])
+assert(record.adapter == "native")
 assert(interruptCalls == 0 and assistedCalls == 0)
-assert(actionInfoCalls == 0 and getSpellCalls == 0)
-assert(protectedMemberReads == 0)
-assert(observeCalls == 1)
-assert(dirtyCalls == 1)
+assert(actionInfoCalls == 0 and getSpellCalls == 0 and memberReads == 0)
+assert(dirtyCalls == 1 and IG.PendingButtons[button] == true)
 
-local record = assert(InterruptGlow.ObservedButtons[button])
-assert(record.actionSnapshotFresh == false)
-
--- Any number of callbacks before the addon flush remain one queued record.
 for _ = 1, 100 do Buttons:OnNativeActionChanged(button) end
 assert(interruptCalls == 0 and actionInfoCalls == 0)
-assert(observeCalls == 1 and dirtyCalls == 1)
+assert(dirtyCalls == 1, "callbacks did not coalesce to one pending button")
 
--- The addon-owned reconcile reads the latest action once.
-InterruptGlow.PendingButtons[button] = nil
-assert(Buttons:ResolveRecord(record) == false)
+-- One addon-owned resolution reads the latest interrupt classification. A
+-- confirmed non-interrupt short-circuits before spell/action identity APIs.
+IG.PendingButtons[button] = nil
+assert(IG.ActionResolver:ResolveRecord(record) == false)
 assert(interruptCalls == 1)
 assert(assistedCalls == 0 and actionInfoCalls == 0 and getSpellCalls == 0)
-assert(protectedMemberReads == 0)
-assert(fallbackCalls == 0)
-assert(record.actionSnapshotFresh == true)
 
--- Interrupt feedback is still queue-only; full identity work happens in the
--- following reconcile and is reused by that reconcile's resolver call.
+-- The next burst still queues only; the following reconciliation performs one
+-- complete classification against the latest action state.
 currentInterrupt = true
 Buttons:OnNativeActionChanged(button)
-assert(interruptCalls == 1 and dirtyCalls == 2)
-InterruptGlow.PendingButtons[button] = nil
+for _ = 1, 100 do Buttons:OnNativeActionChanged(button) end
+assert(interruptCalls == 1 and actionInfoCalls == 0)
+assert(dirtyCalls == 2)
+IG.PendingButtons[button] = nil
 local isInterrupt, sourceKind, sourceID, spellID, canonicalSpellID =
-    Buttons:ResolveRecord(record)
+    IG.ActionResolver:ResolveRecord(record)
 assert(isInterrupt == true)
 assert(sourceKind == "action" and sourceID == 7)
 assert(spellID == 1766 and canonicalSpellID == 1766)
 assert(interruptCalls == 2 and assistedCalls == 1)
 assert(actionInfoCalls == 1 and getSpellCalls == 1)
-assert(protectedMemberReads == 0)
-assert(fallbackCalls == 0)
 
--- Critical race: another signal already queued the button, then a later action
--- callback changes its identity. The callback must invalidate before dedupe so
--- the existing dirty pass cannot reuse the old snapshot.
-record.actionSnapshotFresh = true
-InterruptGlow.PendingButtons[button] = true
-currentInterrupt = false
-Buttons:OnNativeActionChanged(button)
-assert(record.actionSnapshotFresh == false)
-assert(dirtyCalls == 2)
-InterruptGlow.PendingButtons[button] = nil
-assert(Buttons:ResolveRecord(record) == false)
-assert(interruptCalls == 3)
-
--- Empty action state also remains callback-cheap and is resolved in the batch.
+-- An empty action remains callback-cheap and resolves to no interrupt.
 button.action = 0
 Buttons:OnNativeActionChanged(button)
-assert(dirtyCalls == 3)
-assert(interruptCalls == 3)
-InterruptGlow.PendingButtons[button] = nil
-assert(Buttons:ResolveRecord(record) == false)
-assert(interruptCalls == 3)
-assert(protectedMemberReads == 0)
+assert(interruptCalls == 2 and actionInfoCalls == 1)
+IG.PendingButtons[button] = nil
+assert(IG.ActionResolver:ResolveRecord(record) == false)
+assert(interruptCalls == 2)
 
-local policy = assert(InterruptGlow.modules.NativeActionQueuePolicy)
-assert(policy.callbackReadsActionAPIs == false)
-assert(policy.coalescesPerPhysicalButton == true)
-assert(policy.invalidatesBeforeDedupe == true)
+-- Provider methods are read through the guarded accessor and invoked behind a
+-- fail-closed boundary; a foreign throwing spell getter is not allowed to abort
+-- the reconciliation pass.
+local throwingDirectRecord = {
+    adapter = "lab",
+    button = { GetSpellId = function() error("foreign method failed") end },
+}
+assert(IG.ActionResolver:ResolveRecord(throwingDirectRecord) == false)
 
 print("ACTION RESOLVER QUEUE-ONLY FAST PATH TEST PASSED")

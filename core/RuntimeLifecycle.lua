@@ -7,7 +7,7 @@ local Lifecycle = {
     enablePending = false,
 }
 IG.RuntimeLifecycle = Lifecycle
-IG:RegisterModule("RuntimeLifecyclePolicy", Lifecycle)
+IG:RegisterModule("RuntimeLifecycle", Lifecycle)
 
 local type = type
 
@@ -30,9 +30,6 @@ local function ClearDirtyState()
         dirty.pruneCaches = false
     end
 
-    if IG.Cooldown and type(IG.Cooldown.ClearGCDHints) == "function" then
-        IG.Cooldown:ClearGCDHints()
-    end
 end
 
 local function StopAndClearPrewarm()
@@ -69,6 +66,7 @@ local function ClearCastState()
 end
 
 function Lifecycle:Deactivate()
+    IG.testMode = false
     self.enablePending = false
     local wasActive = self.active == true
 
@@ -185,10 +183,3 @@ end
 function Lifecycle:IsActive()
     return self.initialized == true and self.active == true and IG.DB.enabled == true
 end
-
-Lifecycle.masterDisableDetachesProviders = true
-Lifecycle.masterDisableDetachesCastWatchers = true
-Lifecycle.masterDisableUnregistersRuntimeEvents = true
-Lifecycle.masterDisableStopsWorkers = true
-Lifecycle.enableDiscoveryIsOutOfCombat = true
-Lifecycle.scheduledFlushIsAllowedToSelfDisable = true

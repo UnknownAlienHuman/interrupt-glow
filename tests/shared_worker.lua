@@ -52,7 +52,7 @@ local function LoadShared(saved, version)
 end
 
 local legacy = {
-    schema = 2,
+    schema = 3,
     enabled = false,
     cdText = "invalid",
     cdm = false,
@@ -70,11 +70,12 @@ local legacy = {
 local IG = LoadShared(legacy)
 local DB = IG.DB
 assert(DB == InterruptGlowDB)
-assert(DB.schema == 3)
+assert(DB.schema == 4)
 assert(DB.producerVersion == "1.1.0-beta.4")
-assert(DB.interface == 120100)
+assert(DB.interface == 120105)
 assert(DB.enabled == false)
 assert(DB.cdText == false, "invalid boolean was not reset")
+assert(DB.animateGlow == true, "missing animation preference did not use the current default")
 assert(DB.cdm == false)
 assert(DB.strictNI == false)
 assert(DB.optimisticRestrictedCooldown == true)
@@ -107,8 +108,10 @@ assert(IG.flushFrame.mode == Enum.OnUpdateMode.Disabled)
 assert(not IG:HasDirtyWork())
 
 local clean = LoadShared("corrupt-root", "1.1.0-beta.4")
-assert(clean.DB.schema == 3)
+assert(clean.DB.schema == 4)
+assert(clean.DB.interface == 120105)
 assert(clean.DB.enabled == true)
+assert(clean.DB.animateGlow == true)
 assert(clean.DB.debugKeep == 400)
 assert(clean.flushFrame.mode == Enum.OnUpdateMode.Disabled)
 

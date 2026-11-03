@@ -80,7 +80,7 @@ end
 function InterruptGlow.Glow:RefreshAll() Count("refreshVisuals") end
 function InterruptGlow.Glow:CreatePendingOverlays() Count("createPending") end
 
-local loader, loadError = loadfile(ROOT .. "/core/RuntimeLifecyclePolicy.lua")
+local loader, loadError = loadfile(ROOT .. "/core/RuntimeLifecycle.lua")
 assert(loader, loadError)
 loader()
 
@@ -96,6 +96,7 @@ assert(calls.markCooldown == 1 and calls.markVisual == 1)
 
 -- Populate work after activation; master-disable must discard it without trying
 -- to manipulate Shared.lua's private flushScheduled flag.
+InterruptGlow.testMode = true
 local pendingButton = {}
 InterruptGlow.PendingButtons[pendingButton] = true
 for key in pairs(InterruptGlow._dirty) do InterruptGlow._dirty[key] = true end
@@ -107,6 +108,7 @@ queuedRecord.overlayQueued = true
 
 assert(Lifecycle:SetEnabled(false) == true)
 assert(InterruptGlow.DB.enabled == false)
+assert(InterruptGlow.testMode == false, "master disable left highlight preview active")
 assert(Lifecycle:IsActive() == false)
 assert(runtimeEventsEnabled == false and calls.eventsDisable == 1)
 assert(calls.cdmDetach == 1)
@@ -145,13 +147,8 @@ assert(calls.specRefresh == 2)
 assert(calls.buttonsAttach == 2 and calls.castAttach == 2 and calls.cdmAttach == 2)
 assert(calls.createPending == 2)
 
-local policy = assert(InterruptGlow.modules.RuntimeLifecyclePolicy)
-assert(policy == Lifecycle)
-assert(policy.masterDisableDetachesProviders == true)
-assert(policy.masterDisableDetachesCastWatchers == true)
-assert(policy.masterDisableUnregistersRuntimeEvents == true)
-assert(policy.masterDisableStopsWorkers == true)
-assert(policy.enableDiscoveryIsOutOfCombat == true)
-assert(policy.scheduledFlushIsAllowedToSelfDisable == true)
+assert(InterruptGlow.RuntimeLifecycle == Lifecycle)
+assert(type(Lifecycle.Deactivate) == "function")
+assert(type(Lifecycle.SetEnabled) == "function")
 
 print("RUNTIME LIFECYCLE POLICY TEST PASSED")

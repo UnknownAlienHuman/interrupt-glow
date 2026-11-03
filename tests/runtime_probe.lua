@@ -2,14 +2,15 @@ local ROOT = arg[1] or "."
 
 _G = _G or _ENV
 local printed = {}
+local combat = false
 
 InterruptGlow = {
     name = "InterruptGlow",
-    version = "1.1.0-beta.7",
+    version = "1.1.0-beta.8",
     DB = {
-        schema = 3,
-        producerVersion = "1.1.0-beta.7",
-        interface = 120100,
+        schema = 4,
+        producerVersion = "1.1.0-beta.8",
+        interface = 120105,
         debug = false,
         debugKeep = 400,
         debugChat = false,
@@ -51,9 +52,9 @@ InterruptGlow = {
         },
     },
     Data = {
-        interface = 120100,
-        wowBuild = 69497,
-        sourceCommit = "027d26c3406d3de2cbd2b1f67d468fe033a1bcd4",
+        interface = 120105,
+        wowBuild = 70688,
+        sourceCommit = "d07eb00237d8891f153215db98a5df880a26cfe5",
         activeInterrupts = { [15487] = true },
     },
     Buttons = {
@@ -78,7 +79,7 @@ InterruptGlow = {
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
-function InterruptGlow:IsInCombat() return false end
+function InterruptGlow:IsInCombat() return combat end
 function InterruptGlow:IsAddOnFullyLoaded(name) return name == "Dominos" end
 function InterruptGlow:HasDirtyWork() return false end
 function InterruptGlow:Now() return _G.mockNow end
@@ -192,8 +193,8 @@ local probe = InterruptGlow.RuntimeProbe
 local initialReport = probe:BuildReport()
 assert(initialReport:find("cooldownPolicy=NeverSecret"))
 assert(initialReport:find("repository=UnknownAlienHuman/interrupt%-glow"))
-assert(initialReport:find("kbCommit=5a992ae702a278f3893c7e8f1b212583311438b5", 1, true))
-assert(initialReport:find("savedSchema=3", 1, true))
+assert(initialReport:find("kbCommit=b03e1635d0ff8bcd6be4f4dfac589dafec4e5e83", 1, true))
+assert(initialReport:find("savedSchema=4", 1, true))
 assert(initialReport:find("counterOwner=none", 1, true))
 assert(initialReport:find("Dominos.loaded=true"))
 assert(initialReport:find("focus.channelSuppressed=true"))
@@ -201,6 +202,8 @@ assert(initialReport:find("runtime.enabled=false", 1, true))
 assert(initialReport:find("gcd.ignoreGlobalCooldownDuration=true", 1, true))
 assert(initialReport:find("gcd.isOnGCDReadinessProof=false", 1, true))
 assert(initialReport:find("upstream.WOWUI%-2026%-005=ACTIVE_UPSTREAM"))
+assert(initialReport:find("[providerVersions]", 1, true))
+assert(initialReport:find("[probeBounds]", 1, true))
 
 assert(probe:Start("quick-heal-mouseover") == true)
 assert(InterruptGlow.profileCounterOwner == "capture")
@@ -229,7 +232,7 @@ assert(shownReport:find("end.PeakTime=7.5", 1, true))
 assert(shownReport:find("delta.CountTimeOver1Ms=10", 1, true))
 assert(shownReport:find("delta.CountTimeOver5Ms=5", 1, true))
 assert(shownReport:find("delta.CountTimeOver10Ms=3", 1, true))
-assert(shownReport:find("delta.PeakTimeIncrease=7.1", 1, true))
+assert(shownReport:find("delta.newSessionPeak=true", 1, true))
 assert(shownReport:find("marker.1.label=friendly-hover", 1, true))
 assert(shownReport:find("restriction.1=20.000 type=1 state=2", 1, true))
 
@@ -250,6 +253,22 @@ local secondReport = probe:BuildReport()
 assert(secondReport:find("lastRestrictionType=unobserved", 1, true))
 assert(secondReport:find("lastRestrictionState=unobserved", 1, true))
 assert(not secondReport:find("restriction.1=", 1, true))
+assert(probe:Stop() == true)
+
+-- The actual probe owner bounds both user markers and restriction transitions.
+assert(probe:Start("bounds") == true)
+for index = 1, 257 do probe:AddMark("mark-" .. index, false) end
+for index = 1, 129 do probe:OnRestrictionStateChanged(index, index) end
+assert(#probe.marks == 256 and probe.droppedMarks == 1)
+assert(#probe.restrictionTransitions == 128 and probe.droppedRestrictions == 1)
+local boundsReport = probe:BuildReport()
+assert(boundsReport:find("storedMarks=256", 1, true))
+assert(boundsReport:find("droppedMarks=1", 1, true))
+assert(boundsReport:find("storedRestrictions=128", 1, true))
+assert(boundsReport:find("droppedRestrictions=1", 1, true))
+combat = true
+assert(probe:Show() == false, "combat report display must fail closed")
+combat = false
 assert(probe:Stop() == true)
 
 assert(#printed >= 6)

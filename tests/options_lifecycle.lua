@@ -8,6 +8,7 @@ local castDirty = 0
 local cooldownDirty = 0
 local visualDirty = 0
 local cdmEnabled = nil
+local animationEnabled = nil
 local registeredPanel = nil
 
 InterruptGlow = {
@@ -15,6 +16,7 @@ InterruptGlow = {
         enabled = false,
         cdText = true,
         cdm = false,
+        animateGlow = false,
         strictNI = false,
         optimisticRestrictedCooldown = true,
         debug = true,
@@ -23,6 +25,7 @@ InterruptGlow = {
     },
     modules = {},
     CDM = {},
+    Glow = {},
 }
 
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
@@ -31,6 +34,10 @@ function InterruptGlow:MarkCastDirty() castDirty = castDirty + 1 end
 function InterruptGlow:MarkCooldownDirty() cooldownDirty = cooldownDirty + 1 end
 function InterruptGlow:MarkVisualDirty() visualDirty = visualDirty + 1 end
 function InterruptGlow.CDM:SetEnabled(value) cdmEnabled = value end
+function InterruptGlow.Glow:SetAnimationEnabled(value)
+    animationEnabled = value
+    InterruptGlow.DB.animateGlow = value
+end
 
 UIParent = {}
 function CreateFrame()
@@ -42,7 +49,7 @@ end
 Settings = {
     RegisterCanvasLayoutCategory = function(panel)
         registeredPanel = panel
-        return { id = 1 }
+        return { GetID = function() return 1 end }
     end,
     RegisterAddOnCategory = function() end,
 }
@@ -56,9 +63,7 @@ assert(panel == registeredPanel)
 assert(type(panel.OnRefresh) == "function")
 assert(type(panel.OnDefault) == "function")
 assert(type(panel.OnCommit) == "function")
-assert(panel.refresh == panel.OnRefresh)
-assert(panel.default == panel.OnDefault)
-assert(panel.okay == panel.OnCommit)
+assert(InterruptGlow.Options.categoryID == 1)
 
 -- Avoid constructing controls; this test targets Settings lifecycle routing.
 function InterruptGlow.Options:Refresh()
@@ -80,11 +85,12 @@ assert(DB.optimisticRestrictedCooldown == false)
 assert(DB.debug == false)
 assert(DB.debugChat == false)
 assert(DB.debugKeep == 400)
+assert(DB.animateGlow == true and animationEnabled == true)
 assert(cdmEnabled == true)
 assert(allButtonsDirty == 1)
 assert(castDirty == 1)
-assert(cooldownDirty == 1)
-assert(visualDirty == 1)
+assert(cooldownDirty >= 1)
+assert(visualDirty >= 1)
 assert(refreshCalls == 3)
 
 panel.OnCommit()

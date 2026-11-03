@@ -51,17 +51,102 @@ local function ApplySecretBoolean(region, value, alphaIfTrue, alphaIfFalse)
     return true
 end
 
+local ACCESS_ALLOWED = 1
+local ACCESS_DEFERRED = 2
+local ACCESS_FORBIDDEN = 3
+local RETRY_BASE_DELAY = 0.25
+local RETRY_MAX_DELAY = 2.0
+local MAX_RETRY_BACKOFF_STEPS = 4
+
+local function ClearQueuedState(record)
+    record.overlayQueued = false
+    Glow.prewarmQueued[record] = nil
+end
+
+local function ClearRetryState(record)
+    record.overlayAccessDeferred = false
+    record.overlayAccessFailures = nil
+    record.overlayAccessNextRetry = nil
+end
+
+local function MarkOverlayForbidden(record)
+    record.overlayForbidden = true
+    ClearRetryState(record)
+    record.overlayPending = false
+    ClearQueuedState(record)
+end
+
+local function RetryDelay(failures)
+    local step = failures
+    if step < 1 then step = 1 end
+    if step > MAX_RETRY_BACKOFF_STEPS then step = MAX_RETRY_BACKOFF_STEPS end
+
+    local delay = RETRY_BASE_DELAY * (2 ^ (step - 1))
+    if delay > RETRY_MAX_DELAY then delay = RETRY_MAX_DELAY end
+    return delay
+end
+
+local function MarkOverlayDeferred(record)
+    record.overlayForbidden = false
+    record.overlayAccessDeferred = true
+    record.overlayAccessFailures = (record.overlayAccessFailures or 0) + 1
+    record.overlayAccessNextRetry = IG:Now() + RetryDelay(record.overlayAccessFailures)
+    record.overlayPending = true
+    ClearQueuedState(record)
+end
+
+local function ReadOrdinaryBooleanMethod(object, methodName)
+    local method, memberKnown = IG:ReadMember(object, methodName)
+    if not memberKnown then return nil, false, false end
+    if method == nil then return nil, true, false end
+    if type(method) ~= "function" then return nil, false, true end
+
+    local ok, value = pcall(method, object)
+    if not ok or not IG.CanAccess(value) or type(value) ~= "boolean" then
+        return nil, false, false
+    end
+    return value, true, false
+end
+
+local function InspectButtonAccess(button)
+    -- Accessibility precedes every comparison, method lookup and call.
+    if not IG.CanAccess(button) then return ACCESS_DEFERRED end
+    if button == nil then return ACCESS_DEFERRED end
+
+    local constrained, constraintsKnown, constraintsMalformed =
+        ReadOrdinaryBooleanMethod(button, "HasAccessConstraints")
+    if constraintsMalformed then return ACCESS_FORBIDDEN end
+    if not constraintsKnown then return ACCESS_DEFERRED end
+
+    if constrained == true then
+        local accessible, contextKnown, contextMalformed =
+            ReadOrdinaryBooleanMethod(button, "CanBeAccessedInContext")
+        if contextMalformed then return ACCESS_FORBIDDEN end
+        if not contextKnown or accessible ~= true then return ACCESS_DEFERRED end
+    end
+
+    local forbidden, forbiddenKnown, forbiddenMalformed =
+        ReadOrdinaryBooleanMethod(button, "IsForbidden")
+    if forbiddenMalformed then return ACCESS_FORBIDDEN end
+    if not forbiddenKnown then return ACCESS_DEFERRED end
+    if forbidden == true then return ACCESS_FORBIDDEN end
+    return ACCESS_ALLOWED
+end
+
 local function SafeFrameLevel(button)
-    if button and type(button.GetFrameLevel) == "function" then
-        local ok, value = pcall(button.GetFrameLevel, button)
-        if ok and IG.CanAccess(value) and type(value) == "number" then
-            return value
-        end
+    if not IG.CanAccess(button) or button == nil then return 1 end
+
+    local method, memberKnown = IG:ReadMember(button, "GetFrameLevel")
+    if not memberKnown or type(method) ~= "function" then return 1 end
+
+    local ok, value = pcall(method, button)
+    if ok and IG.CanAccess(value) and type(value) == "number" then
+        return value
     end
     return 1
 end
 
-local function ConfigureGlowTexture(texture, gate)
+local function ConfigureGlowTexture(texture, gate, unit)
     texture:ClearAllPoints()
     texture:SetPoint("TOPLEFT", gate, "TOPLEFT", -10, 10)
     texture:SetPoint("BOTTOMRIGHT", gate, "BOTTOMRIGHT", 10, -10)
@@ -76,12 +161,16 @@ local function ConfigureGlowTexture(texture, gate)
     end
 
     -- Configure visual constants before any secret alpha reaches the region.
-    texture:SetVertexColor(1, 0.82, 0, 1)
+    if unit == "focus" then
+        texture:SetVertexColor(1, 0.64, 0.18, 1)
+    else
+        texture:SetVertexColor(0.18, 0.82, 1, 1)
+    end
     texture:SetAlpha(1)
     texture:Show()
 end
 
-local function CreateUnitBranch(button)
+local function CreateUnitBranch(button, unit)
     local plainGate = CreateFrame("Frame", nil, button)
     plainGate:SetAllPoints(button)
     plainGate:SetFrameLevel(SafeFrameLevel(button) + 8)
@@ -89,7 +178,7 @@ local function CreateUnitBranch(button)
     plainGate:Show()
 
     local niGate = plainGate:CreateTexture(nil, "OVERLAY", nil, 7)
-    ConfigureGlowTexture(niGate, plainGate)
+    ConfigureGlowTexture(niGate, plainGate, unit)
 
     return {
         plainGate = plainGate,
@@ -123,7 +212,7 @@ local function SetCandidate(branch, candidate)
     branch.plainGate:SetAlpha(candidate and 1 or 0)
 
     if candidate then
-        if branch.animation then branch.animation:Play() end
+        if IG.DB.animateGlow ~= false and branch.animation then branch.animation:Play() end
         IG:BumpStat("ui.showTransitions")
     else
         if branch.animation then branch.animation:Stop() end
@@ -174,39 +263,83 @@ function Glow:SetRuntimeWorkerEnabled(enabled)
     end
 end
 
+-- Explicit lifecycle/provider signals may re-arm one access preflight. Ordinary
+-- repeated calls are time-throttled and do not form an OnUpdate retry loop.
+function Glow:AllowOverlayAccessRetry(record, force)
+    if not record or record.overlay or record.overlayForbidden then return false end
+    if not record.overlayAccessDeferred then return true end
+    if IG:IsInCombat() then return false end
+
+    local nextRetry = record.overlayAccessNextRetry
+    if force ~= true
+        and type(nextRetry) == "number"
+        and IG:Now() < nextRetry
+    then
+        return false
+    end
+
+    record.overlayAccessDeferred = false
+    return true
+end
+
+-- Own the complete shell creation boundary. A confirmed forbidden frame is
+-- permanently skipped. Contextually inaccessible/erroring frames remain hidden
+-- and are retried only on a later bounded provider/lifecycle signal.
 function Glow:CreateShell(record)
-    if not record or not record.button then return nil end
+    if not record then return nil end
     if record.overlay then return record.overlay end
+    if record.overlayForbidden then return nil end
     if IG:IsInCombat() then
         record.overlayPending = true
         return nil
     end
 
-    local button = record.button
-    if button.IsForbidden then
-        local ok, forbidden = pcall(button.IsForbidden, button)
-        if ok and forbidden then
-            record.overlayForbidden = true
-            record.overlayPending = false
-            return nil
-        end
+    -- Apply the throttle before touching the foreign object. This also covers a
+    -- frame object that itself is currently inaccessible.
+    if record.overlayAccessDeferred and not self:AllowOverlayAccessRetry(record, false) then
+        record.overlayPending = true
+        return nil
+    end
+
+    if not IG.CanAccess(record.button) then
+        MarkOverlayDeferred(record)
+        IG:BumpStat("ui.shellsDeferred")
+        return nil
+    end
+    if record.button == nil then return nil end
+
+    local access = InspectButtonAccess(record.button)
+    if access == ACCESS_FORBIDDEN then
+        MarkOverlayForbidden(record)
+        IG:BumpStat("ui.shellsForbidden")
+        return nil
+    end
+    if access == ACCESS_DEFERRED then
+        MarkOverlayDeferred(record)
+        IG:BumpStat("ui.shellsDeferred")
+        return nil
     end
 
     record.overlay = {
-        target = CreateUnitBranch(button),
-        focus = CreateUnitBranch(button),
+        target = CreateUnitBranch(record.button, "target"),
+        focus = CreateUnitBranch(record.button, "focus"),
         cooldownText = nil,
         enhanced = false,
     }
     record.overlayPending = false
-    record.overlayQueued = false
-    self.prewarmQueued[record] = nil
+    record.overlayForbidden = false
+    ClearRetryState(record)
+    ClearQueuedState(record)
     IG:BumpStat("ui.shellsCreated")
     return record.overlay
 end
 
 function Glow:QueueShell(record, urgent)
     if not record or record.overlay or record.overlayForbidden then return end
+    if record.overlayAccessDeferred and not self:AllowOverlayAccessRetry(record, false) then
+        record.overlayPending = true
+        return
+    end
 
     if urgent and not IG:IsInCombat() then
         self:CreateShell(record)
@@ -225,26 +358,37 @@ function Glow:QueueShell(record, urgent)
 end
 
 function Glow:ProcessPrewarmBudget()
-    -- RunOnce is already disabled before this callback; the fallback worker is
-    -- explicitly hidden so no idle OnUpdate remains resident.
     self:DisablePrewarmWorker()
     if IG:IsInCombat() then return end
 
-    local created = 0
-    while created < self.prewarmBudgetPerFrame and self.prewarmHead <= self.prewarmTail do
+    local processed = 0
+    local visualsPrepared = 0
+    while processed < self.prewarmBudgetPerFrame and self.prewarmHead <= self.prewarmTail do
         local record = self.prewarmQueue[self.prewarmHead]
         self.prewarmQueue[self.prewarmHead] = nil
         self.prewarmHead = self.prewarmHead + 1
+        processed = processed + 1
 
         if record then
             self.prewarmQueued[record] = nil
             record.overlayQueued = false
-            if not record.overlay and not record.overlayForbidden and self:CreateShell(record) then
-                created = created + 1
-                if record.isInterrupt then self:EnsureInterruptVisuals(record) end
+
+            if not record.overlay and not record.overlayForbidden then
+                self:CreateShell(record)
+            end
+
+            if record.overlay and not record.overlayForbidden then
+                local before = record.overlay.enhanced == true
+                self:EnsureInterruptVisuals(record)
+                if not before and record.overlay.enhanced == true then
+                    visualsPrepared = visualsPrepared + 1
+                end
             end
         end
     end
+
+    if processed > 0 then IG:BumpStat("ui.prewarmRecordsProcessed", processed) end
+    if visualsPrepared > 0 then IG:BumpStat("ui.prewarmVisualsPrepared", visualsPrepared) end
 
     if self.prewarmHead > self.prewarmTail then
         self.prewarmQueue = {}
@@ -256,16 +400,42 @@ function Glow:ProcessPrewarmBudget()
 end
 
 function Glow:EnsureCooldownText(record)
-    if not IG.DB.cdText then return nil end
-    local overlay = record and record.overlay
+    if not IG.DB.cdText or not record or record.cooldownTextForbidden then return nil end
+    local overlay = record.overlay
     if not overlay then return nil end
     if overlay.cooldownText then return overlay.cooldownText end
+    if record.cooldownTextAccessDeferred then return nil end
     if IG:IsInCombat() then
         record.cooldownTextPending = true
         return nil
     end
-
-    local text = record.button:CreateFontString(nil, "OVERLAY", "NumberFontNormalLarge")
+    local access = InspectButtonAccess(record.button)
+    if access == ACCESS_FORBIDDEN then
+        record.cooldownTextForbidden = true
+        record.cooldownTextPending = false
+        IG:BumpStat("ui.cooldownTextOwnerRejected")
+        return nil
+    elseif access == ACCESS_DEFERRED then
+        -- Do not probe denied foreign owners from the countdown worker. A
+        -- later out-of-combat lifecycle or settings action may retry once.
+        record.cooldownTextAccessDeferred = true
+        record.cooldownTextPending = true
+        return nil
+    end
+    local createFontString, readable = IG:ReadMember(record.button, "CreateFontString")
+    if not readable or type(createFontString) ~= "function" then
+        record.cooldownTextForbidden = true
+        record.cooldownTextPending = false
+        IG:BumpStat("ui.cooldownTextOwnerRejected")
+        return nil
+    end
+    local ok, text = pcall(createFontString, record.button, nil, "OVERLAY", "NumberFontNormalLarge")
+    if not ok or not IG.CanAccess(text) or text == nil then
+        record.cooldownTextForbidden = true
+        record.cooldownTextPending = false
+        IG:BumpStat("ui.cooldownTextCreateFailed")
+        return nil
+    end
     text:SetPoint("CENTER", record.button, "CENTER", 0, 0)
     text:SetJustifyH("CENTER")
     text:SetText("")
@@ -296,8 +466,8 @@ function Glow:EnsureInterruptVisuals(record)
         IG:BumpStat("ui.interruptVisualsCreated")
         changed = true
 
-        if overlay.target.candidate and overlay.target.animation then overlay.target.animation:Play() end
-        if overlay.focus.candidate and overlay.focus.animation then overlay.focus.animation:Play() end
+        if IG.DB.animateGlow ~= false and overlay.target.candidate and overlay.target.animation then overlay.target.animation:Play() end
+        if IG.DB.animateGlow ~= false and overlay.focus.candidate and overlay.focus.animation then overlay.focus.animation:Play() end
     end
 
     if IG.DB.cdText and not overlay.cooldownText then
@@ -311,10 +481,12 @@ function Glow:CreatePendingOverlays()
 
     local changed = false
     for _, record in pairs(IG.ObservedButtons) do
+        if record.overlayAccessDeferred then self:AllowOverlayAccessRetry(record, true) end
         if record.isInterrupt and not record.overlay then
             changed = self:CreateShell(record) ~= nil or changed
         end
         if record.isInterrupt then
+            record.cooldownTextAccessDeferred = false
             changed = self:EnsureInterruptVisuals(record) or changed
         end
     end
@@ -326,7 +498,10 @@ end
 
 function Glow:EnsureCooldownTexts()
     if not IG.DB.cdText or IG:IsInCombat() then return end
-    for record in pairs(IG.InterruptRecords) do self:EnsureCooldownText(record) end
+    for record in pairs(IG.InterruptRecords) do
+        record.cooldownTextAccessDeferred = false
+        self:EnsureCooldownText(record)
+    end
     self:RefreshAll()
 end
 
@@ -424,7 +599,8 @@ function Glow:HasRelevantCast()
 end
 
 local function CandidateFor(record, unit)
-    if IG.testMode then return record.isInterrupt == true end
+    if record.conditionalIdentityPending == true then return false end
+    if IG.testMode then return record.isInterrupt == true and unit == "target" end
 
     local castState = IG.CastState[unit]
     if not castState then return false end
@@ -476,6 +652,7 @@ function Glow:RefreshCooldownText(record, now)
     if IG.DB.enabled ~= true
         or not IG.DB.cdText
         or not record.isInterrupt
+        or record.conditionalIdentityPending == true
         or ReadinessPending(record)
         or record.ready
         or record.restrictedCooldown
@@ -601,7 +778,16 @@ function Glow:UpdateRuntimeDriver()
 end
 
 function Glow:SetTestMode(enabled)
-    IG.testMode = enabled == true
+    enabled = enabled == true
+    if enabled and (IG.DB.enabled ~= true or (IG.RuntimeLifecycle and not IG.RuntimeLifecycle:IsActive())) then
+        IG:Print("Enable Interrupt Glow before previewing highlights.")
+        return false
+    end
+    if enabled and IG:IsInCombat() then
+        IG:Print("Highlight previews are available after combat.")
+        return false
+    end
+    IG.testMode = enabled
     if IG.testMode then
         self:ApplyUnitInterruptibility("target", false, true)
         self:ApplyUnitInterruptibility("focus", false, true)
@@ -609,4 +795,25 @@ function Glow:SetTestMode(enabled)
         IG:MarkCastDirty()
     end
     IG:MarkVisualDirty()
+end
+
+-- Only ordinary parent animations are changed; the opaque alpha texture is
+-- configured once at creation and is never queried or animated.
+function Glow:SetAnimationEnabled(enabled)
+    IG.DB.animateGlow = enabled == true
+    for _, record in pairs(IG.ObservedButtons) do
+        local overlay = record.overlay
+        if overlay then
+            for index = 1, #UNITS do
+                local branch = overlay[UNITS[index]]
+                if branch.animation then
+                    if IG.DB.animateGlow and branch.candidate then
+                        branch.animation:Play()
+                    else
+                        branch.animation:Stop()
+                    end
+                end
+            end
+        end
+    end
 end

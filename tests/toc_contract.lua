@@ -1,14 +1,17 @@
 local ROOT = arg[1] or "."
 local tocPath = ROOT .. "/InterruptGlow.toc"
-
 local toc, tocError = io.open(tocPath, "r")
 assert(toc, tocError)
 
-local entries = {}
-local positions = {}
+local entries, positions = {}, {}
+local loadSavedVariablesFirst, sawAddonSource = false, false
 for rawLine in toc:lines() do
     local line = rawLine:match("^%s*(.-)%s*$")
-    if line ~= "" and not line:match("^##") then
+    if line == "## LoadSavedVariablesFirst: 1" then
+        assert(not sawAddonSource, "SavedVariables load directive appears after addon sources")
+        loadSavedVariablesFirst = true
+    elseif line ~= "" and not line:match("^##") then
+        sawAddonSource = true
         assert(positions[line] == nil, "duplicate TOC entry: " .. line)
         entries[#entries + 1] = line
         positions[line] = #entries
@@ -21,61 +24,34 @@ local requiredOrder = {
     "core/Worker.lua",
     "core/Shared.lua",
     "core/Data.lua",
-    "core/SpecInterruptCoveragePolicy.lua",
+    "core/Debug.lua",
     "core/RuntimeProbe.lua",
-    "core/RuntimeProbePolicy.lua",
     "core/Glow.lua",
-    "core/FrameAccessPolicy.lua",
-    "core/PrewarmPolicy.lua",
     "core/Buttons.lua",
-    "core/ButtonForgePolicy.lua",
-    "core/NativeCallbackPolicy.lua",
     "core/LABAdapter.lua",
     "core/ActionResolver.lua",
-    "core/NativeActionQueuePolicy.lua",
     "core/Cooldown.lua",
-    "core/ReadinessPolicy.lua",
     "core/Usability.lua",
-    "core/ConditionalMacroPolicy.lua",
-    "core/GCDSafetyPolicy.lua",
-    "core/CachePolicy.lua",
-    "core/AbilitySourcePolicy.lua",
-    "core/BoundSourcePolicy.lua",
+    "core/ConditionalActions.lua",
     "core/CastTracking.lua",
     "core/CDM.lua",
-    "core/CDMPolicy.lua",
-    "core/RuntimeInterruptPolicy.lua",
-    "core/RuntimeLifecyclePolicy.lua",
+    "core/RuntimeLifecycle.lua",
     "core/Events.lua",
+    "core/Slash.lua",
+    "Options.lua",
 }
 
+assert(loadSavedVariablesFirst, "TOC must load SavedVariables before addon Lua files")
+assert(#entries == #requiredOrder, "TOC source list changed; review runtime source order")
 local previousPosition = 0
-for index = 1, #requiredOrder do
-    local path = requiredOrder[index]
+for index, path in ipairs(requiredOrder) do
     local position = positions[path]
     assert(position ~= nil, "TOC is missing required runtime module: " .. path)
     assert(position > previousPosition, "TOC runtime order is invalid at: " .. path)
     previousPosition = position
+    local source, sourceError = io.open(ROOT .. "/" .. path, "r")
+    assert(source, sourceError or ("TOC source does not exist: " .. path))
+    source:close()
 end
-
-assert(positions["core/Data.lua"] < positions["core/SpecInterruptCoveragePolicy.lua"])
-assert(positions["core/RuntimeProbe.lua"] < positions["core/RuntimeProbePolicy.lua"])
-assert(positions["core/RuntimeProbePolicy.lua"] < positions["core/Glow.lua"])
-assert(positions["core/Glow.lua"] < positions["core/FrameAccessPolicy.lua"])
-assert(positions["core/FrameAccessPolicy.lua"] < positions["core/PrewarmPolicy.lua"])
-assert(positions["core/PrewarmPolicy.lua"] < positions["core/Buttons.lua"])
-assert(positions["core/Buttons.lua"] < positions["core/ButtonForgePolicy.lua"])
-assert(positions["core/ButtonForgePolicy.lua"] < positions["core/NativeCallbackPolicy.lua"])
-assert(positions["core/ActionResolver.lua"] < positions["core/NativeActionQueuePolicy.lua"])
-assert(positions["core/NativeActionQueuePolicy.lua"] < positions["core/Cooldown.lua"])
-assert(positions["core/Cooldown.lua"] < positions["core/ReadinessPolicy.lua"])
-assert(positions["core/Usability.lua"] < positions["core/ConditionalMacroPolicy.lua"])
-assert(positions["core/ConditionalMacroPolicy.lua"] < positions["core/GCDSafetyPolicy.lua"])
-assert(positions["core/AbilitySourcePolicy.lua"] < positions["core/BoundSourcePolicy.lua"])
-assert(positions["core/BoundSourcePolicy.lua"] < positions["core/CastTracking.lua"])
-assert(positions["core/CDM.lua"] < positions["core/CDMPolicy.lua"])
-assert(positions["core/CDMPolicy.lua"] < positions["core/RuntimeInterruptPolicy.lua"])
-assert(positions["core/RuntimeInterruptPolicy.lua"] < positions["core/RuntimeLifecyclePolicy.lua"])
-assert(positions["core/RuntimeLifecyclePolicy.lua"] < positions["core/Events.lua"])
 
 print("TOC CONTRACT TEST PASSED")

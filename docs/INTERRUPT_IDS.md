@@ -1,10 +1,10 @@
-# Interrupt IDs — WoW Retail 12.1.0.69497
+# Interrupt IDs — WoW Retail 12.1.5.70688
 
 ## Ordinary specialization snapshot
 
 ```text
 Gethe/wow-ui-source
-commit: 027d26c3406d3de2cbd2b1f67d468fe033a1bcd4
+commit: d07eb00237d8891f153215db98a5df880a26cfe5
 file: Interface/AddOns/Blizzard_CooldownBroadcaster/TrackedCooldowns.lua
 section: namespace.InterruptSpellsBySpec
 ```
@@ -54,13 +54,17 @@ Slot-backed action buttons remain authoritative at runtime through `C_ActionBar.
 
 | Specs | ID | Ability | Reason |
 |---|---:|---|---|
+| Druid 102/105 | `106839` | Skull Bash | Optional class-tree interrupt; exact learned spell required |
+| Evoker 1468 | `351338` | Quell | Optional interrupt; exact learned spell required |
+| Monk 270 | `116705` | Spear Hand Strike | Optional interrupt; exact learned spell required |
+| Paladin 65 | `96231` | Rebuke | Optional interrupt; exact learned spell required |
 | Warlock 265/266/267 | `212619` | Call Felhunter | PvP-talent interrupt absent from the MDI-oriented table |
 
 Every exception is still gated by `C_SpellBook.IsSpellKnownOrInSpellBook`. Talent/PvP invalidation listens to active combat config, talent group, trait config, PvP talent and `SPELLS_CHANGED`.
 
 ## Specializations absent from the ordinary snapshot
 
-The Blizzard table does not list an ordinary interrupt for Restoration Druid, Preservation Evoker, Mistweaver Monk, Holy Paladin, Discipline Priest or Holy Priest. Interrupt Glow does not statically assume class-wide availability. If Blizzard classifies a current slot as an interrupt, its spell family may be learned for the current specialization/session.
+The Blizzard table does not list an ordinary interrupt for Restoration Druid, Preservation Evoker, Mistweaver Monk, Holy Paladin, Discipline Priest or Holy Priest. The optional entries above require exact current spellbook proof; neither Priest healing specialization gains an assumed interrupt. If Blizzard classifies a current slot as an interrupt, its spell family may be learned for the current specialization/session.
 
 ## Pet-action aliases
 

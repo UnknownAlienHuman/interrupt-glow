@@ -204,7 +204,7 @@ function Debug:ProfilerSnapshot()
 end
 
 function Debug:ProfilerDelta(startSnapshot, endSnapshot)
-    local delta = { metrics = {}, peakIncrease = nil }
+    local delta = { metrics = {}, newSessionPeak = nil }
     local startMetrics = startSnapshot and startSnapshot.metrics or {}
     local endMetrics = endSnapshot and endSnapshot.metrics or {}
 
@@ -222,7 +222,7 @@ function Debug:ProfilerDelta(startSnapshot, endSnapshot)
     local beforePeak = startMetrics.PeakTime
     local afterPeak = endMetrics.PeakTime
     if type(beforePeak) == "number" and type(afterPeak) == "number" then
-        delta.peakIncrease = afterPeak - beforePeak
+        delta.newSessionPeak = afterPeak > beforePeak
     end
     return delta
 end

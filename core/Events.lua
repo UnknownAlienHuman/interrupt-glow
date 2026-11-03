@@ -42,6 +42,7 @@ local RUNTIME_EVENTS = {
 -- explicit runtime capture even if the feature itself is disabled.
 local PERSISTENT_EVENTS = {
     "PLAYER_REGEN_ENABLED",
+    "PLAYER_REGEN_DISABLED",
     "ADDON_RESTRICTION_STATE_CHANGED",
 }
 
@@ -142,6 +143,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 
     if not IG.runtimeInitialized then return end
+
+    if event == "PLAYER_REGEN_DISABLED" then
+        if IG.testMode and IG.Glow then IG.Glow:SetTestMode(false) end
+        return
+    end
 
     if event == "PLAYER_REGEN_ENABLED" then
         if IG.RuntimeLifecycle and type(IG.RuntimeLifecycle.OnCombatEnded) == "function" then
@@ -319,10 +325,3 @@ end)
 
 RegisterPersistentEvents()
 ScheduleInitialization()
-
-IG:RegisterModule("RuntimeEventPolicy", {
-    masterDisableUnregistersRuntimeEvents = true,
-    persistentEvents = PERSISTENT_EVENTS,
-    runtimeEvents = RUNTIME_EVENTS,
-    playerLossOfControlUsesUnitFilter = true,
-})

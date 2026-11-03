@@ -10,7 +10,7 @@ local secretUnit = {}
 local secretSpell = {}
 
 InterruptGlow = {
-    DB = { debug = false },
+    DB = { debug = false, enabled = true },
     modules = {},
     Data = {},
     Buttons = {},

@@ -8,7 +8,6 @@ local Cooldown = {
         spell = {},
         pet = {},
     },
-    gcdHints = {},
 }
 IG.Cooldown = Cooldown
 IG:RegisterModule("Cooldown", Cooldown)
@@ -24,10 +23,9 @@ local next = next
 local math_abs = math.abs
 
 local function SafeMethodCall(object, methodName, ...)
-    if not object or type(object[methodName]) ~= "function" then
-        return false, nil
-    end
-    local ok, value = pcall(object[methodName], object, ...)
+    local method, readable = IG:ReadMember(object, methodName)
+    if not readable or type(method) ~= "function" then return false, nil end
+    local ok, value = pcall(method, object, ...)
     if not ok or not IG.CanAccess(value) then
         return false, nil
     end
@@ -64,7 +62,7 @@ local function ReadDuration(duration)
     return nil, nil, true, true
 end
 
-local function ReadCooldownStatus(info, gcdOnlyHint)
+local function ReadCooldownStatus(info)
     if not IG.CanAccess(info) or info == nil then
         return nil, true
     end
@@ -72,7 +70,6 @@ local function ReadCooldownStatus(info, gcdOnlyHint)
     local isActive, activeKnown = IG:ReadMember(info, "isActive")
     if activeKnown and type(isActive) == "boolean" then
         if not isActive then return true, false end
-        if gcdOnlyHint then return true, false end
         return false, false
     end
     return nil, true
@@ -172,12 +169,12 @@ local function GetSpellLossOfControlState(spellID)
         return "restricted"
     end
 
-    -- Interface 120100 exposes this C_Spell API. Missing it on the target build
+    -- The selected Retail contract exposes this C_Spell API. Missing it on the target build
     -- is not evidence that the spell is free of a Loss of Control gate.
     return "restricted"
 end
 
-local function GetActionReadiness(slot, gcdOnlyHint)
+local function GetActionReadiness(slot)
     if not C_ActionBar then
         return nil, nil, true, true, false, true
     end
@@ -226,7 +223,7 @@ local function GetActionReadiness(slot, gcdOnlyHint)
     if type(C_ActionBar.GetActionCooldown) == "function" then
         local ok, info = pcall(C_ActionBar.GetActionCooldown, slot)
         if ok then
-            local ready, readinessRestricted = ReadCooldownStatus(info, gcdOnlyHint)
+            local ready, readinessRestricted = ReadCooldownStatus(info)
             if ready ~= nil then
                 local timingRestricted = ready == false and durationTimingRestricted
                 return ready, nil, false, timingRestricted, timingRestricted, false
@@ -240,7 +237,7 @@ local function GetActionReadiness(slot, gcdOnlyHint)
     return nil, nil, true, durationTimingRestricted, true, false
 end
 
-local function GetSpellReadiness(spellID, gcdOnlyHint)
+local function GetSpellReadiness(spellID)
     if not C_Spell then
         return nil, nil, true, true, false, true
     end
@@ -289,7 +286,7 @@ local function GetSpellReadiness(spellID, gcdOnlyHint)
     if type(C_Spell.GetSpellCooldown) == "function" then
         local ok, info = pcall(C_Spell.GetSpellCooldown, spellID)
         if ok then
-            local ready, readinessRestricted = ReadCooldownStatus(info, gcdOnlyHint)
+            local ready, readinessRestricted = ReadCooldownStatus(info)
             if ready ~= nil then
                 local timingRestricted = ready == false and durationTimingRestricted
                 return ready, nil, false, timingRestricted, timingRestricted, false
@@ -352,9 +349,12 @@ local function StoreCachedResult(cache, sourceID, generation, ...)
     return ...
 end
 
-function Cooldown:GetCachedReadiness(sourceKind, sourceID, gcdOnlyHint)
-    local cache = self.cache[sourceKind]
-    if not cache or type(sourceID) ~= "number" then
+function Cooldown:GetCachedReadiness(sourceKind, sourceID)
+    if not IG.CanAccess(sourceKind) or not IG.CanAccess(sourceID) then
+        return nil, nil, true, true, false, true
+    end
+    local cache = type(sourceKind) == "string" and self.cache[sourceKind]
+    if not cache or type(sourceID) ~= "number" or sourceID <= 0 or sourceID % 1 ~= 0 then
         return nil, nil, true, true, false, true
     end
 
@@ -371,10 +371,10 @@ function Cooldown:GetCachedReadiness(sourceKind, sourceID, gcdOnlyHint)
     local ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted
     if sourceKind == "action" then
         ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
-            GetActionReadiness(sourceID, gcdOnlyHint)
+            GetActionReadiness(sourceID)
     elseif sourceKind == "spell" then
         ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
-            GetSpellReadiness(sourceID, gcdOnlyHint)
+            GetSpellReadiness(sourceID)
     elseif sourceKind == "pet" then
         ready, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
             GetPetReadiness(sourceID)
@@ -399,8 +399,45 @@ end
 function Cooldown:RefreshAbility(ability)
     if not ability then return false end
 
+    -- Buttons owns arbitration, but retain a defensive fail-closed boundary for
+    -- stale/malformed records that reach the evaluator with no usable source.
+    local sourceKind = ability.sourceKind
+    local sourceID = ability.sourceID
+    local validSource = IG.CanAccess(sourceKind) and IG.CanAccess(sourceID)
+        and (sourceKind == "action" or sourceKind == "spell" or sourceKind == "pet")
+        and type(sourceID) == "number" and sourceID > 0 and sourceID % 1 == 0
+    if not validSource then
+        local changed = ability.ready ~= false or ability.restricted ~= true
+            or ability.readinessRestricted ~= true or ability.timingRestricted ~= true
+            or ability.hardRestricted ~= true or ability.needsPoll ~= false
+            or ability.deadline ~= nil or ability.hasEvaluation ~= false
+            or ability.evaluatedGeneration ~= nil or ability.readinessPending ~= true
+        ability.ready = false
+        ability.restricted = true
+        ability.readinessRestricted = true
+        ability.timingRestricted = true
+        ability.hardRestricted = true
+        ability.needsPoll = false
+        ability.deadline = nil
+        ability.hasEvaluation = false
+        ability.evaluatedGeneration = nil
+        ability.sourceChanged = true
+        ability.readinessPending = true
+        for record in pairs(ability.records or {}) do
+            changed = record.ready ~= false or record.restrictedCooldown ~= true
+                or record.hardRestrictedCooldown ~= true or record.deadline ~= nil
+                or record.readinessPending ~= true or changed
+            record.ready = false
+            record.restrictedCooldown = true
+            record.hardRestrictedCooldown = true
+            record.deadline = nil
+            record.readinessPending = true
+        end
+        return changed
+    end
+
     local rawReady, remaining, readinessRestricted, timingRestricted, needsPoll, hardRestricted =
-        self:GetCachedReadiness(ability.sourceKind, ability.sourceID, self.gcdHints[ability.key] == true)
+        self:GetCachedReadiness(sourceKind, sourceID)
 
     hardRestricted = hardRestricted == true
 
@@ -417,59 +454,75 @@ function Cooldown:RefreshAbility(ability)
         ready = false
     end
 
-    local restricted = readinessRestricted == true or timingRestricted == true or hardRestricted
-    local newDeadline = nil
-    if not ready and type(remaining) == "number" and remaining > 0 then
-        newDeadline = IG:Now() + remaining
+    local finalReady = ready
+    local finalRestricted = readinessRestricted == true or timingRestricted == true or hardRestricted
+    local finalReadinessRestricted = readinessRestricted == true
+    local finalTimingRestricted = timingRestricted == true
+    local finalHardRestricted = hardRestricted
+    local finalDeadline
+    if not finalReady and type(remaining) == "number" and remaining > 0 then
+        finalDeadline = IG:Now() + remaining
     end
-    needsPoll = needsPoll == true and newDeadline == nil
+    local finalNeedsPoll = needsPoll == true and finalDeadline == nil
+
+    -- Apply every independent usability gate before the one record commit.
+    -- Inaccessible answers are hard restrictions; ordinary false/noMana answers
+    -- are simply not ready and do not erase a cooldown restriction.
+    local usability, noMana, usabilityRestricted = IG.Usability:ReadForAbility(ability)
+
+    if usabilityRestricted then
+        finalReady = false
+        finalRestricted = true
+        finalHardRestricted = true
+        finalNeedsPoll = false
+    elseif usability == false or noMana == true then
+        finalReady = false
+        finalNeedsPoll = false
+    end
 
     local deadlineChanged
-    if type(ability.deadline) == "number" and type(newDeadline) == "number" then
-        deadlineChanged = math_abs(ability.deadline - newDeadline) > 0.05
+    if type(ability.deadline) == "number" and type(finalDeadline) == "number" then
+        deadlineChanged = math_abs(ability.deadline - finalDeadline) > 0.05
     else
-        deadlineChanged = ability.deadline ~= newDeadline
+        deadlineChanged = ability.deadline ~= finalDeadline
     end
 
-    local wasReadinessPending = ability.readinessPending == true
-    local changed = wasReadinessPending
-        or ability.ready ~= ready
-        or ability.restricted ~= restricted
-        or ability.readinessRestricted ~= (readinessRestricted == true)
-        or ability.timingRestricted ~= (timingRestricted == true)
-        or ability.hardRestricted ~= hardRestricted
-        or ability.needsPoll ~= needsPoll
+    local changed = ability.readinessPending == true
+        or ability.ready ~= finalReady
+        or ability.restricted ~= finalRestricted
+        or ability.readinessRestricted ~= finalReadinessRestricted
+        or ability.timingRestricted ~= finalTimingRestricted
+        or ability.hardRestricted ~= finalHardRestricted
+        or ability.needsPoll ~= finalNeedsPoll
         or deadlineChanged
 
-    ability.ready = ready
-    ability.restricted = restricted
-    ability.readinessRestricted = readinessRestricted == true
-    ability.timingRestricted = timingRestricted == true
-    ability.hardRestricted = hardRestricted
-    ability.needsPoll = needsPoll
-    ability.deadline = newDeadline
+    ability.ready = finalReady
+    ability.restricted = finalRestricted
+    ability.readinessRestricted = finalReadinessRestricted
+    ability.timingRestricted = finalTimingRestricted
+    ability.hardRestricted = finalHardRestricted
+    ability.needsPoll = finalNeedsPoll
+    ability.deadline = finalDeadline
     ability.hasEvaluation = true
     ability.evaluatedGeneration = self.generation
     ability.sourceChanged = false
     ability.readinessPending = false
 
     for record in pairs(ability.records) do
-        record.ready = ready
-        record.restrictedCooldown = restricted
-        record.hardRestrictedCooldown = hardRestricted
-        record.deadline = newDeadline
-        record.readinessPending = false
+        local recordChanged = record.ready ~= ability.ready
+            or record.restrictedCooldown ~= ability.restricted
+            or record.hardRestrictedCooldown ~= ability.hardRestricted
+            or record.deadline ~= ability.deadline
+            or record.readinessPending ~= ability.readinessPending
+        record.ready = ability.ready
+        record.restrictedCooldown = ability.restricted
+        record.hardRestrictedCooldown = ability.hardRestricted
+        record.deadline = ability.deadline
+        record.readinessPending = ability.readinessPending
+        changed = recordChanged or changed
     end
 
     return changed
-end
-
-function Cooldown:ClearGCDHints()
-    IG:WipeMap(self.gcdHints)
-end
-
-function Cooldown:CaptureGCDHints()
-    self:ClearGCDHints()
 end
 
 function Cooldown:RefreshAll()
@@ -485,15 +538,22 @@ function Cooldown:RefreshAll()
 
     local changed = false
     for _, ability in pairs(IG.AbilityStates) do
-        if ability.sourceKind ~= nil and next(ability.records) ~= nil then
+        if next(ability.records) ~= nil then
             if self:RefreshAbility(ability) then changed = true end
             IG:BumpStat("cooldown.abilitiesEvaluated")
         end
     end
 
-    if changed and IG.Glow then
+    if IG.Glow and (changed or (IG._dirty and IG._dirty.visual)) then
+        if IG._dirty then IG._dirty.visual = false end
         IG.Glow:RefreshAll()
     elseif IG.Glow then
         IG.Glow:UpdateRuntimeDriver()
     end
+end
+
+function Cooldown:ResetCaches()
+    for _, cache in pairs(self.cache) do IG:WipeMap(cache) end
+    self.generation = 0
+    IG:BumpStat("cooldown.cacheResets")
 end

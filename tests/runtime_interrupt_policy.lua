@@ -2,138 +2,94 @@ local ROOT = arg[1] or "."
 
 _G = _G or _ENV
 
-local allButtonsDirty = 0
-local reconcileOrder = {}
-local refreshCalls = 0
-local cdmRefreshCalls = 0
+local currentSpecID = 258
 local knownFamilies = {}
+PlayerUtil = { GetCurrentSpecID = function() return currentSpecID end }
+C_SpellBook = {
+    IsSpellKnownOrInSpellBook = function(spellID) return knownFamilies[spellID] == true end,
+    FindBaseSpellByID = function(spellID) return spellID end,
+    FindSpellOverrideByID = function(spellID) return spellID end,
+}
+Constants = { SpellCooldownConsts = { GLOBAL_RECOVERY_CATEGORY = 133 } }
+C_ActionBar = { IsInterruptAction = function() return false end }
 
 InterruptGlow = {
     modules = {},
-    DB = { cdm = true },
+    DB = { enabled = true, cdm = true },
     ObservedButtons = {},
-    Data = {
-        runtimeInterrupts = { [8000] = 8000 },
-        activeInterrupts = {},
-        cooldownSpellMatchCache = {},
-    },
-    Buttons = {},
-    CDM = { attached = true },
+    PendingButtons = {},
+    AbilityStates = {},
+    Stats = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
-function InterruptGlow.CanAccess(_) return true end
-function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
-function InterruptGlow:ReadMember(object, key)
+local IG = InterruptGlow
+function IG:RegisterModule(name, module) self.modules[name] = module end
+function IG.CanAccess(_) return true end
+function IG:ReadMember(object, key)
     if object == nil then return nil, false end
     return object[key], true
 end
-function InterruptGlow:AsNumber(value)
+function IG:AsNumber(value)
     if type(value) == "number" then return value end
     if type(value) == "string" then return tonumber(value) end
 end
-function InterruptGlow:MarkAllButtonsDirty() allButtonsDirty = allButtonsDirty + 1 end
-function InterruptGlow:BumpStat() end
+function IG:WipeMap(map) for key in pairs(map) do map[key] = nil end end
+function IG:BumpStat() end
+function IG:MarkAllButtonsDirty() self.allButtonsDirty = (self.allButtonsDirty or 0) + 1 end
+function IG:MarkButtonDirty() end
 
-function InterruptGlow.Data:RefreshActiveSpec()
-    refreshCalls = refreshCalls + 1
-    assert(next(self.runtimeInterrupts) == nil, "runtime proof was not cleared before registry rebuild")
-    self.cooldownSpellMatchCache = {}
-    return 258, false
+local function load(relative)
+    local loader, loadError = loadfile(ROOT .. "/" .. relative)
+    assert(loader, loadError)
+    loader()
 end
-function InterruptGlow.Data:LearnRuntimeInterrupt(spellID)
-    self.runtimeInterrupts[spellID] = spellID
-    self.cooldownSpellMatchCache[spellID] = true
-    return spellID
-end
-function InterruptGlow.Data:GetCanonicalSpellID(spellID)
-    if self.activeInterrupts[spellID] then return spellID end
-    if self.runtimeInterrupts[spellID] and knownFamilies[spellID] then return spellID end
-end
-function InterruptGlow.Data:MatchesCurrentInterrupt(spellID)
-    return self.runtimeInterrupts[spellID] ~= nil
-end
+load("core/Data.lua")
+load("core/ActionResolver.lua")
+load("core/Buttons.lua")
 
-function InterruptGlow.CDM:ObserveExistingItems()
-    assert(InterruptGlow.Data.runtimeInterrupts[9001] == 9001,
-        "CDM identities refreshed before authoritative action proof")
+local Data = assert(IG.Data)
+local Buttons = assert(IG.Buttons)
+local actionRecord = { name = "action", adapter = "native", button = { action = 7 } }
+local secondaryRecord = { name = "secondary", adapter = "cdm", button = {} }
+IG.ObservedButtons[secondaryRecord.button] = secondaryRecord
+IG.ObservedButtons[actionRecord.button] = actionRecord
+local reconcileOrder = {}
+local cdmRefreshCalls = 0
+IG.CDM = { attached = true }
+function IG.CDM:ObserveExistingItems()
+    assert(Data.runtimeInterrupts[9001] == 9001, "secondary refresh ran before action proof")
     cdmRefreshCalls = cdmRefreshCalls + 1
 end
-
-function InterruptGlow.Buttons:ReconcileRecord(record)
+function Buttons:ReconcileRecord(record)
     reconcileOrder[#reconcileOrder + 1] = record.name
     if record.name == "action" then
-        InterruptGlow.Data:LearnRuntimeInterrupt(9001)
+        assert(Data:LearnRuntimeInterrupt(9001) == 9001)
     elseif record.name == "secondary" then
-        assert(cdmRefreshCalls == 1,
-            "secondary copy reconciled before post-action CDM refresh")
-        assert(InterruptGlow.Data.runtimeInterrupts[9001] == 9001,
-            "secondary copy reconciled before authoritative action proof")
+        assert(cdmRefreshCalls == 1, "secondary copy reconciled before CDM refresh")
+        assert(Data.runtimeInterrupts[9001] == 9001, "secondary copy preceded action proof")
     end
 end
-function InterruptGlow.Buttons:ReconcileAll()
-    error("base ReconcileAll should be replaced")
-end
 
-local actionRecord = {
-    name = "action",
-    adapter = "native",
-    button = { action = 7 },
-}
-local secondaryRecord = {
-    name = "secondary",
-    adapter = "cdm",
-    button = {},
-}
-InterruptGlow.ObservedButtons.secondary = secondaryRecord
-InterruptGlow.ObservedButtons.action = actionRecord
-
-local loader, loadError = loadfile(ROOT .. "/core/RuntimeInterruptPolicy.lua")
-assert(loader, loadError)
-loader()
-
-local Data = InterruptGlow.Data
-local Buttons = InterruptGlow.Buttons
-
-local revisionBefore = Data.runtimeProofRevision or 0
-local specID, changed = Data:RefreshActiveSpec()
-assert(specID == 258 and changed == false)
-assert(refreshCalls == 1)
-assert((Data.runtimeProofRevision or 0) == revisionBefore + 1)
-assert(Data.negativeCooldownSpellMatchCount == 0)
-
+-- Actual Buttons owner classifies action surfaces first, refreshes CDM copies,
+-- then reconciles secondary direct spell sources.
 Buttons:ReconcileAll()
-assert(reconcileOrder[1] == "action")
-assert(reconcileOrder[2] == "secondary")
+assert(reconcileOrder[1] == "action" and reconcileOrder[2] == "secondary")
 assert(cdmRefreshCalls == 1)
-assert(Buttons.runtimeInterruptSeedPass == nil,
-    "mutable seed state can remain stuck after a Lua error")
-assert(allButtonsDirty == 1,
-    "new runtime proof did not schedule the bounded propagation pass")
+assert(IG.allButtonsDirty == 1)
 
--- A new runtime family learned from an ordinary single-button reconcile must
--- rebind already-observed direct/CDM copies exactly once on the next frame.
-Data:LearnRuntimeInterrupt(9002)
-assert(allButtonsDirty == 2)
-Data:LearnRuntimeInterrupt(9002)
-assert(allButtonsDirty == 2, "existing runtime proof scheduled duplicate full rebuild")
+-- New runtime proof invalidates negative aliases and requests propagation once.
+assert(Data:LearnRuntimeInterrupt(9002) == 9002)
+assert(IG.allButtonsDirty == 2)
+assert(Data:LearnRuntimeInterrupt(9002) == 9002)
+assert(IG.allButtonsDirty == 2, "repeat proof scheduled duplicate reconciliation")
 
--- Raw runtime map presence is not sufficient without current-family validation.
-Data.runtimeInterrupts[8888] = 8888
-knownFamilies[8888] = nil
+-- Unknown ordinary IDs enter a bounded negative cache. A proven family clears
+-- those results and becomes positive on the next match check.
 assert(Data:MatchesCurrentInterrupt(8888) == false)
 assert(Data.negativeCooldownSpellMatches[8888] == true)
+assert(Data:LearnRuntimeInterrupt(8888) == 8888)
+assert(Data.negativeCooldownSpellMatches[8888] == nil)
+assert(Data:MatchesCurrentInterrupt(8888) == true)
 
--- A genuinely new authoritative family clears stale negative alias results.
-assert(Data:MatchesCurrentInterrupt(7777) == false)
-assert(Data.negativeCooldownSpellMatches[7777] == true)
-knownFamilies[7777] = true
-Data:LearnRuntimeInterrupt(7777)
-assert(Data.negativeCooldownSpellMatches[7777] == nil)
-assert(Data:MatchesCurrentInterrupt(7777) == true)
-
--- Unrelated spell IDs are bounded to 128 negatives; the 129th resets the tiny
--- cache rather than growing for the whole application session.
 for spellID = 10001, 10128 do
     assert(Data:MatchesCurrentInterrupt(spellID) == false)
 end
@@ -143,19 +99,10 @@ assert(Data.negativeCooldownSpellMatchCount == 1)
 assert(Data.negativeCooldownSpellMatches[10129] == true)
 assert(Data.negativeCooldownSpellMatches[10001] == nil)
 
--- A registry/config rebuild clears both runtime proof and negative cache.
+-- A registry rebuild invalidates both learned action proof and negatives.
 Data:RefreshActiveSpec()
 assert(next(Data.runtimeInterrupts) == nil)
 assert(next(Data.negativeCooldownSpellMatches) == nil)
 assert(Data.negativeCooldownSpellMatchCount == 0)
 
-local policy = assert(InterruptGlow.modules.RuntimeInterruptPolicy)
-assert(policy.clearsProofOnRegistryRebuild == true)
-assert(policy.actionSlotsSeedBeforeSecondaryCopies == true)
-assert(policy.refreshesCDMAfterActionSeed == true)
-assert(policy.propagatesNewRuntimeFamilies == true)
-assert(policy.revalidatesCooldownEventMatches == true)
-assert(policy.negativeMatchLimit == 128)
-assert(policy.avoidsStickySeedState == true)
-
-print("RUNTIME INTERRUPT POLICY TEST PASSED")
+print("RUNTIME INTERRUPT ORDER AND CACHE TEST PASSED")

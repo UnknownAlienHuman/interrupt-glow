@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0-beta.8 — 2026-11-02
+
+- Target Retail 12.1.5 / Interface 120105; review current Blizzard source 12.1.5.70688 and verify the unchanged 34-specialization interrupt snapshot.
+- Fix file-scope settings initialization with `LoadSavedVariablesFirst`; preserve typed preferences in schema 4 and add the animation preference.
+- Consolidate policy overrides into their implementation owners. Source selection, readiness commits, conditional action queues, visual creation and provider lifecycle no longer depend on a chain of replacement methods.
+- Gate foreign frames/tables before indexing, deduplicate late provider loading, and preserve pending identity guards through successful reconciliation.
+- Reuse target/focus watcher frames across enable cycles; stop repeated ButtonForge invalidations and rejected countdown-text creation attempts.
+- Remove unused GCD hints, obsolete runtime policy files and duplicated architecture documents.
+- Add cyan target / amber focus highlights, optional animation, out-of-combat preview with combat/disable cleanup, and direct `/iglow` settings access.
+- Correct profiler reporting: retain start/end lifetime peaks and a new-peak boolean; subtract only cumulative threshold counters.
+- Replace the hand-maintained test file list with one discovered local runner and regressions for the actual loaded implementation. Live-client validation remains NOT-RUN.
+
 ## 1.1.0-beta.5
 
 - Fix inaccessible Loss of Control handling: secret/restricted LoC information now hard-fails closed instead of being treated as clear, and optimistic cooldown compatibility cannot bypass it.

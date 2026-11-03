@@ -2,41 +2,65 @@ local ROOT = arg[1] or "."
 
 _G = _G or _ENV
 
-local receivedHint = nil
-local clearCalls = 0
-local baseCaptureCalls = 0
+local actionDurationArgs = {}
+local spellDurationArgs = {}
+local zeroReads = 0
 
 InterruptGlow = {
+    DB = { optimisticRestrictedCooldown = false },
     modules = {},
-    Cooldown = {},
+    AbilityStates = {},
 }
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
+function InterruptGlow.CanAccess(_) return true end
+function InterruptGlow:ReadMember(object, key)
+    if object == nil then return nil, false end
+    return object[key], true
+end
+function InterruptGlow:AsNumber(value) return type(value) == "number" and value or nil end
+function InterruptGlow:Now() return 100 end
+function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
+function InterruptGlow:BumpStat() end
 
-function InterruptGlow.Cooldown:GetCachedReadiness(_, _, hint)
-    receivedHint = hint
-    return false, nil, false, true, true, false
+local remainingDuration = {}
+function remainingDuration:IsZero()
+    zeroReads = zeroReads + 1
+    return false
 end
-function InterruptGlow.Cooldown:ClearGCDHints()
-    clearCalls = clearCalls + 1
-end
-function InterruptGlow.Cooldown:CaptureGCDHints()
-    baseCaptureCalls = baseCaptureCalls + 1
-end
+function remainingDuration:GetRemainingDuration() return 2 end
 
-local loader, loadError = loadfile(ROOT .. "/core/GCDSafetyPolicy.lua")
+C_ActionBar = {
+    GetActionLossOfControlCooldownInfo = function() return nil end,
+    GetActionCharges = function() return nil end,
+    GetActionCooldownDuration = function(slot, ignoreGCD)
+        actionDurationArgs = { slot, ignoreGCD }
+        return remainingDuration
+    end,
+    -- `isOnGCD` is not evidence that the interrupt's personal cooldown is clear.
+    GetActionCooldown = function() return { isActive = true, isOnGCD = true } end,
+}
+C_Spell = {
+    GetSpellLossOfControlCooldownInfo = function() return nil end,
+    GetSpellCharges = function() return nil end,
+    GetSpellCooldownDuration = function(spellID, ignoreGCD)
+        spellDurationArgs = { spellID, ignoreGCD }
+        return remainingDuration
+    end,
+    GetSpellCooldown = function() return { isActive = true, isOnGCD = true } end,
+}
+
+local loader, loadError = loadfile(ROOT .. "/core/Cooldown.lua")
 assert(loader, loadError)
 loader()
+local Cooldown = assert(InterruptGlow.Cooldown)
 
-local ready = InterruptGlow.Cooldown:GetCachedReadiness("action", 1, true)
-assert(ready == false)
-assert(receivedHint == false, "isOnGCD hint reached the readiness resolver")
+local actionReady, actionRemaining = Cooldown:GetCachedReadiness("action", 7)
+assert(actionReady == false and actionRemaining == 2)
+assert(actionDurationArgs[1] == 7 and actionDurationArgs[2] == true)
 
-InterruptGlow.Cooldown:CaptureGCDHints()
-assert(clearCalls == 1)
-assert(baseCaptureCalls == 0, "GCD hint collector was not replaced")
+local spellReady, spellRemaining = Cooldown:GetCachedReadiness("spell", 15487)
+assert(spellReady == false and spellRemaining == 2)
+assert(spellDurationArgs[1] == 15487 and spellDurationArgs[2] == true)
+assert(zeroReads == 2)
 
-local policy = assert(InterruptGlow.modules.GCDSafetyPolicy)
-assert(policy.ignoresGlobalCooldownInDurationAPI == true)
-assert(policy.treatsIsOnGCDAsReadinessProof == false)
-
-print("GCD SAFETY TEST PASSED")
+print("GCD IGNORE DURATION TEST PASSED")

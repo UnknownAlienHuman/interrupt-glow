@@ -4,26 +4,18 @@ _G = _G or _ENV
 
 local registerCount = 0
 local unregisterCount = 0
-local fallbackAttachCount = 0
-local fallbackDetachCount = 0
 
 InterruptGlow = {
+    DB = { enabled = true },
     modules = {},
-    Buttons = {
-        nativeAttached = false,
-    },
+    ObservedButtons = setmetatable({}, { __mode = "k" }),
+    PendingButtons = setmetatable({}, { __mode = "k" }),
 }
 function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
-
-function InterruptGlow.Buttons:OnNativeActionChanged() end
-function InterruptGlow.Buttons:AttachNative()
-    fallbackAttachCount = fallbackAttachCount + 1
-    self.nativeAttached = true
-end
-function InterruptGlow.Buttons:Detach()
-    fallbackDetachCount = fallbackDetachCount + 1
-    self.nativeAttached = false
-end
+function InterruptGlow.CanAccess(_) return true end
+function InterruptGlow.CanAccessTable(value) return type(value) == "table" end
+function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
+function InterruptGlow:BumpStat() end
 
 EventRegistry = {}
 function EventRegistry:RegisterCallbackWithHandle(event, callback, owner)
@@ -53,30 +45,26 @@ function EventUtil.CreateCallbackHandleContainer()
             for index = 1, #handles do handles[index]:Unregister() end
             handles = {}
         end,
-        IsEmpty = function()
-            return #handles == 0
-        end,
+        IsEmpty = function() return #handles == 0 end,
     }
 end
 
-local loader, loadError = loadfile(ROOT .. "/core/NativeCallbackPolicy.lua")
+local loader, loadError = loadfile(ROOT .. "/core/Buttons.lua")
 assert(loader, loadError)
 loader()
+local Buttons = assert(InterruptGlow.Buttons)
 
-local buttons = InterruptGlow.Buttons
-buttons:AttachNative()
-buttons:AttachNative()
+Buttons:AttachNative()
+Buttons:AttachNative()
 assert(registerCount == 1)
-assert(fallbackAttachCount == 0)
-assert(buttons.nativeAttached == true)
+assert(Buttons.nativeAttached == true and Buttons.nativeUsesHandleContainer == true)
 
-buttons:Detach()
+Buttons:Detach()
 assert(unregisterCount == 1)
-assert(fallbackDetachCount == 1)
-assert(buttons.nativeAttached == false)
+assert(Buttons.nativeAttached == false and Buttons.attached == false)
 
-buttons:AttachNative()
-buttons:Detach()
+Buttons:AttachNative()
+Buttons:Detach()
 assert(registerCount == 2)
 assert(unregisterCount == 2)
 

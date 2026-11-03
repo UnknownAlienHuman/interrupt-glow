@@ -13,12 +13,16 @@ local RuntimeProbe = {
     lastReport = nil,
     lastRestrictionType = nil,
     lastRestrictionState = nil,
+    droppedMarks = 0,
+    droppedRestrictions = 0,
+    markerLimitReported = false,
 }
 IG.RuntimeProbe = RuntimeProbe
 IG:RegisterModule("RuntimeProbe", RuntimeProbe)
 
 local _G = _G
 local C_Secrets = _G.C_Secrets
+local C_AddOns = _G.C_AddOns
 local Enum = _G.Enum
 local GetBuildInfo = _G.GetBuildInfo
 local GetInstanceInfo = _G.GetInstanceInfo
@@ -31,7 +35,9 @@ local sort = table.sort
 local concat = table.concat
 local format = string.format
 
-local KB_COMMIT = "5a992ae702a278f3893c7e8f1b212583311438b5"
+local KB_COMMIT = "b03e1635d0ff8bcd6be4f4dfac589dafec4e5e83"
+local MAX_MARKS = 256
+local MAX_RESTRICTIONS = 128
 local PROVIDERS = {
     "Bartender4",
     "Dominos",
@@ -153,6 +159,23 @@ local function CaptureProfiler()
     return nil
 end
 
+local function GetProviderVersion(addOnName)
+    if not C_AddOns or type(C_AddOns.GetAddOnMetadata) ~= "function" then
+        return "<unavailable>"
+    end
+
+    local ok, value = pcall(C_AddOns.GetAddOnMetadata, addOnName, "Version")
+    if not ok or not IG.CanAccess(value) then return "<inaccessible>" end
+    if type(value) ~= "string" and type(value) ~= "number" then return "<unknown>" end
+    return tostring(value)
+end
+
+local function ReportScalar(value, fallback)
+    local captured = CaptureScalar(value)
+    if captured == nil then return fallback or "unknown" end
+    return tostring(captured)
+end
+
 local function AppendBuildSection(lines)
     AddLine(lines, "[build]")
 
@@ -230,6 +253,29 @@ local function AppendProviderSection(lines)
     AddLine(lines, "dominos.attached=" .. SafeScalar(buttons and buttons.dominosAttached))
     AddLine(lines, "buttonForge.attached=" .. SafeScalar(buttons and buttons.buttonForgeAttached))
     AddLine(lines, "cooldownViewer.attached=" .. SafeScalar(IG.CDM and IG.CDM.attached))
+
+    AddLine(lines, "")
+    AddLine(lines, "[providerVersions]")
+    for index = 1, #PROVIDERS do
+        local name = PROVIDERS[index]
+        AddLine(lines, name .. "=" .. GetProviderVersion(name))
+    end
+end
+
+local function AppendConfigurationSection(lines)
+    AddLine(lines, "")
+    AddLine(lines, "[configuration]")
+
+    local DB = IG.DB or {}
+    AddLine(lines, "enabled=" .. ReportScalar(DB.enabled))
+    AddLine(lines, "cdText=" .. ReportScalar(DB.cdText))
+    AddLine(lines, "cdm=" .. ReportScalar(DB.cdm))
+    AddLine(lines, "animateGlow=" .. ReportScalar(DB.animateGlow))
+    AddLine(lines, "strictNI=" .. ReportScalar(DB.strictNI))
+    AddLine(lines, "optimisticRestrictedCooldown=" .. ReportScalar(DB.optimisticRestrictedCooldown))
+    AddLine(lines, "debug=" .. ReportScalar(DB.debug))
+    AddLine(lines, "debugChat=" .. ReportScalar(DB.debugChat))
+    AddLine(lines, "debugKeep=" .. ReportScalar(DB.debugKeep))
 end
 
 local function AppendWorkerSection(lines)
@@ -260,16 +306,8 @@ end
 local function AppendPolicySection(lines)
     AddLine(lines, "")
     AddLine(lines, "[policies]")
-
-    local policy = IG.modules and IG.modules.GCDSafetyPolicy or nil
-    AddLine(lines, "gcd.ignoreGlobalCooldownDuration=" .. SafeScalar(
-        policy and policy.ignoresGlobalCooldownInDurationAPI,
-        "unknown"
-    ))
-    AddLine(lines, "gcd.isOnGCDReadinessProof=" .. SafeScalar(
-        policy and policy.treatsIsOnGCDAsReadinessProof,
-        "unknown"
-    ))
+    AddLine(lines, "gcd.ignoreGlobalCooldownDuration=true")
+    AddLine(lines, "gcd.isOnGCDReadinessProof=false")
 end
 
 local function AppendCaptureSection(lines)
@@ -290,6 +328,17 @@ local function AppendCaptureSection(lines)
         local mark = RuntimeProbe.marks[index]
         AddLine(lines, format("mark.%d=%.3f %s", index, mark.elapsed, SafeScalar(mark.label)))
     end
+end
+
+local function AppendBoundsSection(lines)
+    AddLine(lines, "")
+    AddLine(lines, "[probeBounds]")
+    AddLine(lines, "maxMarks=" .. tostring(MAX_MARKS))
+    AddLine(lines, "storedMarks=" .. tostring(#RuntimeProbe.marks))
+    AddLine(lines, "droppedMarks=" .. tostring(RuntimeProbe.droppedMarks or 0))
+    AddLine(lines, "maxRestrictions=" .. tostring(MAX_RESTRICTIONS))
+    AddLine(lines, "storedRestrictions=" .. tostring(#RuntimeProbe.restrictionTransitions))
+    AddLine(lines, "droppedRestrictions=" .. tostring(RuntimeProbe.droppedRestrictions or 0))
 end
 
 local function AppendCastSection(lines)
@@ -412,7 +461,7 @@ end
 local function AppendProfilerDeltas(lines, prefix, startSnapshot, endSnapshot)
     if not IG.Debug or type(IG.Debug.ProfilerDelta) ~= "function" then return end
     local delta = IG.Debug:ProfilerDelta(startSnapshot, endSnapshot)
-    AddLine(lines, prefix .. ".PeakTimeIncrease=" .. SafeScalar(delta.peakIncrease, "unknown"))
+    AddLine(lines, prefix .. ".newSessionPeak=" .. SafeScalar(delta.newSessionPeak, "unknown"))
 
     local metrics = IG.Debug.profilerMetrics or {}
     for index = 1, #metrics do
@@ -448,10 +497,13 @@ local function AppendProfilerSection(lines)
 end
 
 function RuntimeProbe:BuildReport()
+    if IG:IsInCombat() then return nil end
+
     local lines = {}
     AppendBuildSection(lines)
     AppendContextSection(lines)
     AppendProviderSection(lines)
+    AppendConfigurationSection(lines)
     AppendWorkerSection(lines)
     AppendPolicySection(lines)
     AppendCaptureSection(lines)
@@ -460,11 +512,21 @@ function RuntimeProbe:BuildReport()
     AppendAbilitySection(lines)
     AppendCountersSection(lines)
     AppendProfilerSection(lines)
+    AppendBoundsSection(lines)
     return concat(lines, "\n")
 end
 
 function RuntimeProbe:AddMark(label, announce)
     if not self.active then return false end
+
+    if #self.marks >= MAX_MARKS then
+        self.droppedMarks = self.droppedMarks + 1
+        if announce and not self.markerLimitReported then
+            self.markerLimitReported = true
+            IG:Print("Runtime capture marker limit reached; further markers are counted but not stored.")
+        end
+        return false
+    end
 
     self.marks[#self.marks + 1] = {
         elapsed = IG:Now() - self.startedAt,
@@ -493,6 +555,9 @@ function RuntimeProbe:Start(label)
     self.stoppedAt = nil
     self.marks = {}
     self.restrictionTransitions = {}
+    self.droppedMarks = 0
+    self.droppedRestrictions = 0
+    self.markerLimitReported = false
     self.lastRestrictionType = nil
     self.lastRestrictionState = nil
     self.profilerStop = nil
@@ -516,6 +581,11 @@ function RuntimeProbe:Stop()
         return false
     end
 
+    if IG:IsInCombat() then
+        IG:Print("Capture is still active. Add an end marker now and stop it after combat.")
+        return false
+    end
+
     self.stoppedAt = IG:Now()
     self.profilerStop = CaptureProfiler()
     self.active = false
@@ -530,12 +600,19 @@ function RuntimeProbe:Stop()
 end
 
 function RuntimeProbe:Show()
+    if IG:IsInCombat() then
+        IG:Print("Runtime reports can be built and opened after combat.")
+        return false
+    end
+
     local report = self.active and self:BuildReport() or self.lastReport or self:BuildReport()
+    if not report then return false end
     if IG.Debug and type(IG.Debug.ShowText) == "function" then
         IG.Debug:ShowText("Interrupt Glow Runtime Probe", report)
     else
         IG:Print("Runtime report UI is unavailable.")
     end
+    return true
 end
 
 function RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
@@ -546,13 +623,14 @@ function RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
     self.lastRestrictionType = safeType
     self.lastRestrictionState = safeState
 
+    if #self.restrictionTransitions >= MAX_RESTRICTIONS then
+        self.droppedRestrictions = self.droppedRestrictions + 1
+        return
+    end
+
     self.restrictionTransitions[#self.restrictionTransitions + 1] = {
         elapsed = IG:Now() - self.startedAt,
         restrictionType = safeType,
         state = safeState,
     }
-    self:AddMark("restriction type="
-        .. SafeScalar(safeType, "unknown")
-        .. " state="
-        .. SafeScalar(safeState, "unknown"), false)
 end

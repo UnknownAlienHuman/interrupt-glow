@@ -2,118 +2,91 @@ local ROOT = arg[1] or "."
 
 _G = _G or _ENV
 
-local secretValue = {}
-local observeCalls = 0
-local resolveCalls = 0
+local secretFrame = {}
+local secretSpell = {}
+local weakMapAccesses = 0
+local observeDirtyCalls = 0
 local petCalls = 0
-local cdmMethodCalls = 0
 
-local petSpellID = 1766
-local petRangeCheck = secretValue
-local petInRange = secretValue
-
+local observed = setmetatable({}, {
+    __index = function()
+        weakMapAccesses = weakMapAccesses + 1
+    end,
+    __newindex = function()
+        weakMapAccesses = weakMapAccesses + 1
+    end,
+})
+InterruptGlow = {
+    DB = { enabled = true, cdm = true },
+    modules = {},
+    ObservedButtons = observed,
+    PendingButtons = setmetatable({}, { __mode = "k" }),
+    AbilityStates = {},
+    Data = {},
+}
+function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
+function InterruptGlow.CanAccess(value) return value ~= secretFrame and value ~= secretSpell end
+function InterruptGlow.CanAccessTable(value)
+    return InterruptGlow.CanAccess(value) and type(value) == "table"
+end
+function InterruptGlow:ReadMember(object, key)
+    if not self.CanAccess(object) or object == nil then return nil, false end
+    local value = object[key]
+    if not self.CanAccess(value) then return nil, false end
+    return value, true
+end
+function InterruptGlow:AsNumber(value) return type(value) == "number" and value or nil end
+function InterruptGlow:BumpStat() end
+function InterruptGlow:MarkButtonDirty() observeDirtyCalls = observeDirtyCalls + 1 end
+function InterruptGlow.Data:GetCanonicalSpellID(spellID)
+    if spellID == 1766 then return 1766 end
+end
 function GetPetActionInfo(slot)
     assert(slot == 3)
     petCalls = petCalls + 1
-    return "Kick", 1, false, false, false, false, petSpellID, petRangeCheck, petInRange
+    return "Kick", nil, false, false, false, false, petSpell
 end
 
-InterruptGlow = {
-    modules = {},
-    DB = { cdm = true },
-    AbilityStates = {},
-    ObservedButtons = setmetatable({}, { __mode = "k" }),
-    Buttons = {},
-    Cooldown = {},
-    Data = {},
-}
+local buttonsLoader, buttonsError = loadfile(ROOT .. "/core/Buttons.lua")
+assert(buttonsLoader, buttonsError)
+buttonsLoader()
+local resolverLoader, resolverError = loadfile(ROOT .. "/core/ActionResolver.lua")
+assert(resolverLoader, resolverError)
+resolverLoader()
 
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
-function InterruptGlow.CanAccess(value) return value ~= secretValue end
-function InterruptGlow:ReadMember(container, key)
-    if not self.CanAccess(container) or container == nil then return nil, false end
-    local ok, value = pcall(function() return container[key] end)
-    if not ok or not self.CanAccess(value) then return nil, false end
-    return value, true
-end
-function InterruptGlow:BumpStat() end
-function InterruptGlow:MarkCooldownDirty() return true end
-function InterruptGlow.Data:GetCanonicalSpellID(spellID, sourceKind)
-    if spellID == 1766 and (sourceKind == "pet" or sourceKind == "spell") then
-        return 1766
-    end
-end
+local Buttons = assert(InterruptGlow.Buttons)
 
-function InterruptGlow.Buttons:ObserveButton(button)
-    observeCalls = observeCalls + 1
-    local record = { button = button }
-    InterruptGlow.ObservedButtons[button] = record
-    return record
-end
-function InterruptGlow.Buttons:ResolveRecord()
-    resolveCalls = resolveCalls + 1
-    return true
-end
-function InterruptGlow.Buttons:ResolvePet() error("legacy pet resolver must be replaced") end
-function InterruptGlow.Buttons:ResolveCDM() error("legacy CDM resolver must be replaced") end
-function InterruptGlow.Buttons:RebuildAbilitySource() return false end
-function InterruptGlow.Cooldown:RefreshAbility() return false end
-function InterruptGlow.Cooldown:RefreshAll() return false end
+-- An inaccessible provider frame must be rejected before it becomes a weak
+-- table key, regardless of which integration calls the public observer.
+assert(Buttons:ObserveButton(secretFrame) == nil)
+assert(weakMapAccesses == 0, "inaccessible frame was indexed in ObservedButtons")
+assert(observeDirtyCalls == 0)
+assert(Buttons:ResolveRecord({ button = secretFrame }) == false)
+assert(weakMapAccesses == 0)
 
-local loader, loadError = loadfile(ROOT .. "/core/BoundSourcePolicy.lua")
-assert(loader, loadError)
-loader()
-
-local Buttons = InterruptGlow.Buttons
-
--- Inaccessible observed objects are rejected before weak-table keying or the
--- legacy resolver/observer can touch them.
-assert(Buttons:ObserveButton(secretValue) == nil)
-assert(observeCalls == 0)
-assert(Buttons:ResolveRecord({ button = secretValue }) == false)
-assert(resolveCalls == 0)
-
-local ordinaryButton = {}
-assert(Buttons:ObserveButton(ordinaryButton) ~= nil)
-assert(observeCalls == 1)
-assert(Buttons:ResolveRecord({ button = ordinaryButton }) == true)
-assert(resolveCalls == 1)
-
--- Only pet return 7 crosses the pcall boundary. Secret range fields returned
--- after spellID cannot poison classification because they are never captured.
-local isInterrupt, sourceKind, sourceID, spellID, canonicalSpellID =
-    Buttons:ResolvePet({ petSlot = 3 })
-assert(isInterrupt == true)
-assert(sourceKind == "pet" and sourceID == 3)
-assert(spellID == 1766 and canonicalSpellID == 1766)
+-- Pet API results pass through a guarded source boundary. Inaccessible spell
+-- identity cannot be sent into data classification.
+local secretPetResult = { petSlot = 3 }
+assert(Buttons:ResolvePet(secretPetResult) == false)
 assert(petCalls == 1)
 
-petSpellID = secretValue
-assert(Buttons:ResolvePet({ petSlot = 3 }) == false)
+-- An ordinary frame is observed, and only its NeverSecret pet spell identity
+-- is allowed to resolve as a current interrupt.
+petSpell = 1766
+local petButton = { petSlot = 3 }
+local result, sourceKind, sourceID, spellID, canonicalSpellID = Buttons:ResolvePet(petButton)
+assert(result == true)
+assert(sourceKind == "pet" and sourceID == 3)
+assert(spellID == 1766 and canonicalSpellID == 1766)
 assert(petCalls == 2)
-petSpellID = 1766
 
-local cdmButton = {
-    GetBaseSpellID = function()
-        cdmMethodCalls = cdmMethodCalls + 1
-        return 1766
-    end,
-}
-isInterrupt, sourceKind, sourceID, spellID, canonicalSpellID =
-    Buttons:ResolveCDM({ button = cdmButton })
-assert(isInterrupt == true)
+-- Stored CDM identity resolves without rereading the pooled frame object.
+local cdmButton = {}
+local cdmRecord = { adapter = "cdm", cdmCanonicalSpellID = 1766 }
+result, sourceKind, sourceID, spellID, canonicalSpellID = Buttons:ResolveCDM(cdmRecord)
+assert(result == true)
 assert(sourceKind == "spell" and sourceID == 1766)
 assert(spellID == 1766 and canonicalSpellID == 1766)
-assert(cdmMethodCalls == 1)
+assert(weakMapAccesses == 0)
 
-cdmButton.GetBaseSpellID = secretValue
-assert(Buttons:ResolveCDM({ button = cdmButton }) == false)
-assert(cdmMethodCalls == 1)
-assert(Buttons:ResolveCDM({ button = secretValue }) == false)
-
-local policy = assert(InterruptGlow.modules.BoundSourcePolicy)
-assert(policy.accessGatesObservedButtons == true)
-assert(policy.selectivePetSpellRead == true)
-assert(policy.accessGatesCDMFrameMethods == true)
-
-print("SOURCE ACCESS POLICY TEST PASSED")
+print("SOURCE ACCESS BOUNDARY TEST PASSED")

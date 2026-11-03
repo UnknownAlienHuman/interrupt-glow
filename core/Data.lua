@@ -2,14 +2,17 @@ local IG = _G.InterruptGlow
 if not IG then return end
 
 local Data = {
-    wowBuild = 69497,
-    interface = 120100,
-    sourceCommit = "027d26c3406d3de2cbd2b1f67d468fe033a1bcd4",
+    wowBuild = 70688,
+    interface = 120105,
+    sourceCommit = "d07eb00237d8891f153215db98a5df880a26cfe5",
     activeSpecID = nil,
     specInterrupts = {},
     activeInterrupts = {},
     runtimeInterrupts = {},
     cooldownSpellMatchCache = {},
+    negativeCooldownSpellMatches = {},
+    negativeCooldownSpellMatchCount = 0,
+    runtimeProofRevision = 0,
     interruptCooldownCategories = {},
     interruptStartRecoveryCategories = {},
 }
@@ -18,7 +21,8 @@ IG:RegisterModule("Data", Data)
 
 -- Build-time source for ordinary player interrupts:
 -- Blizzard_CooldownBroadcaster/TrackedCooldowns.lua,
--- namespace.InterruptSpellsBySpec, build 12.1.0.69497.
+-- namespace.InterruptSpellsBySpec, build 12.1.5.70688.
+-- The selected 12.1.5 snapshot has the same 34 spec entries as 12.1.0.
 --
 -- Blizzard_CooldownBroadcaster is an internal LoadOnDemand MDI component. It is
 -- never loaded or referenced at runtime by Interrupt Glow; this is a vendored,
@@ -70,6 +74,20 @@ local EXTRA_INTERRUPTS_BY_SPEC = {
     [265] = { 212619 },                 -- Affliction: Call Felhunter (PvP talent)
     [266] = { 212619 },                 -- Demonology: Call Felhunter (PvP talent)
     [267] = { 212619 },                 -- Destruction: Call Felhunter (PvP talent)
+    [102] = { 106839 },                 -- Balance: optional Skull Bash
+    [105] = { 106839 },                 -- Restoration: optional Skull Bash
+    [1468] = { 351338 },                -- Preservation: Quell
+    [270] = { 116705 },                 -- Mistweaver: Spear Hand Strike
+    [65] = { 96231 },                   -- Holy: Rebuke
+}
+
+-- These optional class-tree spells are valid for direct spell/CDM buttons only
+-- when the current spellbook API positively confirms each exact spell.
+local EXACT_KNOWN_INTERRUPTS = {
+    [106839] = true,
+    [351338] = true,
+    [116705] = true,
+    [96231] = true,
 }
 
 -- Pet action IDs are not present in Blizzard's player-spec broadcaster list.
@@ -83,6 +101,7 @@ local PET_ACTION_ALIASES = {
 Data.interruptsBySpec = INTERRUPTS_BY_SPEC
 Data.extraInterruptsBySpec = EXTRA_INTERRUPTS_BY_SPEC
 Data.petActionAliases = PET_ACTION_ALIASES
+Data.exactKnownInterrupts = EXACT_KNOWN_INTERRUPTS
 
 local _G = _G
 local C_SpellBook = _G.C_SpellBook
@@ -137,6 +156,16 @@ local function IsKnownOrInSpellBook(spellID)
     return ok and IG.CanAccess(known) and known == true
 end
 
+function Data:RequiresExactKnownSpell(spellID)
+    if not IG.CanAccess(spellID) or type(spellID) ~= "number" then return false end
+
+    local predicate = C_SpellBook and C_SpellBook.IsSpellKnownOrInSpellBook
+    if type(predicate) ~= "function" then return false end
+
+    local ok, known = pcall(predicate, spellID)
+    return ok and IG.CanAccess(known) and known == true
+end
+
 local function FindBaseSpell(spellID)
     if not C_SpellBook or type(C_SpellBook.FindBaseSpellByID) ~= "function" then
         return nil
@@ -164,11 +193,21 @@ local function AddSpecList(self, list)
     if type(list) ~= "table" then return end
     for index = 1, #list do
         local spellID = list[index]
-        self.specInterrupts[spellID] = true
-        if IsKnownOrInSpellBook(spellID) then
-            self.activeInterrupts[spellID] = true
+        local exactKnownRequired = EXACT_KNOWN_INTERRUPTS[spellID] == true
+        if not exactKnownRequired or self:RequiresExactKnownSpell(spellID) then
+            self.specInterrupts[spellID] = true
+            if IsKnownOrInSpellBook(spellID) then
+                self.activeInterrupts[spellID] = true
+            end
         end
     end
+end
+
+local NEGATIVE_MATCH_LIMIT = 128
+
+local function ClearNegativeMatches(self)
+    IG:WipeMap(self.negativeCooldownSpellMatches)
+    self.negativeCooldownSpellMatchCount = 0
 end
 
 local function IsRuntimeRelevant()
@@ -189,14 +228,12 @@ function Data:RefreshActiveSpec()
     IG:WipeMap(self.cooldownSpellMatchCache)
     IG:WipeMap(self.interruptCooldownCategories)
     IG:WipeMap(self.interruptStartRecoveryCategories)
-
-    if changed then
-        -- Runtime discoveries are authoritative only inside the specialization
-        -- that exposed them through C_ActionBar.IsInterruptAction. Preserve them
-        -- across same-spec SPELLS_CHANGED bursts to avoid order-dependent CDM
-        -- unbinds, but never carry them into another specialization.
-        IG:WipeMap(self.runtimeInterrupts)
-    end
+    -- Runtime action feedback is valid only for the current spell/talent/PvP
+    -- configuration. Clear it on every registry rebuild; the action-slot seed
+    -- pass restores families that remain valid.
+    IG:WipeMap(self.runtimeInterrupts)
+    ClearNegativeMatches(self)
+    self.runtimeProofRevision = self.runtimeProofRevision + 1
 
     if specID then
         AddSpecList(self, INTERRUPTS_BY_SPEC[specID])
@@ -216,6 +253,7 @@ function Data:LearnRuntimeInterrupt(spellID)
     end
 
     local canonicalSpellID = FindBaseSpell(spellID) or spellID
+    local previous = self.runtimeInterrupts[spellID]
     self.runtimeInterrupts[spellID] = canonicalSpellID
     self.runtimeInterrupts[canonicalSpellID] = canonicalSpellID
     self.cooldownSpellMatchCache[spellID] = true
@@ -227,6 +265,13 @@ function Data:LearnRuntimeInterrupt(spellID)
         self.cooldownSpellMatchCache[overrideSpellID] = true
     end
 
+    if previous ~= canonicalSpellID then
+        ClearNegativeMatches(self)
+        self.runtimeProofRevision = self.runtimeProofRevision + 1
+        IG:BumpStat("data.runtimeInterruptFamiliesChanged")
+        IG:MarkAllButtonsDirty()
+    end
+
     IG:BumpStat("data.runtimeInterruptsLearned")
     return canonicalSpellID
 end
@@ -236,6 +281,18 @@ end
 -- Cooldown Viewer buttons.
 function Data:GetCanonicalSpellID(spellID, sourceKind)
     if not IG.CanAccess(spellID) or type(spellID) ~= "number" then
+        return nil
+    end
+
+    -- Static spec tables do not prove that a direct-spell, pet or CDM action is
+    -- available when the spellbook API contract is missing. An action slot has
+    -- its own authoritative C_ActionBar proof, and a learned runtime family is
+    -- already backed by that proof for the current specialization.
+    local spellBookPredicate = C_SpellBook and C_SpellBook.IsSpellKnownOrInSpellBook
+    if type(spellBookPredicate) ~= "function" and sourceKind ~= "action" then
+        local runtimeCanonical = self.runtimeInterrupts[spellID]
+        if type(runtimeCanonical) == "number" then return runtimeCanonical end
+        IG:BumpStat("data.spellBookContractUnavailable")
         return nil
     end
 
@@ -289,14 +346,32 @@ function Data:MatchesCurrentInterrupt(spellID)
         return false
     end
 
-    local cached = self.cooldownSpellMatchCache[spellID]
-    if cached ~= nil then return cached end
-
-    local matches = self.activeInterrupts[spellID] ~= nil
+    if self.cooldownSpellMatchCache[spellID] == true
+        or self.activeInterrupts[spellID] ~= nil
         or self.runtimeInterrupts[spellID] ~= nil
-        or self:GetCanonicalSpellID(spellID, "spell") ~= nil
-    self.cooldownSpellMatchCache[spellID] = matches
-    return matches
+    then
+        self.cooldownSpellMatchCache[spellID] = true
+        if self.negativeCooldownSpellMatches[spellID] == true then
+            self.negativeCooldownSpellMatches[spellID] = nil
+            if self.negativeCooldownSpellMatchCount > 0 then
+                self.negativeCooldownSpellMatchCount = self.negativeCooldownSpellMatchCount - 1
+            end
+        end
+        return true
+    end
+    if self.negativeCooldownSpellMatches[spellID] == true then return false end
+    if self:GetCanonicalSpellID(spellID, "spell") ~= nil then
+        self.cooldownSpellMatchCache[spellID] = true
+        return true
+    end
+
+    if self.negativeCooldownSpellMatchCount >= NEGATIVE_MATCH_LIMIT then
+        ClearNegativeMatches(self)
+        IG:BumpStat("data.negativeCooldownMatchCacheResets")
+    end
+    self.negativeCooldownSpellMatches[spellID] = true
+    self.negativeCooldownSpellMatchCount = self.negativeCooldownSpellMatchCount + 1
+    return false
 end
 
 function Data:LearnInterruptCooldownCategories(category, startRecoveryCategory)

@@ -36,13 +36,17 @@ local IG = {
 
 function IG:RegisterModule() end
 function IG:CanAccess() return true end
+function IG:ReadMember(object, key)
+    if object == nil then return nil, false end
+    return object[key], true
+end
 function IG:BumpStat() end
 function IG:MarkButtonDirty(button)
     assert(button == item)
     recordDirtyCalls = recordDirtyCalls + 1
 end
 function IG:MarkAllButtonsDirty() allDirtyCalls = allDirtyCalls + 1 end
-function IG:IsAddOnFullyLoaded() return false end
+function IG:IsAddOnFullyLoaded() return true end
 
 function IG.Buttons:ObserveButton(button, adapter)
     observeCalls = observeCalls + 1
@@ -65,6 +69,17 @@ _G.EssentialCooldownViewer = {
 _G.UtilityCooldownViewer = {
     itemFramePool = { EnumerateActive = function() return function() return nil end end },
 }
+_G.CooldownViewerMixin = { OnAcquireItemFrame = function() end }
+_G.CooldownViewerItemDataMixin = {
+    OnCooldownIDSet = function() end,
+    ResetCooldownData = function() end,
+}
+local hookCalls = 0
+function hooksecurefunc(object, methodName, callback)
+    assert(type(object[methodName]) == "function")
+    assert(type(callback) == "function")
+    hookCalls = hookCalls + 1
+end
 
 local loader, loadError = loadfile(ROOT .. "/core/CDM.lua")
 assert(loader, loadError)
@@ -102,6 +117,7 @@ CDM:SetEnabled(true)
 assert(record.cdmCanonicalSpellID == 15487)
 assert(record.isInterrupt == false, "CDM re-enable mutated binding before reconcile")
 assert(recordDirtyCalls == 4)
-assert(allDirtyCalls == 1)
+assert(CDM.hooksInstalled == true and hookCalls == 3)
+assert(allDirtyCalls == 0)
 
 print("CDM TOGGLE TEST PASSED")

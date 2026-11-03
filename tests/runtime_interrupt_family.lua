@@ -14,6 +14,7 @@ function InterruptGlow:RegisterModule(name, module) self.modules[name] = module 
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
 function InterruptGlow:BumpStat() end
+function InterruptGlow:MarkAllButtonsDirty() end
 
 PlayerUtil = {
     GetCurrentSpecID = function() return currentSpecID end,
@@ -47,16 +48,16 @@ assert(Data:GetCanonicalSpellID(9001, "spell") == 9001)
 assert(Data:MatchesCurrentInterrupt(9002) == true)
 assert(Data:MatchesCurrentInterrupt(9001) == true)
 
--- Same-spec spellbook churn retains the learned mapping but revalidates family
--- availability. Once neither base nor override is known, direct/CDM copies fail
--- closed until a current action slot proves the interrupt again.
+-- A registry rebuild invalidates old action proof even when the specialization
+-- ID is unchanged; a fresh action proof restores the family.
 known[9002] = nil
 Data:RefreshActiveSpec()
-assert(Data.runtimeInterrupts[9002] == 9001)
+assert(Data.runtimeInterrupts[9002] == nil)
 assert(Data:GetCanonicalSpellID(9002, "spell") == nil)
 assert(Data:GetCanonicalSpellID(9001, "spell") == nil)
 
 known[9002] = true
+assert(Data:LearnRuntimeInterrupt(9002) == 9001)
 assert(Data:GetCanonicalSpellID(9001, "spell") == 9001)
 
 -- A real specialization change clears session-learned interrupt families.
