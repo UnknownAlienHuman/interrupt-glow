@@ -24,15 +24,12 @@ end
 
 InterruptGlow = {
     ObservedButtons = setmetatable({}, { __mode = "k" }),
-    modules = {},
     Buttons = {
         attached = true,
         labLibraries = setmetatable({}, { __mode = "k" }),
         labDiscoveredLibraries = setmetatable({}, { __mode = "k" }),
     },
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:ReadMember(object, key)
     if identityRestricted and object == restrictedButton
         and (key == "_state_type" or key == "_state_action")
@@ -42,8 +39,10 @@ function InterruptGlow:ReadMember(object, key)
     return object[key], true
 end
 function InterruptGlow.CanAccess(_) return true end
+function InterruptGlow.CanAccessTable(value) return type(value) == "table" end
 function InterruptGlow:MarkButtonDirty() dirtyCalls = dirtyCalls + 1 end
 function InterruptGlow:BumpStat() end
+function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
 
 local Buttons = InterruptGlow.Buttons
 function Buttons:ObserveButton(button, adapter)
@@ -73,19 +72,26 @@ function library:GetAllButtons()
     -- upstream button-keyed set directly.
     return allButtons
 end
+function library.RegisterCallback(owner, event, method)
+    assert(owner == InterruptGlow.LABAdapter)
+    library.callbacks = library.callbacks or {}
+    library.callbacks[event] = method
+end
 function library.UnregisterCallback(owner, event)
-    assert(owner == Buttons)
-    assert(event == "OnButtonUpdate")
+    assert(owner == InterruptGlow.LABAdapter)
+    assert(event == "OnButtonCreated" or event == "OnButtonUpdate" or event == "OnButtonContentsChanged")
     unregisterCalls = unregisterCalls + 1
 end
 
 local loader, loadError = loadfile(ROOT .. "/core/LABAdapter.lua")
 assert(loader, loadError)
 loader()
+local Adapter = assert(InterruptGlow.LABAdapter)
+Adapter:Attach()
 
 -- Empty-at-attach providers must retain the broad fallback until a real button
 -- exists; otherwise their later creation would be invisible.
-Buttons:AttachLABLibrary(library, false, false)
+Adapter:AttachLibrary(library, false, false)
 assert(unregisterCalls == 0)
 
 local button = {
@@ -96,7 +102,7 @@ local button = {
 restrictedButton = button
 allButtons[1] = button
 library.buttonRegistry[button] = true
-Buttons:OnLABButtonCreated(nil, button)
+Adapter:OnButtonCreated(nil, button)
 assert(hookedCalls == 1)
 assert(unregisterCalls == 1, "late-created LAB button did not retire broad callback")
 assert(dirtyCalls == 1)
@@ -147,28 +153,22 @@ assert(record.labSlot == 9 and record.labIdentityRestricted == false)
 assert(dirtyCalls == 5)
 
 -- Further content changes must not repeat callback removal or hook installation.
-Buttons:OnLABButtonContentsChanged(nil, button)
+Adapter:OnButtonContentsChanged(nil, button)
 assert(hookedCalls == 1)
 assert(unregisterCalls == 1)
 
 -- Detach drops targeted slot indexes. Re-attach re-registers provider callbacks
 -- in the base adapter and removes the new broad registration once exact hooks
 -- are known again.
-Buttons:Detach()
-assert(Buttons.attached == false)
+Adapter:Detach()
+assert(Adapter.attached == false)
 local beforeDetachedSlot = dirtyCalls
 slotFrame.scripts.OnEvent(slotFrame, "ACTIONBAR_SLOT_CHANGED", 9)
 assert(dirtyCalls == beforeDetachedSlot)
 
+Adapter:Attach()
 Buttons.attached = true
-Buttons:AttachLABLibrary(library, true, false)
-assert(unregisterCalls == 2)
-
-local policy = assert(InterruptGlow.modules.LABAdapterPolicy)
-assert(policy.exactUpdateActionHooks == true)
-assert(policy.accessibleEmptyIdentityClearsSlot == true)
-assert(policy.inaccessibleIdentityFailsClosed == true)
-assert(policy.staleSlotIndexesClearedOnDetach == true)
-assert(policy.broadVisualUpdateCallbackRetiredWhenSafe == true)
+Adapter:AttachLibrary(library, true, false)
+assert(unregisterCalls == 5)
 
 print("LAB CALLBACK POLICY TEST PASSED")

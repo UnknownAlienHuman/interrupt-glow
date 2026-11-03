@@ -10,16 +10,13 @@ local secretUnit = {}
 local secretSpell = {}
 
 InterruptGlow = {
-    DB = { debug = false },
-    modules = {},
+    DB = { debug = false, enabled = true },
     Data = {},
     Buttons = {},
     CastTracking = {},
     CDM = {},
     Glow = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:NeedsReadinessRuntime() return true end
 function InterruptGlow.CanAccess(value)
     return value ~= secretUnit and value ~= secretSpell
@@ -47,6 +44,14 @@ function InterruptGlow.CDM:Attach() end
 function InterruptGlow.Glow:CreatePendingOverlays() end
 function InterruptGlow.Glow:RefreshUnitRelation() end
 function InterruptGlow.Glow:RefreshUnit() end
+InterruptGlow.RuntimeLifecycle = { active = false }
+function InterruptGlow.RuntimeLifecycle:Initialize()
+    self.active = InterruptGlow.DB.enabled == true
+    InterruptGlow:SetRuntimeEventsEnabled(self.active)
+    return self.active
+end
+function InterruptGlow.RuntimeLifecycle:IsActive() return self.active end
+function InterruptGlow.RuntimeLifecycle:OnCombatEnded() end
 
 function CreateFrame()
     frame = { scripts = {} }

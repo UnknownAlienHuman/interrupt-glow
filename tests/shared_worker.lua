@@ -34,9 +34,7 @@ local function LoadShared(saved, version)
     local addon = {
         name = "InterruptGlow",
         version = version or "1.1.0-beta.4",
-        modules = {},
     }
-    function addon:RegisterModule(name, module) self.modules[name] = module end
 
     _G.InterruptGlow = addon
     _G.InterruptGlowDB = saved
@@ -52,7 +50,7 @@ local function LoadShared(saved, version)
 end
 
 local legacy = {
-    schema = 2,
+    schema = 3,
     enabled = false,
     cdText = "invalid",
     cdm = false,
@@ -70,11 +68,12 @@ local legacy = {
 local IG = LoadShared(legacy)
 local DB = IG.DB
 assert(DB == InterruptGlowDB)
-assert(DB.schema == 3)
+assert(DB.schema == 4)
 assert(DB.producerVersion == "1.1.0-beta.4")
-assert(DB.interface == 120100)
+assert(DB.interface == 120105)
 assert(DB.enabled == false)
 assert(DB.cdText == false, "invalid boolean was not reset")
+assert(DB.animateGlow == true, "missing animation preference did not use the current default")
 assert(DB.cdm == false)
 assert(DB.strictNI == false)
 assert(DB.optimisticRestrictedCooldown == true)
@@ -107,9 +106,46 @@ assert(IG.flushFrame.mode == Enum.OnUpdateMode.Disabled)
 assert(not IG:HasDirtyWork())
 
 local clean = LoadShared("corrupt-root", "1.1.0-beta.4")
-assert(clean.DB.schema == 3)
+assert(clean.DB.schema == 4)
+assert(clean.DB.interface == 120105)
 assert(clean.DB.enabled == true)
+assert(clean.DB.animateGlow == true)
 assert(clean.DB.debugKeep == 400)
 assert(clean.flushFrame.mode == Enum.OnUpdateMode.Disabled)
+
+-- A burst of invalidations queues one readiness pass and walks the bound
+-- ability set only once before that pass. A later burst starts a fresh pass.
+local deferredFlushes, pendingWrites, readinessPasses = 0, 0, 0
+local state = { records = { [{}] = true } }
+local ability = setmetatable({}, {
+    __index = state,
+    __newindex = function(_, key, value)
+        if key == "readinessPending" then pendingWrites = pendingWrites + 1 end
+        state[key] = value
+    end,
+})
+clean.AbilityStates[1766] = ability
+clean.Glow = { HasRelevantCast = function() return true end }
+clean.ConditionalActions = {
+    FlushDeferred = function() deferredFlushes = deferredFlushes + 1 end,
+}
+clean.Cooldown = {
+    RefreshAll = function()
+        readinessPasses = readinessPasses + 1
+        state.readinessPending = false
+    end,
+}
+for _ = 1, 20 do assert(clean:MarkCooldownDirty() == true) end
+assert(pendingWrites == 1, "one event burst repeatedly invalidated the same ability")
+assert(deferredFlushes == 1, "one event burst repeatedly visited deferred identities")
+assert(clean.flushFrame.mode == Enum.OnUpdateMode.RunOnce)
+clean.flushFrame.scripts.OnUpdate()
+assert(readinessPasses == 1 and state.readinessPending == false)
+assert(deferredFlushes == 2, "flush must revisit identities awakened by its cast phase")
+assert(clean.flushFrame.mode == Enum.OnUpdateMode.Disabled)
+for _ = 1, 20 do clean:MarkCooldownDirty() end
+assert(pendingWrites == 2, "next event burst did not invalidate readiness")
+clean.flushFrame.scripts.OnUpdate()
+assert(readinessPasses == 2 and not clean:HasDirtyWork())
 
 print("SHARED WORKER TEST PASSED")

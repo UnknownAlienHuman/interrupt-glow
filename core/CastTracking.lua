@@ -10,7 +10,6 @@ local CastTracking = {
     },
 }
 IG.CastTracking = CastTracking
-IG:RegisterModule("CastTracking", CastTracking)
 
 local _G = _G
 local CreateFrame = _G.CreateFrame
@@ -261,7 +260,7 @@ function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRe
         or castIdentityChanged
         or not oldRelevant
     )
-    if needsReadinessRefresh then IG:MarkCooldownDirty(false) end
+    if needsReadinessRefresh then IG:MarkCooldownDirty() end
 
     if IG.Glow then IG.Glow:RefreshUnit(unit) end
 
@@ -371,34 +370,37 @@ function CastTracking:OnUnitEvent(unit, event, ...)
     end
 end
 
-local function CreateUnitWatcher(unit)
-    local frame = CreateFrame("Frame")
-    frame.unit = unit
+local UNIT_EVENTS = {
+    "UNIT_SPELLCAST_START",
+    "UNIT_SPELLCAST_STOP",
+    "UNIT_SPELLCAST_FAILED",
+    "UNIT_SPELLCAST_FAILED_QUIET",
+    "UNIT_SPELLCAST_INTERRUPTED",
+    "UNIT_SPELLCAST_CHANNEL_START",
+    "UNIT_SPELLCAST_CHANNEL_UPDATE",
+    "UNIT_SPELLCAST_CHANNEL_STOP",
+    "UNIT_SPELLCAST_EMPOWER_START",
+    "UNIT_SPELLCAST_EMPOWER_UPDATE",
+    "UNIT_SPELLCAST_EMPOWER_STOP",
+    "UNIT_SPELLCAST_INTERRUPTIBLE",
+    "UNIT_SPELLCAST_NOT_INTERRUPTIBLE",
+    "UNIT_FACTION",
+    "UNIT_FLAGS",
+    "UNIT_TARGETABLE_CHANGED",
+}
 
-    local events = {
-        "UNIT_SPELLCAST_START",
-        "UNIT_SPELLCAST_STOP",
-        "UNIT_SPELLCAST_FAILED",
-        "UNIT_SPELLCAST_FAILED_QUIET",
-        "UNIT_SPELLCAST_INTERRUPTED",
-        "UNIT_SPELLCAST_CHANNEL_START",
-        "UNIT_SPELLCAST_CHANNEL_UPDATE",
-        "UNIT_SPELLCAST_CHANNEL_STOP",
-        "UNIT_SPELLCAST_EMPOWER_START",
-        "UNIT_SPELLCAST_EMPOWER_UPDATE",
-        "UNIT_SPELLCAST_EMPOWER_STOP",
-        "UNIT_SPELLCAST_INTERRUPTIBLE",
-        "UNIT_SPELLCAST_NOT_INTERRUPTIBLE",
-        "UNIT_FACTION",
-        "UNIT_FLAGS",
-        "UNIT_TARGETABLE_CHANGED",
-    }
+local function OnWatchedUnitEvent(frame, event, ...)
+    CastTracking:OnUnitEvent(frame.unit, event, ...)
+end
 
-    for index = 1, #events do frame:RegisterUnitEvent(events[index], unit) end
+local function AttachUnitWatcher(unit, frame)
+    if not frame then
+        frame = CreateFrame("Frame")
+        frame.unit = unit
+    end
 
-    frame:SetScript("OnEvent", function(_, event, ...)
-        CastTracking:OnUnitEvent(unit, event, ...)
-    end)
+    for index = 1, #UNIT_EVENTS do frame:RegisterUnitEvent(UNIT_EVENTS[index], unit) end
+    frame:SetScript("OnEvent", OnWatchedUnitEvent)
     return frame
 end
 
@@ -409,7 +411,7 @@ function CastTracking:Attach()
     for index = 1, #UNITS do
         local unit = UNITS[index]
         self.channelSuppressed[unit] = false
-        self.unitFrames[unit] = CreateUnitWatcher(unit)
+        self.unitFrames[unit] = AttachUnitWatcher(unit, self.unitFrames[unit])
     end
 
     self:RefreshAll()
@@ -420,7 +422,7 @@ function CastTracking:Detach()
         frame:UnregisterAllEvents()
         frame:SetScript("OnEvent", nil)
     end
-    self.unitFrames = {}
+    -- WoW frames cannot be destroyed. Keep the two watchers for reactivation.
     for index = 1, #UNITS do
         self.channelSuppressed[UNITS[index]] = false
     end

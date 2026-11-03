@@ -41,11 +41,8 @@ EventUtil = {
 
 InterruptGlow = {
     DB = { enabled = false, debug = false },
-    modules = {},
     RuntimeProbe = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:BumpStat(key)
     stats[key] = (stats[key] or 0) + 1
 end
@@ -128,11 +125,5 @@ assert(regenCalls == 1)
 
 assert((stats["lifecycle.runtimeEventsRegistered"] or 0) == 1)
 assert((stats["lifecycle.runtimeEventsUnregistered"] or 0) == 1)
-
-local policy = assert(InterruptGlow.modules.RuntimeEventPolicy)
-assert(policy.masterDisableUnregistersRuntimeEvents == true)
-assert(policy.playerLossOfControlUsesUnitFilter == true)
-assert(type(policy.persistentEvents) == "table")
-assert(type(policy.runtimeEvents) == "table")
 
 print("RUNTIME EVENT SLEEP TEST PASSED")

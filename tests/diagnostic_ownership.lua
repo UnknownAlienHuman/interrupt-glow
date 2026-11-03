@@ -1,25 +1,26 @@
 local ROOT = arg[1] or "."
 
 _G = _G or _ENV
-
 InterruptGlow = {
-    DB = { debug = false },
+    DB = { debug = false, debugKeep = 400 },
     Stats = { old = 9 },
-    modules = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
-function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
 function InterruptGlow.CanAccess(_) return true end
 
+function CreateFrame()
+    return { SetScript = function() end }
+end
+function InCombatLockdown() return false end
+function GetTime() return 10 end
 DEFAULT_CHAT_FRAME = { AddMessage = function() end }
 
-local loader, loadError = loadfile(ROOT .. "/core/DiagnosticsPolicy.lua")
+local loader, loadError = loadfile(ROOT .. "/core/Shared.lua")
 assert(loader, loadError)
 loader()
 
 local IG = InterruptGlow
 assert(IG.profileCountersEnabled == false and IG.profileCounterOwner == nil)
+assert(IG.Stats.old == 9, "Shared should preserve the existing runtime stats map on load")
 
 local ok, owner = IG:StartProfileCounters("manual")
 assert(ok == true and owner == "manual")
@@ -52,8 +53,8 @@ assert(IG:ResetProfileCounters("capture") == true)
 assert(next(IG.Stats) == nil)
 assert(IG:StopProfileCounters("capture") == true)
 
--- Debug mode remains an independent opt-in for counters without claiming the
--- explicit manual/capture ownership channel.
+-- Debug logging independently enables counters without taking ownership of an
+-- explicit manual or capture window.
 IG.DB.debug = true
 IG:BumpStat("debug.event")
 assert(IG.Stats["debug.event"] == 1)

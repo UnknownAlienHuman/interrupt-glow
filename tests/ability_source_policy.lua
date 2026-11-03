@@ -2,76 +2,27 @@ local ROOT = arg[1] or "."
 
 _G = _G or _ENV
 
-local observed = {}
 local cooldownDirtyCalls = 0
-
+local stats = {}
 InterruptGlow = {
-    modules = {},
-    Stats = {},
+    DB = { enabled = true },
+    Stats = stats,
     AbilityStates = {},
-    Cooldown = {},
-    Buttons = {},
+    ObservedButtons = setmetatable({}, { __mode = "k" }),
+    PendingButtons = setmetatable({}, { __mode = "k" }),
 }
+function InterruptGlow:BumpStat(key, amount) stats[key] = (stats[key] or 0) + (amount or 1) end
+function InterruptGlow:MarkCooldownDirty() cooldownDirtyCalls = cooldownDirtyCalls + 1 end
 
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
-function InterruptGlow:BumpStat(key, amount)
-    self.Stats[key] = (self.Stats[key] or 0) + (amount or 1)
-end
-function InterruptGlow:MarkCooldownDirty()
-    cooldownDirtyCalls = cooldownDirtyCalls + 1
-end
-
-function InterruptGlow.Cooldown:RefreshAbility(ability)
-    observed[#observed + 1] = {
-        sourceKind = ability.sourceKind,
-        sourceID = ability.sourceID,
-        pending = ability.readinessPending,
-        hasEvaluation = ability.hasEvaluation,
-    }
-    return true
-end
-function InterruptGlow.Cooldown:RefreshAll()
-    for _, ability in pairs(InterruptGlow.AbilityStates) do
-        if ability.sourceKind ~= nil and next(ability.records) ~= nil then
-            self:RefreshAbility(ability)
-        end
-    end
-end
-
-local loader, loadError = loadfile(ROOT .. "/core/AbilitySourcePolicy.lua")
+local loader, loadError = loadfile(ROOT .. "/core/Buttons.lua")
 assert(loader, loadError)
 loader()
 
-local action5 = {
-    isInterrupt = true,
-    sourceKind = "action",
-    sourceID = 5,
-    ready = true,
-}
-local action2 = {
-    isInterrupt = true,
-    sourceKind = "action",
-    sourceID = 2,
-    ready = true,
-}
-local pet3 = {
-    isInterrupt = true,
-    sourceKind = "pet",
-    sourceID = 3,
-    ready = true,
-}
-local spell = {
-    isInterrupt = true,
-    sourceKind = "spell",
-    sourceID = 15487,
-    ready = true,
-}
-local inactive = {
-    isInterrupt = false,
-    sourceKind = "action",
-    sourceID = 1,
-}
-
+local action5 = { isInterrupt = true, sourceKind = "action", sourceID = 5, ready = true }
+local action2 = { isInterrupt = true, sourceKind = "action", sourceID = 2, ready = true }
+local pet3 = { isInterrupt = true, sourceKind = "pet", sourceID = 3, ready = true }
+local spell = { isInterrupt = true, sourceKind = "spell", sourceID = 15487, ready = true }
+local inactive = { isInterrupt = false, sourceKind = "action", sourceID = 1 }
 local ability = {
     sourceKind = "spell",
     sourceID = 15487,
@@ -82,16 +33,12 @@ local ability = {
     needsPoll = true,
     hasEvaluation = true,
     evaluatedGeneration = 9,
-    records = {
-        [spell] = true,
-        [inactive] = true,
-    },
+    records = { [spell] = true, [inactive] = true },
 }
 InterruptGlow.AbilityStates.test = ability
 
--- Button binding must upgrade immediately even while the lower-priority spell
--- source remains bound. Waiting for a later cooldown event would leave stale CDM
--- or direct-spell readiness active on the newly visible action button.
+-- The actual Buttons owner arbitrates action > pet > direct spell, marks the
+-- new source pending, and invalidates shared readiness when the best source changes.
 ability.records[pet3] = true
 assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "pet" and ability.sourceID == 3)
@@ -108,59 +55,31 @@ assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "action" and ability.sourceID == 5)
 assert(cooldownDirtyCalls == 2)
 
--- A lower action slot is the deterministic source among duplicate action records.
+-- Among duplicate action buttons, the lower slot is the stable tie breaker.
 ability.records[action2] = true
 assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "action" and ability.sourceID == 2)
 assert(cooldownDirtyCalls == 3)
 
--- Removing records must immediately fall back through action -> pet -> spell.
+-- Removing higher-priority records selects the next valid source immediately.
 ability.records[action2] = nil
 assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "action" and ability.sourceID == 5)
-
 ability.records[action5] = nil
 assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "pet" and ability.sourceID == 3)
-
 ability.records[pet3] = nil
 assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == true)
 assert(ability.sourceKind == "spell" and ability.sourceID == 15487)
 assert(cooldownDirtyCalls == 6)
 
--- RefreshAbility is a final defensive boundary: if external code corrupts or
--- clears the selected source, it restores authority before the base evaluator.
-ability.sourceKind = nil
-ability.sourceID = nil
-InterruptGlow.Cooldown:RefreshAbility(ability)
-assert(observed[#observed].sourceKind == "spell")
-assert(observed[#observed].sourceID == 15487)
-
--- More importantly, RefreshAll must reconcile before its base sourceKind filter;
--- otherwise a bound ability with a temporarily nil source is skipped entirely.
-ability.sourceKind = nil
-ability.sourceID = nil
-local observedBefore = #observed
-InterruptGlow.Cooldown:RefreshAll()
-assert(#observed == observedBefore + 1)
-assert(observed[#observed].sourceKind == "spell")
-assert(observed[#observed].sourceID == 15487)
-
--- A fully dormant ability keeps its last source/evaluation for same-generation
--- macro churn and queues no pointless refresh.
+-- Once all bound records disappear, same-spec macro churn keeps the dormant
+-- canonical object without scheduling pointless readiness work.
 ability.records[spell] = nil
+ability.records[inactive] = nil
 local dirtyBeforeDormant = cooldownDirtyCalls
 assert(InterruptGlow.Buttons:RebuildAbilitySource(ability) == false)
 assert(ability.dormant == true)
 assert(cooldownDirtyCalls == dirtyBeforeDormant)
 
-local policy = assert(InterruptGlow.modules.AbilitySourcePolicy)
-assert(policy.sharedReadinessRequiresBoundSource == true)
-assert(policy.upgradesToHigherPrioritySource == true)
-assert(policy.ownsButtonSourceRebuild == true)
-assert(policy.reconcilesBeforeRefreshFilter == true)
-assert(policy.priority.action > policy.priority.pet)
-assert(policy.priority.pet > policy.priority.spell)
-assert((InterruptGlow.Stats["cooldown.abilitySourceChanged"] or 0) == 8)
-
-print("ABILITY SOURCE POLICY TEST PASSED")
+print("ABILITY SOURCE ARBITRATION TEST PASSED")

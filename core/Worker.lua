@@ -3,7 +3,6 @@ if not IG then return end
 
 local Worker = {}
 IG.Worker = Worker
-IG:RegisterModule("Worker", Worker)
 
 local _G = _G
 local type = type

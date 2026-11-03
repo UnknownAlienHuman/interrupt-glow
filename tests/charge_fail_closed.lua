@@ -10,11 +10,8 @@ local spellChargeInfo = secretChargeInfo
 
 InterruptGlow = {
     DB = { optimisticRestrictedCooldown = true },
-    modules = {},
     AbilityStates = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value)
     return value ~= secretChargeInfo
         and value ~= secretCurrentCharges
@@ -36,6 +33,7 @@ function zeroDuration:IsZero() return true end
 function zeroDuration:GetRemainingDuration() return 0 end
 
 C_ActionBar = {
+    IsUsableAction = function() return true, false end,
     GetActionLossOfControlCooldownInfo = function() return nil end,
     GetActionCharges = function() return actionChargeInfo end,
     GetActionChargeDuration = function() return zeroDuration end,
@@ -44,6 +42,8 @@ C_ActionBar = {
 }
 
 C_Spell = {
+    IsSpellUsable = function() return true, false end,
+    GetSpellLossOfControlCooldownInfo = function() return nil end,
     GetSpellCharges = function() return spellChargeInfo end,
     GetSpellChargeDuration = function() return zeroDuration end,
     GetSpellCooldownDuration = function() return zeroDuration end,
@@ -55,6 +55,9 @@ function GetPetActionCooldown() return 0, 0, 1 end
 local loader, loadError = loadfile(ROOT .. "/core/Cooldown.lua")
 assert(loader, loadError)
 loader()
+local usabilityLoader, usabilityError = loadfile(ROOT .. "/core/Usability.lua")
+assert(usabilityLoader, usabilityError)
+usabilityLoader()
 
 local Cooldown = assert(InterruptGlow.Cooldown)
 

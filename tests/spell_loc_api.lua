@@ -16,7 +16,7 @@ function GetSpellLossOfControlCooldown()
 end
 
 C_Spell = {
-    GetSpellLossOfControlCooldown = function(spellID)
+    GetSpellLossOfControlCooldownInfo = function(spellID)
         assert(spellID == 1766)
         currentCalls = currentCalls + 1
         return locInfo
@@ -34,13 +34,11 @@ C_Spell = {
 C_ActionBar = {}
 
 InterruptGlow = {
-    modules = {},
     DB = { optimisticRestrictedCooldown = true },
     AbilityStates = {},
     CastState = {},
     Stats = {},
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value) return value ~= "secret" end
 function InterruptGlow:ReadMember(container, key)
     if not self.CanAccess(container) or container == nil then return nil, false end
@@ -73,7 +71,7 @@ assert(legacyCalls == 0)
 assert(cooldownCalls == 0)
 
 Cooldown.generation = Cooldown.generation + 1
-C_Spell.GetSpellLossOfControlCooldown = function(spellID)
+C_Spell.GetSpellLossOfControlCooldownInfo = function(spellID)
     assert(spellID == 1766)
     currentCalls = currentCalls + 1
     return nil

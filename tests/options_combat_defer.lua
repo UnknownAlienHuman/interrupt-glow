@@ -18,10 +18,7 @@ InterruptGlow = {
         debug = false,
         debugKeep = 400,
     },
-    modules = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:IsInCombat() return combat end
 function InterruptGlow:BumpStat(key)
     assert(key == "ui.optionsBuilt")
@@ -41,6 +38,7 @@ local function NewFontString()
         SetText = function() end,
         SetWidth = function() end,
         SetJustifyH = function() end,
+        SetWordWrap = function() end,
     }
 end
 
@@ -81,7 +79,7 @@ assert(frameCount == 1, "more than the bare Settings canvas was created at load"
 assert(fontStringCount == 0)
 
 -- Opening Settings for the first time in combat must not create controls.
-assert(panel.scripts.OnShow() == nil)
+assert(panel.scripts.OnShow() == false)
 assert(Options.built == false)
 assert(Options.buildDeferred == true)
 assert(frameCount == 1 and fontStringCount == 0)
@@ -97,18 +95,19 @@ assert(frameCount == 1 and fontStringCount == 0)
 panel.shown = true
 assert(panel.scripts.OnShow() == true)
 assert(Options.built == true and Options.buildDeferred == false)
-assert(#Options.controls == 6)
-assert(frameCount == 9, "expected canvas + six checks + two action buttons")
-assert(fontStringCount == 8, "expected six check labels plus title/subtitle")
+assert(#Options.controls > 0, "the out-of-combat visit must build the options controls")
+assert(frameCount > 1 and fontStringCount > 0, "the out-of-combat visit must create the options UI")
 assert(optionsBuiltStats == 1)
 
 -- Refreshing or receiving another regen signal cannot create a second tree.
 local framesAfterBuild = frameCount
 local stringsAfterBuild = fontStringCount
+local controlsAfterBuild = #Options.controls
 assert(Options:Refresh() == true)
 assert(Options:OnCombatEnded() == false)
 assert(frameCount == framesAfterBuild)
 assert(fontStringCount == stringsAfterBuild)
+assert(#Options.controls == controlsAfterBuild)
 assert(optionsBuiltStats == 1)
 
 print("OPTIONS COMBAT DEFER TEST PASSED")

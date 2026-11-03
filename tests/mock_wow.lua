@@ -16,6 +16,7 @@ local fontCount = 0
 local animationCount = 0
 local castingInfoCalls = 0
 local channelInfoCalls = 0
+local interruptActionCalls = 0
 local actionCooldownCalls = 0
 local actionDurationCalls = 0
 local actionUsableCalls = 0
@@ -107,6 +108,7 @@ function ChargeDuration:GetRemainingDuration() return self.data.remaining or 0 e
 
 C_ActionBar = {
     IsInterruptAction = function(slot)
+        interruptActionCalls = interruptActionCalls + 1
         local data = actionData[slot]
         return data and data.interrupt == true or false
     end,
@@ -232,6 +234,8 @@ local function newRegion(parent)
     function region:SetJustifyH(_) end
     function region:SetWidth(_) end
     function region:SetHeight(_) end
+    function region:SetWordWrap(_) end
+    function region:GetWidth() return 720 end
     function region:SetSize(_, _) end
     function region:SetTextInsets(...) end
     function region:SetMultiLine(_) end
@@ -401,6 +405,9 @@ for _, path in ipairs(files) do
 end
 local IG = _G.InterruptGlow
 assert(IG == addonTable, "addon namespace mismatch")
+assert(InterruptGlowDB == IG.DB, "SavedVariables were not migrated before runtime modules loaded")
+assert(IG.DB.schema == 4 and IG.DB.interface == 120105)
+assert(IG.DB.debug == true and IG.DB.animateGlow == true)
 
 local function flush_all()
     for _ = 1, 80 do
@@ -464,13 +471,19 @@ assert(record1.ability == record2.ability and record1.ability == labRecord.abili
 assert(record1.ready == true and record2.ready == true, "initial readiness cache is broken")
 assert(record1.ability.readinessPending ~= true, "startup readiness remained pending")
 assert(record1.overlay and record1.overlay.enhanced == true)
-assert(ordinaryRecord.overlay and ordinaryRecord.overlay.enhanced == false, "ordinary shell must stay lightweight")
+assert(ordinaryRecord.overlay and ordinaryRecord.overlay.enhanced == true, "observed buttons must receive reusable visuals")
 assert(fontCount == 0, "cooldown text and options UI allocated at login")
 assert(not (LAB.callbacks.OnButtonUpdate and LAB.callbacks.OnButtonUpdate[IG.Buttons]), "broad LAB callback was retained")
 
--- Unchanged native feedback must not enter the dirty queue.
-EventRegistry:TriggerEvent("ActionButton.OnActionChanged", native1)
-assert(IG.PendingButtons[native1] == nil and not IG:HasDirtyWork(), "unchanged native action was queued")
+-- Native feedback is queue-only and repeated signals coalesce before the
+-- addon-owned pass performs exactly one fresh action classification.
+local classificationsBeforeNativeFeedback = interruptActionCalls
+for _ = 1, 100 do EventRegistry:TriggerEvent("ActionButton.OnActionChanged", native1) end
+assert(IG.PendingButtons[native1] == true, "native feedback was not queued for reconciliation")
+assert(interruptActionCalls == classificationsBeforeNativeFeedback, "native callback classified the action synchronously")
+flush_all()
+assert(interruptActionCalls == classificationsBeforeNativeFeedback + 1, "native callback burst did not coalesce to one classification")
+assert(record1.isInterrupt == true)
 
 -- Stable LAB slots receive resolved macro feedback from the event's exact slot.
 actionData[6] = { actionType = "macro", id = 2061, subType = "spell", interrupt = false, usable = true }
@@ -483,16 +496,16 @@ flush_all()
 assert(labRecord.isInterrupt == true, "LAB changed-slot feedback did not rebind")
 
 assert(IG.Data.activeSpecID == 258)
-assert(IG.Data:IsInterruptSpell(15487, "spell") == true)
-assert(IG.Data:IsInterruptSpell(6552, "spell") == false)
-assert(IG.Data:IsInterruptSpell(115781, "spell") == false, "removed Optical Blast returned")
-assert(IG.Data:IsInterruptSpell(212619, "spell") == false, "Call Felhunter leaked into Shadow Priest")
+assert(IG.Data:GetCanonicalSpellID(15487, "spell") ~= nil)
+assert(IG.Data:GetCanonicalSpellID(6552, "spell") == nil)
+assert(IG.Data:GetCanonicalSpellID(115781, "spell") == nil, "removed Optical Blast returned")
+assert(IG.Data:GetCanonicalSpellID(212619, "spell") == nil, "Call Felhunter leaked into Shadow Priest")
 currentSpecID = 257
 IG.Data:RefreshActiveSpec()
 assert(next(IG.Data.activeInterrupts) == nil, "Holy Priest inherited Shadow Silence")
 currentSpecID = 265
 IG.Data:RefreshActiveSpec()
-assert(IG.Data:IsInterruptSpell(212619, "spell") == true, "Call Felhunter PvP coverage is missing")
+assert(IG.Data:GetCanonicalSpellID(212619, "spell") ~= nil, "Call Felhunter PvP coverage is missing")
 assert(IG.Data:GetCanonicalSpellID(19647, "pet") == 119910)
 assert(IG.Data:GetCanonicalSpellID(89766, "pet") == nil)
 currentSpecID = 266
@@ -500,8 +513,8 @@ IG.Data:RefreshActiveSpec()
 assert(IG.Data:GetCanonicalSpellID(89766, "pet") == 119914)
 currentSpecID = 73
 IG.Data:RefreshActiveSpec()
-assert(IG.Data:IsInterruptSpell(6552, "spell") == true)
-assert(IG.Data:IsInterruptSpell(386071, "spell") == true)
+assert(IG.Data:GetCanonicalSpellID(6552, "spell") ~= nil)
+assert(IG.Data:GetCanonicalSpellID(386071, "spell") ~= nil)
 currentSpecID = 258
 IG.Data:RefreshActiveSpec()
 IG:MarkAllButtonsDirty()
@@ -664,28 +677,28 @@ assert(actionCooldownCalls + actionDurationCalls + actionUsableCalls == readines
 actionData[sharedActionSource].usable = true
 actionData[sharedActionSource].usableSecret = false
 actionCharges[sharedActionSource] = { current = 0, max = 2, active = true, zero = false, remaining = 6, secret = false }
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(record1.ready == false and type(record1.deadline) == "number")
 actionCharges[sharedActionSource].current = 1
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(record1.ready == true)
 actionCharges[sharedActionSource] = nil
 actionLoC.active, actionLoC.replaces = true, true
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(record1.ready == false, "Loss of Control did not block readiness")
 actionLoC.active, actionLoC.replaces = false, false
 actionLoC.secret = true
 IG.DB.optimisticRestrictedCooldown = true
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(record1.ready == false and record1.ability.hardRestricted == true, "restricted LoC failed open")
 assert(record1.ability.needsPoll == false)
 actionLoC.secret = false
 IG.DB.optimisticRestrictedCooldown = false
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 
 currentSpecID = 265
@@ -696,7 +709,7 @@ flush_all()
 local petRecord = assert(IG.ObservedButtons[PetActionBar.actionButtons[1]])
 assert(petRecord.isInterrupt and petRecord.canonicalSpellID == 119910)
 petUsable = false
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(petRecord.ready == false, "unusable pet interrupt remained ready")
 petUsable = true
@@ -751,8 +764,11 @@ flush_all()
 assert(bfRecord.isInterrupt == true, "ButtonForge did not rebind")
 spellUsable[15487] = false
 IG.Cooldown.generation = IG.Cooldown.generation + 1
-local directSpellReady = IG.Cooldown:GetCachedReadiness("spell", 15487, false)
-assert(directSpellReady == false and spellUsableCalls > 0, "direct spell usability was not enforced")
+assert(bfRecord.ability ~= nil)
+bfRecord.ability.sourceKind = "spell"
+bfRecord.ability.sourceID = 15487
+IG.Cooldown:RefreshAbility(bfRecord.ability)
+assert(bfRecord.ready == false and spellUsableCalls > 0, "direct spell usability was not enforced")
 spellUsable[15487] = nil
 
 -- Cooldown Viewer is not force-loaded and observes only interrupt items.
@@ -805,7 +821,7 @@ IG.CastTracking:RefreshUnit("target")
 cooldownData.zero = false
 cooldownData.remaining = 4
 cooldownData.active = true
-local cdTextControl = assert(IG.Options.controls[2])
+local cdTextControl = assert(IG.Options.controls[4])
 cdTextControl:SetChecked(true)
 cdTextControl.scripts.OnClick(cdTextControl)
 assert(record1.ability.readinessPending == true, "countdown enable did not mark readiness pending")
@@ -841,4 +857,4 @@ fire("PLAYER_REGEN_ENABLED")
 flush_all()
 assert(lateRecord.overlay ~= nil)
 
-print("MOCK WOW BETA2 TESTS PASSED")
+print("MODELED TOC INTEGRATION TESTS PASSED")

@@ -10,15 +10,51 @@ local inaccessibleButton = {}
 local inaccessibleAllowed = false
 local mockNow = 0
 
+local function NewTexture()
+    createdTextures = createdTextures + 1
+    local texture = {}
+    function texture:ClearAllPoints() end
+    function texture:SetPoint() end
+    function texture:SetBlendMode() end
+    function texture:SetAtlas() end
+    function texture:SetTexture() end
+    function texture:SetVertexColor() end
+    function texture:SetAlpha() end
+    function texture:Show() end
+    return texture
+end
+
+local function NewFrame(parent)
+    assert(parent ~= inaccessibleButton or inaccessibleAllowed, "child created on inaccessible frame")
+    if parent and type(parent.CanBeAccessedInContext) == "function" then
+        assert(parent:CanBeAccessedInContext() == true, "child created outside permitted context")
+    end
+    createFrameCalls = createFrameCalls + 1
+    local frame = {}
+    function frame:SetAllPoints() end
+    function frame:SetFrameLevel() end
+    function frame:SetAlpha() end
+    function frame:Show() end
+    function frame:Hide() end
+    function frame:SetScript() end
+    function frame:CreateTexture() return NewTexture() end
+    return frame
+end
+
+function CreateFrame(_, _, parent) return NewFrame(parent) end
+function UnitIsUnit() return false end
+
 InterruptGlow = {
-    modules = {},
+    DB = { enabled = true, cdText = false, strictNI = true, animateGlow = false },
     ObservedButtons = setmetatable({}, { __mode = "k" }),
-    Glow = {
-        prewarmQueued = setmetatable({}, { __mode = "k" }),
+    InterruptRecords = setmetatable({}, { __mode = "k" }),
+    AbilityStates = {},
+    Worker = {
+        Disable = function() end,
+        RunOnce = function() end,
+        SetContinuous = function() end,
     },
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value)
     if value == secretValue then return false end
     if value == inaccessibleButton and not inaccessibleAllowed then return false end
@@ -26,67 +62,25 @@ function InterruptGlow.CanAccess(value)
 end
 function InterruptGlow:ReadMember(container, key)
     if not self.CanAccess(container) or container == nil then return nil, false end
-    local value = container[key]
-    if not self.CanAccess(value) then return nil, false end
+    local ok, value = pcall(function() return container[key] end)
+    if not ok or not self.CanAccess(value) then return nil, false end
     return value, true
 end
 function InterruptGlow:IsInCombat() return false end
 function InterruptGlow:Now() return mockNow end
-function InterruptGlow:BumpStat(key)
-    stats[key] = (stats[key] or 0) + 1
-end
+function InterruptGlow:BumpStat(key, amount) stats[key] = (stats[key] or 0) + (amount or 1) end
+function InterruptGlow:MarkCooldownDirty() end
+function InterruptGlow:MarkCastDirty() end
+function InterruptGlow:MarkVisualDirty() end
 
-local function NewTexture()
-    createdTextures = createdTextures + 1
-    return {
-        ClearAllPoints = function() end,
-        SetPoint = function() end,
-        SetBlendMode = function() end,
-        SetAtlas = function() end,
-        SetTexture = function() end,
-        SetVertexColor = function() end,
-        SetAlpha = function() end,
-        Show = function() end,
-    }
-end
-
-function CreateFrame(_, _, parent)
-    assert(parent ~= inaccessibleButton or inaccessibleAllowed, "created a child on an inaccessible frame")
-    if parent and type(parent.CanBeAccessedInContext) == "function" then
-        assert(parent:CanBeAccessedInContext() == true, "created a child outside the permitted context")
-    end
-    createFrameCalls = createFrameCalls + 1
-    return {
-        SetAllPoints = function() end,
-        SetFrameLevel = function() end,
-        SetAlpha = function() end,
-        Show = function() end,
-        CreateTexture = function() return NewTexture() end,
-    }
-end
-
-local Glow = InterruptGlow.Glow
-function Glow:QueueShell(record, urgent)
-    if urgent then return self:CreateShell(record) end
-    record.overlayQueued = true
-    self.prewarmQueued[record] = true
-end
-function Glow:CreatePendingOverlays()
-    for _, record in pairs(InterruptGlow.ObservedButtons) do
-        if record.isInterrupt and not record.overlay then self:CreateShell(record) end
-    end
-end
-
-local loader, loadError = loadfile(ROOT .. "/core/FrameAccessPolicy.lua")
+local loader, loadError = loadfile(ROOT .. "/core/Glow.lua")
 assert(loader, loadError)
 loader()
+local Glow = assert(InterruptGlow.Glow)
+local framesBeforeShellCreation = createFrameCalls
 
 local function AssertDeferred(button)
-    local record = {
-        button = button,
-        overlayPending = true,
-        overlayQueued = true,
-    }
+    local record = { button = button, overlayPending = true, overlayQueued = true }
     Glow.prewarmQueued[record] = true
     local framesBefore = createFrameCalls
     assert(Glow:CreateShell(record) == nil)
@@ -101,25 +95,26 @@ local function AssertDeferred(button)
     return record
 end
 
--- An inaccessible frame object is fail-closed. Immediate urgent calls are
--- throttled before the object is touched and do not increase failure count.
+-- An inaccessible frame is deferred before access-sensitive member reads or
+-- child creation. Urgent retries respect bounded backoff too.
 local deferredRecord = AssertDeferred(inaccessibleButton)
 assert(Glow:QueueShell(deferredRecord, true) == nil)
 assert(deferredRecord.overlayAccessFailures == 1)
-assert(createFrameCalls == 0)
+assert(createFrameCalls == framesBeforeShellCreation)
 
 mockNow = 0.30
 assert(Glow:CreateShell(deferredRecord) == nil)
 assert(deferredRecord.overlayAccessFailures == 2)
 inaccessibleAllowed = true
-assert(Glow:QueueShell(deferredRecord, true) == nil, "backoff was bypassed by urgent retry")
+assert(Glow:QueueShell(deferredRecord, true) == nil, "urgent retry bypassed the active backoff")
 assert(deferredRecord.overlayAccessFailures == 2)
 mockNow = 0.81
-assert(Glow:QueueShell(deferredRecord, true) ~= nil)
+Glow:QueueShell(deferredRecord, true)
+assert(deferredRecord.overlay ~= nil)
 assert(deferredRecord.overlayAccessFailures == nil)
 
--- HasAccessConstraints=true requires an ordinary true result from
--- CanBeAccessedInContext before any child frame is allocated.
+-- A constrained frame requires an ordinary true context answer before any
+-- addon child is created. An explicit lifecycle retry can resume once allowed.
 local contextAllowed = false
 local contextualButton = {
     HasAccessConstraints = function() return true end,
@@ -130,15 +125,12 @@ local contextualRecord = AssertDeferred(contextualButton)
 InterruptGlow.ObservedButtons[contextualButton] = contextualRecord
 contextualRecord.isInterrupt = true
 contextAllowed = true
-
--- Post-combat/lifecycle processing is an explicit retry point and may bypass the
--- timer once. It is not an OnUpdate retry loop.
 Glow:CreatePendingOverlays()
 assert(contextualRecord.overlay ~= nil)
 assert(contextualRecord.overlayAccessDeferred == false)
 
--- Erroring or inaccessible contextual access predicates remain retryable and
--- never create a child frame.
+-- Erroring or inaccessible access predicates stay retryable, while confirmed
+-- forbidden or malformed predicates are permanently skipped.
 AssertDeferred({
     HasAccessConstraints = function() return true end,
     CanBeAccessedInContext = function() error("context query failed") end,
@@ -171,29 +163,39 @@ AssertForbidden({
     CanBeAccessedInContext = "not-a-function",
 })
 
--- Frames without access-constraint or forbidden methods remain supported when
--- the frame itself is ordinary and readable.
+-- Cooldown text creation uses an actual button owner behind an error boundary.
+-- A foreign frame that throws is quarantined and is not probed again.
+InterruptGlow.DB.cdText = true
+local fontCreateCalls = 0
+local throwingTextRecord = {
+    overlay = {},
+    button = {
+        CreateFontString = function()
+            fontCreateCalls = fontCreateCalls + 1
+            error("foreign font owner rejected")
+        end,
+    },
+}
+assert(Glow:EnsureCooldownText(throwingTextRecord) == nil)
+assert(throwingTextRecord.cooldownTextForbidden == true)
+assert(fontCreateCalls == 1)
+assert(Glow:EnsureCooldownText(throwingTextRecord) == nil)
+assert(fontCreateCalls == 1)
+
+-- Context denial is retryable, but does not invite repeated foreign reads.
+inaccessibleAllowed = false
+local deniedTextRecord = { overlay = {}, button = inaccessibleButton }
+assert(Glow:EnsureCooldownText(deniedTextRecord) == nil)
+assert(deniedTextRecord.cooldownTextAccessDeferred == true)
+assert(deniedTextRecord.cooldownTextPending == true)
+
+-- Ordinary frames remain supported if they do not expose access constraints.
 local ordinaryRecord = { button = { GetFrameLevel = function() return 1 end } }
 assert(Glow:CreateShell(ordinaryRecord) ~= nil)
-
-assert(createFrameCalls == 6)
+assert(createFrameCalls == 8)
 assert(createdTextures == 6)
 assert((stats["ui.shellsDeferred"] or 0) == 7)
 assert((stats["ui.shellsForbidden"] or 0) == 4)
 assert((stats["ui.shellsCreated"] or 0) == 3)
 
-local policy = assert(InterruptGlow.modules.FrameAccessPolicy)
-assert(policy.inaccessibleForeignFrameFailsClosed == true)
-assert(policy.checksHasAccessConstraints == true)
-assert(policy.checksCanBeAccessedInContext == true)
-assert(policy.transientAccessFailureIsRetryable == true)
-assert(policy.retryBaseDelay == 0.25)
-assert(policy.retryMaxDelay == 2.0)
-assert(policy.noOnUpdateRetryLoop == true)
-assert(policy.reobservationCanResumePrewarm == true)
-assert(policy.postCombatCanResumePrewarm == true)
-assert(policy.confirmedForbiddenIsPermanent == true)
-assert(policy.forbiddenQueryMustReturnOrdinaryBoolean == true)
-assert(policy.ownsShellCreationBoundary == true)
-
-print("FRAME ACCESS POLICY TEST PASSED")
+print("FRAME ACCESS BOUNDARY TEST PASSED")

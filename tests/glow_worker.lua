@@ -1,4 +1,8 @@
 local ROOT = arg[1] or "."
+local combat = false
+local runtimeActive = false
+local printed = 0
+local previewApplyCalls = 0
 
 _G = _G or _ENV
 
@@ -21,16 +25,23 @@ InterruptGlow = {
     ObservedButtons = {},
     InterruptRecords = {},
     AbilityStates = {},
-    modules = {},
+    testMode = false,
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
-function InterruptGlow:IsInCombat() return false end
+function InterruptGlow:ReadMember(object, key)
+    if object == nil then return nil, false end
+    return object[key], true
+end
+function InterruptGlow:IsInCombat() return combat end
 function InterruptGlow:BumpStat() end
 function InterruptGlow:Now() return 100 end
+function InterruptGlow:Print() printed = printed + 1 end
 function InterruptGlow:MarkCooldownDirty() end
 function InterruptGlow:MarkCastDirty() end
 function InterruptGlow:MarkVisualDirty() end
+InterruptGlow.RuntimeLifecycle = {
+    IsActive = function() return runtimeActive end,
+}
 
 function UnitIsUnit() return false end
 
@@ -85,6 +96,10 @@ assert(glowLoader, glowError)
 glowLoader()
 
 local Glow = assert(InterruptGlow.Glow)
+Glow.ApplyUnitInterruptibility = function(_, unit)
+    assert(unit == "target" or unit == "focus")
+    previewApplyCalls = previewApplyCalls + 1
+end
 assert(Glow.prewarmFrame.mode == Enum.OnUpdateMode.Disabled)
 assert(Glow.runtimeFrame.mode == Enum.OnUpdateMode.Disabled)
 assert(Glow.runtimeWorkerEnabled == false)
@@ -102,6 +117,22 @@ Glow.prewarmFrame.scripts.OnUpdate(Glow.prewarmFrame, 0.016)
 assert(record.overlay ~= nil)
 assert(Glow.prewarmScheduled == false)
 assert(Glow.prewarmFrame.mode == Enum.OnUpdateMode.Disabled)
+
+-- A queued conditional identity hides an otherwise valid candidate until its
+-- coalesced reconciliation resolves the new action.
+InterruptGlow.CastState.target.active = true
+InterruptGlow.CastState.target.hostile = true
+InterruptGlow.CastState.target.niState = "interruptible"
+record.isInterrupt = true
+record.ready = true
+record.ability = { readinessPending = false }
+record.conditionalIdentityPending = false
+Glow:RefreshRecord(record)
+assert(record.overlay.target.plainGate.alpha == 1)
+record.conditionalIdentityPending = true
+Glow:RefreshRecord(record)
+assert(record.overlay.target.plainGate.alpha == 0, "stale interrupt visual survived pending identity")
+record.conditionalIdentityPending = false
 
 local abilityRecord = { ability = nil }
 local ability = {
@@ -122,5 +153,19 @@ InterruptGlow.CastState.target.active = false
 Glow:UpdateRuntimeDriver()
 assert(Glow.runtimeWorkerEnabled == false)
 assert(Glow.runtimeFrame.mode == Enum.OnUpdateMode.Disabled)
+
+-- Preview obeys the master lifecycle and combat gates, while an active preview
+-- remains an ordinary visual mode that can always be turned off.
+assert(Glow:SetTestMode(true) == false)
+assert(InterruptGlow.testMode == false and printed == 1)
+runtimeActive = true
+combat = true
+assert(Glow:SetTestMode(true) == false)
+assert(InterruptGlow.testMode == false and printed == 2)
+combat = false
+Glow:SetTestMode(true)
+assert(InterruptGlow.testMode == true and previewApplyCalls == 2)
+Glow:SetTestMode(false)
+assert(InterruptGlow.testMode == false)
 
 print("GLOW WORKER TEST PASSED")

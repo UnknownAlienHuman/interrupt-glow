@@ -16,6 +16,8 @@ Interrupt Glow includes a session-only in-client evidence collector. It is disab
 
 `/iglow probe` opens an immediate snapshot. `capture start` clears only Interrupt Glow's addon-owned session counters and records a native profiler baseline. Blizzard `C_AddOnProfiler` counters are application-session cumulative and are **not reset**. `capture stop` records the final snapshot and reports threshold-counter deltas.
 
+A capture stores at most 256 manual markers and 128 restriction transitions. Additional entries are counted as dropped. Stop and report construction are deferred by the user until combat ends; restriction callbacks do not trigger automatic profiler snapshots.
+
 ## Report sections
 
 - `build`: current WoW build, Interface, addon version, pinned Blizzard source, KB commit, SavedVariables schema/producer;
@@ -28,7 +30,8 @@ Interrupt Glow includes a session-only in-client evidence collector. It is disab
 - `secrecy`: current `C_Secrets` policy for active interrupt spells/action slots;
 - `abilities`: normalized per-ability readiness/restriction state;
 - `counters`: session-only addon path counters;
-- `profiler`: native profiler start/end snapshots, peak increase, threshold deltas and marker snapshots.
+- `profiler`: native profiler start/end snapshots, a new-session-peak boolean, threshold deltas and marker snapshots;
+- `configuration`, `providerVersions`, `probeBounds`: active preferences, provider versions and stored/dropped evidence counts.
 
 Profiler fields include session/recent/encounter averages, last/peak time and threshold counts from 1 ms through 1000 ms. The probe never stores or formats raw SecretValue payloads.
 
@@ -41,7 +44,7 @@ Run the same measured scenario for the same duration and location:
 3. Interrupt Glow plus the required action-bar provider;
 4. normal full addon stack.
 
-Keep visible-nameplate count, target/focus behavior, macro, instance, combat state and duration equal. Native profiler deltas attribute threshold crossings during each capture window. `PeakTime` is session-global and is reported as start/end/increase rather than a resettable window maximum.
+Keep visible-nameplate count, target/focus behavior, macro, instance, combat state and duration equal. Native profiler deltas attribute threshold crossings during each capture window. `PeakTime` is session-global and is reported as start/end plus a new-session-peak boolean, not a resettable window maximum.
 
 ## Quick Heal mouseover reproduction
 
@@ -91,12 +94,12 @@ Repeat after leaving combat, changing target/focus, opening/closing Settings and
 
 ## SavedVariables migration test
 
-Before reload, preserve a copy of `InterruptGlowDB`. After beta.4 loads, the report must show:
+Before reload, preserve a copy of `InterruptGlowDB`. After beta.8 loads, the report must show:
 
 ```text
-savedSchema=3
-savedProducerVersion=1.1.0-beta.4
-savedInterface=120100
+savedSchema=4
+savedProducerVersion=1.1.0-beta.8
+savedInterface=120105
 ```
 
 Only documented typed preferences may remain. Legacy `slots`, `localCD`, `debugAutoShow`, unknown keys, frame references and transient caches must be absent. Verify preferences such as enabled/CD text/CDM/strict policy still migrate correctly.
@@ -121,6 +124,10 @@ Run:
 3. repeated Ray of Frost channels.
 
 Confirm no addon-visible channel/glow resurrects after stop, and retire the workaround only after a named live build passes all exact reproductions without the guard.
+
+## Appearance and preview
+
+Open `/iglow` at the intended UI scale. Verify labels fit the Settings canvas, cyan target and amber focus highlights render correctly, and disabling animation stops only the ordinary parent animation. Start the preview outside combat; entering combat or disabling the addon must stop it. Settings first opened in combat must create no controls until combat ends.
 
 ## Evidence boundary
 

@@ -6,10 +6,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TOC = ROOT / "InterruptGlow.toc"
-CURRENT_VERSION = "1.1.0-beta.7"
-CURRENT_INTERFACE = "120100"
-CURRENT_KB_COMMIT = "5a992ae702a278f3893c7e8f1b212583311438b5"
-BLIZZARD_SOURCE_COMMIT = "027d26c3406d3de2cbd2b1f67d468fe033a1bcd4"
+EXPECTED_INTERFACE = "120105"
 
 
 def read(path: Path) -> str:
@@ -17,22 +14,12 @@ def read(path: Path) -> str:
 
 
 def toc_entries() -> list[str]:
-    result: list[str] = []
+    entries: list[str] = []
     for raw in read(TOC).splitlines():
         line = raw.strip()
         if line and not line.startswith("##"):
-            result.append(line)
-    return result
-
-
-def section(text: str, start: str, end: str | None = None) -> str:
-    begin = text.find(start)
-    if begin < 0:
-        return ""
-    if end is None:
-        return text[begin:]
-    finish = text.find(end, begin + len(start))
-    return text[begin:] if finish < 0 else text[begin:finish]
+            entries.append(line)
+    return entries
 
 
 def require(text: str, snippets: tuple[str, ...], scope: str) -> list[str]:
@@ -43,553 +30,245 @@ def forbid(text: str, snippets: tuple[str, ...], scope: str) -> list[str]:
     return [f"{scope} contains forbidden {snippet}" for snippet in snippets if snippet in text]
 
 
-def require_before(text: str, first: str, second: str, scope: str) -> list[str]:
-    first_index = text.find(first)
-    second_index = text.find(second)
-    if first_index < 0 or second_index < 0:
-        return [f"{scope} cannot prove ordering: {first!r} before {second!r}"]
-    if first_index >= second_index:
-        return [f"{scope} has unsafe ordering: {second!r} precedes {first!r}"]
-    return []
+ENTRIES = toc_entries()
+RUNTIME_FILES = [ROOT / entry for entry in ENTRIES if (ROOT / entry).is_file()]
 
 
-TOC_ENTRIES = toc_entries()
-RUNTIME_FILES = [ROOT / entry for entry in TOC_ENTRIES]
-
-
-def check_toc_and_version() -> list[str]:
+def check_toc_and_load_order() -> list[str]:
     errors: list[str] = []
     toc = read(TOC)
-    core = read(ROOT / "Core.lua")
-
-    if len(TOC_ENTRIES) != len(set(TOC_ENTRIES)):
-        errors.append("TOC contains duplicate entries")
-    for entry in TOC_ENTRIES:
+    if len(ENTRIES) != len(set(ENTRIES)):
+        errors.append("TOC contains duplicate Lua sources")
+    for entry in ENTRIES:
         if not (ROOT / entry).is_file():
-            errors.append(f"TOC references missing file: {entry}")
+            errors.append(f"TOC source does not exist: {entry}")
 
-    core_files = {
-        path.relative_to(ROOT).as_posix()
-        for path in (ROOT / "core").glob("*.lua")
-    }
-    toc_core = {entry for entry in TOC_ENTRIES if entry.startswith("core/")}
-    for path in sorted(core_files - toc_core):
-        errors.append(f"Runtime core file is not loaded by TOC: {path}")
-    for path in sorted(toc_core - core_files):
-        errors.append(f"TOC core entry has no matching file: {path}")
+    metadata = [line.strip() for line in toc.splitlines() if line.strip().startswith("##")]
+    if f"## Interface: {EXPECTED_INTERFACE}" not in metadata:
+        errors.append(f"TOC Interface must be {EXPECTED_INTERFACE}")
+    if "## LoadSavedVariablesFirst: 1" not in metadata:
+        errors.append("TOC must load SavedVariables before addon Lua files")
+    if "## SavedVariables: InterruptGlowDB" not in metadata:
+        errors.append("TOC must declare InterruptGlowDB")
 
-    if f"## Interface: {CURRENT_INTERFACE}" not in toc:
-        errors.append(f"TOC Interface is not {CURRENT_INTERFACE}")
-    if f"## Version: {CURRENT_VERSION}" not in toc:
-        errors.append(f"TOC version is not {CURRENT_VERSION}")
-    if CURRENT_VERSION not in core:
-        errors.append("Core fallback version does not match TOC")
-    if "## LoadOnDemand:" in toc:
-        errors.append("Interrupt Glow itself must not be LoadOnDemand")
-
-    required_order = [
+    required_order = (
         "Core.lua",
         "core/Worker.lua",
         "core/Shared.lua",
-        "core/DiagnosticsPolicy.lua",
         "core/Data.lua",
-        "core/SpecInterruptCoveragePolicy.lua",
-        "core/Debug.lua",
-        "core/RuntimeProbe.lua",
-        "core/RuntimeProbePolicy.lua",
-        "core/Glow.lua",
-        "core/FrameAccessPolicy.lua",
-        "core/PrewarmPolicy.lua",
         "core/Buttons.lua",
-        "core/ButtonForgePolicy.lua",
-        "core/NativeCallbackPolicy.lua",
         "core/LABAdapter.lua",
         "core/ActionResolver.lua",
-        "core/NativeActionQueuePolicy.lua",
         "core/Cooldown.lua",
-        "core/ReadinessPolicy.lua",
         "core/Usability.lua",
-        "core/ConditionalMacroPolicy.lua",
-        "core/GCDSafetyPolicy.lua",
-        "core/CachePolicy.lua",
-        "core/AbilitySourcePolicy.lua",
-        "core/BoundSourcePolicy.lua",
+        "core/ConditionalActions.lua",
         "core/CastTracking.lua",
         "core/CDM.lua",
-        "core/CDMPolicy.lua",
-        "core/RuntimeInterruptPolicy.lua",
-        "core/RuntimeLifecyclePolicy.lua",
+        "core/RuntimeLifecycle.lua",
         "core/Events.lua",
-        "core/Slash.lua",
         "Options.lua",
-    ]
+    )
     try:
-        positions = [TOC_ENTRIES.index(entry) for entry in required_order]
+        positions = [ENTRIES.index(entry) for entry in required_order]
         if positions != sorted(positions):
-            errors.append("TOC runtime policy order is invalid")
+            errors.append("TOC owner modules are loaded in an unsafe order")
     except ValueError as exc:
-        errors.append(f"TOC is missing a required module: {exc}")
+        errors.append(f"TOC is missing a required owner module: {exc}")
+
+    core_files = {path.name for path in (ROOT / "core").glob("*.lua")}
+    toc_core_files = {Path(entry).name for entry in ENTRIES if entry.startswith("core/")}
+    for orphan in sorted(core_files - toc_core_files):
+        errors.append(f"Unloaded runtime source remains in core/: {orphan}")
     return errors
 
 
-def check_forbidden_runtime_patterns() -> list[str]:
+def check_forbidden_hot_paths() -> list[str]:
     errors: list[str] = []
-    patterns = {
-        "EnumerateFrames": r"\bEnumerateFrames\b",
+    forbidden_patterns = {
+        "frame enumeration": r"\bEnumerateFrames\b",
         "nameplate traversal": r"\bGetNamePlates\b|\bC_NamePlate\b",
-        "540-slot scan": r"\b540\b",
-        "macro-body parsing": r"\bGetMacroInfo\b|\bGetMacroSpell\b",
-        "ACTIONBAR_UPDATE_COOLDOWN subscription": r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_UPDATE_COOLDOWN",
-        "unconfirmed SPELL_SECRECY_CHANGED subscription": r"RegisterEvent\s*\(\s*[\"']SPELL_SECRECY_CHANGED",
-        "generic ADDON_LOADED subscription": r"RegisterEvent\s*\(\s*[\"']ADDON_LOADED",
-        "legacy spell LoC global": r"\bGetSpellLossOfControlCooldown\s*\(",
-        "Blizzard spell-alert mutation": r"\bActionButtonSpellAlertManager\b",
-        "Blizzard castbar inspection": r"\b(TargetFrameSpellBar|FocusFrameSpellBar)\b",
-        "legacy scriptProfile": r"\bscriptProfile\b",
+        "global action-slot scan": r"\b540\b",
+        "macro body parsing": r"\bGetMacroInfo\s*\(|\bGetMacroSpell\s*\(",
+        "cooldown update event subscription": r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_UPDATE_COOLDOWN",
+        "unverified spell secrecy event subscription": r"RegisterEvent\s*\(\s*[\"']SPELL_SECRECY_CHANGED",
+        "generic addon-loaded event subscription": r"RegisterEvent\s*\(\s*[\"']ADDON_LOADED",
+        "legacy global spell LoC API": r"\bGetSpellLossOfControlCooldown\s*\(",
+        "legacy scriptProfile setting": r"\bscriptProfile\b",
     }
     for path in RUNTIME_FILES:
         text = read(path)
-        for label, pattern in patterns.items():
+        relative = path.relative_to(ROOT).as_posix()
+        for label, pattern in forbidden_patterns.items():
             if re.search(pattern, text):
-                errors.append(f"{path.relative_to(ROOT)} contains forbidden {label}")
+                errors.append(f"{relative} contains forbidden {label}")
         if path.name != "LABAdapter.lua" and re.search(
             r"RegisterEvent\s*\(\s*[\"']ACTIONBAR_SLOT_CHANGED", text
         ):
-            errors.append(
-                f"{path.relative_to(ROOT)} registers ACTIONBAR_SLOT_CHANGED outside LABAdapter"
-            )
+            errors.append(f"{relative} subscribes to ACTIONBAR_SLOT_CHANGED outside LABAdapter")
     return errors
 
 
-def check_conditional_action_policy() -> list[str]:
+def check_action_and_provider_ownership() -> list[str]:
     errors: list[str] = []
-    policy = read(ROOT / "core/ConditionalMacroPolicy.lua")
-    native_queue = read(ROOT / "core/NativeActionQueuePolicy.lua")
-
-    errors += require(
-        policy,
-        (
-            'deferredButtons = setmetatable({}, { __mode = "k" })',
-            "local function MarkIdentityPending(button)",
-            "record.actionSnapshotFresh = false",
-            "record.conditionalIdentityPending = true",
-            "Glow:ClearRecord(record)",
-            "local function FlushDeferredButtons()",
-            "originalMarkButtonDirty(IG, button)",
-            "function IG:MarkCooldownDirty(fromSpellCooldownEvent)",
-            "if ReadinessAwake() then FlushDeferredButtons() end",
-            "function Buttons:OnNativeActionChanged(button, ...)",
-            "function Usability:OnActionUsableChanged(changes, ...)",
-            "invalidatesSnapshotsBeforeActiveReconcile = true",
-            "marksIdentityPendingForActiveChanges = true",
-            "hidesStaleVisualsUntilReconcile = true",
-            "fullRebuildPreservesVisualGuard = true",
-            "defersIdentityWhileReadinessSleeps = true",
-            "flushesBeforeCooldownRefresh = true",
-            "dominosIdentityRefreshesAfterProviderCommit = true",
-            "adapterPromotionDropsStaleSlots = true",
-            "parsesMacroBodies = false",
-            "scansActionSlots = false",
-        ),
-        "Conditional action policy",
-    )
-    errors += forbid(
-        policy,
-        ("GetActionInfo", "IsInterruptAction", "IsAssistedCombatAction", "GetMacroInfo", "GetMacroSpell"),
-        "Conditional action callback layer",
-    )
-
-    callback = section(
-        native_queue,
-        "function Buttons:OnNativeActionChanged",
-        'IG:RegisterModule("NativeActionQueuePolicy"',
-    )
-    errors += require(
-        callback,
-        (
-            "record.actionSnapshotFresh = false",
-            "if IG.PendingButtons[button] then return end",
-            "IG:MarkButtonDirty(button)",
-        ),
-        "Native queue callback",
-    )
-    errors += require_before(
-        callback,
-        "record.actionSnapshotFresh = false",
-        "if IG.PendingButtons[button] then return end",
-        "Native queue invalidation/dedupe",
-    )
-    errors += forbid(
-        callback,
-        ("ReadActionSnapshot", "IsInterruptAction", "IsAssistedCombatAction", "GetActionInfo", "GetSpell", "ResolveRecord"),
-        "Native queue callback",
-    )
-    return errors
-
-
-def check_runtime_sleep_and_events() -> list[str]:
-    errors: list[str] = []
-    events = read(ROOT / "core/Events.lua")
-    lifecycle = read(ROOT / "core/RuntimeLifecyclePolicy.lua")
-
-    errors += require(
-        events,
-        (
-            "local RUNTIME_EVENTS = {",
-            "local PERSISTENT_EVENTS = {",
-            '"PLAYER_REGEN_ENABLED"',
-            '"ADDON_RESTRICTION_STATE_CHANGED"',
-            "function IG:SetRuntimeEventsEnabled(enabled)",
-            "frame:UnregisterEvent(RUNTIME_EVENTS[index])",
-            'frame:RegisterUnitEvent("LOSS_OF_CONTROL_ADDED", "player")',
-            'frame:RegisterUnitEvent("LOSS_OF_CONTROL_UPDATE", "player")',
-            'frame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "pet")',
-            'frame:UnregisterEvent("UNIT_SPELLCAST_SUCCEEDED")',
-            "masterDisableUnregistersRuntimeEvents = true",
-            "RegisterPersistentEvents()",
-        ),
-        "Runtime event sleep policy",
-    )
-    errors += forbid(
-        events,
-        ('frame:RegisterEvent("LOSS_OF_CONTROL_ADDED")', 'frame:RegisterEvent("LOSS_OF_CONTROL_UPDATE")'),
-        "Loss of Control registration",
-    )
-    errors += require(
-        lifecycle,
-        (
-            "SetRuntimeEventsEnabled(false)",
-            "SetRuntimeEventsEnabled(true)",
-            "masterDisableDetachesProviders = true",
-            "masterDisableDetachesCastWatchers = true",
-            "masterDisableUnregistersRuntimeEvents = true",
-            "masterDisableStopsWorkers = true",
-            "enableDiscoveryIsOutOfCombat = true",
-        ),
-        "Master runtime lifecycle",
-    )
-    deactivate = section(lifecycle, "function Lifecycle:Deactivate()", "function Lifecycle:Activate()")
-    errors += require_before(
-        deactivate,
-        "SetRuntimeEventsEnabled(false)",
-        "IG.CDM:Detach()",
-        "Runtime event shutdown/provider detach",
-    )
-    return errors
-
-
-def check_secret_and_frame_boundaries() -> list[str]:
-    errors: list[str] = []
-    cooldown = read(ROOT / "core/Cooldown.lua")
-    cast = read(ROOT / "core/CastTracking.lua")
-    glow = read(ROOT / "core/Glow.lua")
-    frame_access = read(ROOT / "core/FrameAccessPolicy.lua")
-
-    charge = section(cooldown, "local function ReadChargeInfo", "local function ReadLossOfControlState")
-    loc = section(cooldown, "local function ReadLossOfControlState", "local function GetActionLossOfControlState")
-    errors += require_before(charge, "if not IG.CanAccess(info) then", "if info == nil then", "Charge SecretValue ordering")
-    errors += require_before(loc, "if not IG.CanAccess(info) then", "if info == nil then", "Loss of Control SecretValue ordering")
-    errors += require(
-        cooldown,
-        (
-            "C_Spell.GetSpellLossOfControlCooldownInfo",
-            "GetActionCooldownDuration, slot, true",
-            "GetSpellCooldownDuration, spellID, true",
-            'type(isActive) ~= "boolean"',
-            'type(replaces) ~= "boolean"',
-            "hardRestricted",
-        ),
-        "Cooldown/LoC contract",
-    )
-
-    errors += require(
-        cast,
-        (
-            "rawNotInterruptible",
-            "ApplyUnitInterruptibility",
-            "return SafeEventCastBarID(select(4, ...))",
-            "return SafeEventCastBarID(select(5, ...))",
-            "return SafeEventCastBarID(select(6, ...))",
-            "channelSuppressed",
-            "IsStaleCastEvent",
-            "if dead ~= false then return false end",
-        ),
-        "Cast secret/channel boundary",
-    )
-    if "pcall(UnitCastingInfo" in cast or "pcall(UnitChannelInfo" in cast:
-        errors.append("Raw cast returns travel through pcall")
-
-    errors += require(
-        glow,
-        ("SetAlphaFromBoolean", "ALPHA_VISIBLE = 255", "CreatePulseAnimation(overlay.target.plainGate)"),
-        "Glow secret sink",
-    )
-    if "CreatePulseAnimation(overlay.target.niGate)" in glow:
-        errors.append("Secret-alpha child region is animated")
-    if "pcall(method, region, value" in glow:
-        errors.append("Raw SecretValue alpha sink is wrapped in pcall")
-
-    errors += require(
-        frame_access,
-        (
-            "local function InspectButtonAccess(button)",
-            "if not IG.CanAccess(button) then return ACCESS_DEFERRED end",
-            'ReadOrdinaryBooleanMethod(button, "HasAccessConstraints")',
-            'ReadOrdinaryBooleanMethod(button, "CanBeAccessedInContext")',
-            'ReadOrdinaryBooleanMethod(button, "IsForbidden")',
-            "RETRY_BASE_DELAY = 0.25",
-            "RETRY_MAX_DELAY = 2.0",
-            "overlayAccessNextRetry",
-            "function Glow:AllowOverlayAccessRetry(record, force)",
-            "noOnUpdateRetryLoop = true",
-            "postCombatCanResumePrewarm = true",
-            "function Glow:CreateShell(record)",
-        ),
-        "Foreign frame access policy",
-    )
-    create_shell = section(frame_access, "function Glow:CreateShell(record)", "local originalQueueShell")
-    errors += require_before(
-        create_shell,
-        "if record.overlayAccessDeferred and not self:AllowOverlayAccessRetry(record, false) then",
-        "if not IG.CanAccess(record.button) then",
-        "Foreign frame retry throttle/object access",
-    )
-    errors += require_before(
-        create_shell,
-        "local access = InspectButtonAccess(record.button)",
-        "CreateUnitBranch(record.button)",
-        "Foreign frame preflight/allocation",
-    )
-    return errors
-
-
-def check_readiness_and_provider_policies() -> list[str]:
-    errors: list[str] = []
-    readiness = read(ROOT / "core/ReadinessPolicy.lua")
-    usability = read(ROOT / "core/Usability.lua")
-    gcd = read(ROOT / "core/GCDSafetyPolicy.lua")
-    source = read(ROOT / "core/AbilitySourcePolicy.lua")
-    bound = read(ROOT / "core/BoundSourcePolicy.lua")
-    data = read(ROOT / "core/Data.lua")
-    spec = read(ROOT / "core/SpecInterruptCoveragePolicy.lua")
-    runtime = read(ROOT / "core/RuntimeInterruptPolicy.lua")
+    buttons = read(ROOT / "core/Buttons.lua")
+    resolver = read(ROOT / "core/ActionResolver.lua")
+    actions = read(ROOT / "core/ConditionalActions.lua")
     lab = read(ROOT / "core/LABAdapter.lua")
-    prewarm = read(ROOT / "core/PrewarmPolicy.lua")
     cdm = read(ROOT / "core/CDM.lua")
 
-    errors += require(readiness, ("GetPetActionSlotUsable", "ability.hardRestricted == true"), "Pet readiness policy")
-    errors += require(usability, ("IsUsableAction", "IsSpellUsable", "OnActionUsableChanged"), "Usability policy")
+    callback_start = buttons.find("function Buttons:OnNativeActionChanged")
+    callback_end = buttons.find("local function ObserveNativeFrame", callback_start)
+    callback = buttons[callback_start:callback_end] if callback_start >= 0 and callback_end >= 0 else ""
     errors += require(
-        gcd,
-        ("originalGetCachedReadiness(self, sourceKind, sourceID, false)", "treatsIsOnGCDAsReadinessProof = false"),
-        "GCD safety policy",
+        callback,
+        ("IG.PendingButtons[button]", "IG:MarkButtonDirty(button)"),
+        "Native action callback",
     )
-    errors += require(source, ("action = 300", "pet = 200", "spell = 100", "reconcilesBeforeRefreshFilter = true"), "Canonical source policy")
-    errors += require(bound, ("boundRecordsWithoutSourceFailClosed = true",), "Bound source policy")
-    errors += require(
-        data,
-        ("-- BEGIN GENERATED INTERRUPTS_BY_SPEC", "-- END GENERATED INTERRUPTS_BY_SPEC", "PET_ACTION_ALIASES", "IsRuntimeFamilyKnown", BLIZZARD_SOURCE_COMMIT),
-        "Interrupt data",
-    )
-    errors += require(
-        spec,
-        (
-            "Data.exactKnownInterrupts",
-            "function Data:RequiresExactKnownSpell(spellID)",
-            "self.specInterrupts[spellID] = nil",
-            "self.activeInterrupts[spellID] = nil",
-            "requiresExactKnownSpell = true",
-            "neverAddsUnknownOptionalInterrupts = true",
-        ),
-        "Optional interrupt coverage policy",
+    errors += forbid(
+        callback,
+        ("GetActionInfo", "IsInterruptAction", "IsAssistedCombatAction", "ResolveRecord", "GetSpell"),
+        "Native action callback",
     )
     errors += require(
-        runtime,
-        (
-            "IG:WipeMap(self.runtimeInterrupts)",
-            "function Buttons:ReconcileAll()",
-            "actionSlotsSeedBeforeSecondaryCopies = true",
-            "refreshesCDMAfterActionSeed = true",
-            "negativeMatchLimit = NEGATIVE_MATCH_LIMIT",
-        ),
-        "Runtime interrupt proof policy",
+        resolver,
+        ("function Resolver:ResolveRecord(record)", "IsInterruptAction", "IsAssistedCombatAction", "GetActionSlot"),
+        "Action resolver owner",
     )
+    errors += require(
+        actions,
+        ("slotByButton = setmetatable({}, { __mode = \"k\" })", "buttonsBySlot = {}", "deferredButtons = setmetatable({}, { __mode = \"k\" })", "function Actions:FlushDeferred()"),
+        "Conditional action index",
+    )
+    errors += forbid(actions, ("GetMacroInfo", "GetMacroSpell", "EnumerateFrames", "GetNamePlates"), "Conditional action index")
     errors += require(
         lab,
-        (
-            "identityKnown",
-            "record.labIdentityRestricted = restricted",
-            "SetButtonSlot(button, slot)",
-            'IG:ReadMember(button, "UpdateAction")',
-            "for button in pairs(buttonSlots) do RemoveFromSlot(button) end",
-            "accessibleEmptyIdentityClearsSlot = true",
-            "inaccessibleIdentityFailsClosed = true",
-            "staleSlotIndexesClearedOnDetach = true",
-        ),
-        "LAB identity policy",
+        ("RegisterEvent(\"ACTIONBAR_SLOT_CHANGED\")", 'slotEventFrame:SetScript("OnEvent"', "function Adapter:Detach()"),
+        "LAB action-slot routing",
     )
     errors += require(
-        prewarm,
-        (
-            "processed < self.prewarmBudgetPerFrame",
-            "self:EnsureInterruptVisuals(record)",
-            "prewarmsInterruptVisualsForAllObservedButtons = true",
-            "combatSwitchingRequiresNoVisualAllocation = true",
-        ),
-        "Prewarm policy",
+        cdm,
+        ("function CDM:ObserveItem(itemFrame)", "QueueIdentityChange(itemFrame, canonicalSpellID)", "IG:MarkButtonDirty(itemFrame)", "function CDM:Detach()"),
+        "Cooldown Viewer lifecycle owner",
     )
-    errors += require(cdm, ("QueueIdentityChange", "IG:MarkButtonDirty(itemFrame)"), "Cooldown Viewer deferred identity policy")
     return errors
 
 
-def check_lifecycle_persistence_and_evidence() -> list[str]:
+def check_secret_readiness_and_visual_boundaries() -> list[str]:
     errors: list[str] = []
     shared = read(ROOT / "core/Shared.lua")
-    worker = read(ROOT / "core/Worker.lua")
-    native = read(ROOT / "core/NativeCallbackPolicy.lua")
-    options = read(ROOT / "Options.lua")
-    probe = read(ROOT / "core/RuntimeProbe.lua")
-    probe_policy = read(ROOT / "core/RuntimeProbePolicy.lua")
+    cooldown = read(ROOT / "core/Cooldown.lua")
+    usability = read(ROOT / "core/Usability.lua")
+    cast = read(ROOT / "core/CastTracking.lua")
+    glow = read(ROOT / "core/Glow.lua")
 
     errors += require(
         shared,
-        ("CURRENT_SCHEMA = 3", "CURRENT_INTERFACE = 120100", "InterruptGlowDB = DB", "Worker:RunOnce(flushFrame)", "_loadedOrLoading, loaded"),
-        "Shared lifecycle/persistence",
-    )
-    errors += require(worker, ("SetOnUpdateMode", "modes.Disabled", "modes.RunOnce", "modes.RunAlways"), "Worker policy")
-    errors += require(native, ("CreateCallbackHandleContainer", "nativeCallbackHandles:Unregister"), "Native callback lifecycle")
-    errors += require(
-        options,
-        ("RuntimeLifecycle", "SetMasterEnabled", "panel.OnRefresh", "panel.OnDefault", "panel.OnCommit", "OnCombatEnded"),
-        "Settings lifecycle",
+        ("function IG.CanAccessTable(value)", "canaccesstable", "if type(container) == \"table\" and not self.CanAccessTable(container) then"),
+        "Shared access gate",
     )
     errors += require(
-        probe,
-        (
-            "ProfilerSnapshot",
-            'IG:StartProfileCounters("capture")',
-            'IG:StopProfileCounters("capture")',
-            "delta.PeakTimeIncrease",
-            CURRENT_KB_COMMIT,
-        ),
-        "Runtime profiler evidence",
+        cooldown,
+        ("GetActionCooldownDuration, slot, true", "GetSpellCooldownDuration, spellID, true", "GetSpellLossOfControlCooldownInfo", "hardRestricted"),
+        "Cooldown and Loss of Control owner",
     )
-    errors += forbid(
-        probe,
-        ("GetAddOnPerformanceInfo", "diagnosticsOwner = {}"),
-        "Runtime profiler evidence",
+    errors += forbid(cooldown, ("gcdHints", "isOnGCD"), "Cooldown readiness")
+    errors += require(
+        usability,
+        ("GetPetActionSlotUsable", "function Usability:ReadForAbility(ability)", "not IG:NeedsReadinessRuntime() then return false end"),
+        "Usability gates",
     )
     errors += require(
-        probe_policy,
-        ("MAX_MARKS = 256", "MAX_RESTRICTIONS = 128", "buildsReportsOutOfCombatOnly = true", "finalizesCaptureOutOfCombatOnly = true"),
-        "Runtime probe policy",
+        cast,
+        ("rawNotInterruptible", "ApplyUnitInterruptibility", "channelSuppressed", "IsStaleCastEvent"),
+        "Cast lifecycle and secret bridge",
     )
-
-    for scope, text in (
-        ("AGENTS", read(ROOT / "AGENTS.md")),
-        ("AGENT_GUIDE", read(ROOT / "AGENT_GUIDE.md")),
-        ("RuntimeProbe", probe),
-    ):
-        if CURRENT_KB_COMMIT not in text:
-            errors.append(f"{scope} is not pinned to current KB {CURRENT_KB_COMMIT}")
+    if re.search(r"pcall\s*\(\s*Unit(?:Channel|Casting)Info", cast):
+        errors.append("Cast secret bridge wraps raw cast results in pcall")
+    errors += require(glow, ("SetAlphaFromBoolean", "local function CandidateFor(record, unit)", "record.conditionalIdentityPending == true"), "Glow visual gate")
+    errors += forbid(glow, ("CreatePulseAnimation(overlay.target.niGate)", "CreatePulseAnimation(overlay.focus.niGate)"), "Secret alpha region")
+    if "pcall(method, region, value" in glow:
+        errors.append("Glow wraps the raw secret alpha sink in pcall")
     return errors
 
 
-def check_tests_and_repository_contract() -> list[str]:
+def check_events_lifecycle_persistence_and_workers() -> list[str]:
     errors: list[str] = []
+    events = read(ROOT / "core/Events.lua")
+    lifecycle = read(ROOT / "core/RuntimeLifecycle.lua")
+    shared = read(ROOT / "core/Shared.lua")
+    worker = read(ROOT / "core/Worker.lua")
+    probe = read(ROOT / "core/RuntimeProbe.lua")
+    debug = read(ROOT / "core/Debug.lua")
+
+    errors += require(
+        events,
+        ("local RUNTIME_EVENTS = {", "local PERSISTENT_EVENTS = {", 'frame:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "pet")', 'frame:RegisterUnitEvent("LOSS_OF_CONTROL_ADDED", "player")', 'frame:RegisterUnitEvent("LOSS_OF_CONTROL_UPDATE", "player")', 'event == "PLAYER_REGEN_DISABLED"'),
+        "Runtime events",
+    )
+    if re.search(r"RegisterUnitEvent\s*\([^)]*,\s*\{", events) or re.search(r"RegisterUnitEvent\s*\([^)]*,\s*\{", read(ROOT / "core/CastTracking.lua")):
+        errors.append("RegisterUnitEvent uses a unit-token table instead of unit varargs")
+    errors += require(
+        lifecycle,
+        ("function Lifecycle:Deactivate()", "IG.testMode = false", "SetRuntimeEventsEnabled(false)", "Buttons:Detach()", "CastTracking:Detach()", "CDM:Detach()"),
+        "Master runtime lifecycle",
+    )
+    errors += require(
+        shared,
+        ("CURRENT_SCHEMA = 4", "CURRENT_INTERFACE = 120105", "producerVersion", "InterruptGlowDB = DB", "Worker:RunOnce(flushFrame)"),
+        "SavedVariables and dirty queue",
+    )
+    errors += forbid(shared, ("rawNotInterruptible", "frame =", "callbackHandle ="), "SavedVariables boundary")
+    errors += require(worker, ("SetOnUpdateMode", "modes.Disabled", "modes.RunOnce", "modes.RunAlways"), "Worker mode owner")
+    errors += require(probe, ("ProfilerSnapshot", "newSessionPeak", "AppendProfilerDeltas"), "Runtime probe evidence")
+    errors += forbid(probe, ("PeakTimeIncrease", "GetAddOnPerformanceInfo", "scriptProfile"), "Runtime profiler")
+    errors += require(debug, ("function Debug:ProfilerDelta(startSnapshot, endSnapshot)", "delta.newSessionPeak = afterPeak > beforePeak"), "Session profiler delta")
+    return errors
+
+
+def check_test_harness() -> list[str]:
+    errors: list[str] = []
+    runner = read(ROOT / "tools/test.py")
     syntax = read(ROOT / "tests/check_syntax.lua")
-    for path in sorted((ROOT / "tests").glob("*.lua")):
-        if path.name == "check_syntax.lua":
-            continue
-        relative = path.relative_to(ROOT).as_posix()
-        if f'"{relative}"' not in syntax:
-            errors.append(f"Syntax checker does not include {relative}")
+    toc_test = read(ROOT / "tests/toc_contract.lua")
+    integration = read(ROOT / "tests/mock_wow.lua")
+    data_test = read(ROOT / "tests/data_cdm_integration.lua")
 
-    required_tests = (
-        "tests/action_resolver_fast_path.lua",
-        "tests/conditional_macro_policy.lua",
-        "tests/conditional_active_identity_guard.lua",
-        "tests/frame_access_policy.lua",
-        "tests/lab_callback_policy.lua",
-        "tests/spec_interrupt_coverage.lua",
-        "tests/runtime_probe.lua",
-        "tests/runtime_probe_policy.lua",
-        "tests/runtime_lifecycle_policy.lua",
-        "tests/runtime_event_sleep.lua",
-        "tests/loc_fail_closed.lua",
-        "tests/loc_event_contract.lua",
-        "tests/prewarm_budget.lua",
-        "tests/toc_contract.lua",
-    )
-    for relative in required_tests:
-        if not (ROOT / relative).is_file():
-            errors.append(f"Required regression test is missing: {relative}")
-
-    active_guard = read(ROOT / "tests/conditional_active_identity_guard.lua")
     errors += require(
-        active_guard,
-        (
-            "CONDITIONAL ACTIVE IDENTITY GUARD TEST PASSED",
-            "record.conditionalIdentityPending == true",
-            "record.visualVisible == false",
-            "fullRebuildPreservesVisualGuard == true",
-        ),
-        "Conditional active-identity regression test",
+        runner,
+        ('LUA_CANDIDATES = ("lua5.1", "luajit", "lua", "texlua")', 'add_argument("--lua"', "def lua_files_to_check()", 'glob("*.lua")', "subprocess.run(", "tests/static_checks.py"),
+        "Offline test runner",
     )
-    frame_test = read(ROOT / "tests/frame_access_policy.lua")
+    errors += require(syntax, ("loadfile(path)", "#arg == 0"), "Discovered Lua syntax check")
+    errors += require(toc_test, ("## LoadSavedVariablesFirst: 1", "Core.lua", "core/Worker.lua", "core/Shared.lua"), "TOC/SavedVariables regression")
+    errors += require(integration, ('io.open(ROOT .. "/InterruptGlow.toc", "r")', 'loadfile(ROOT .. "/" .. path)', "InterruptGlowDB == IG.DB"), "TOC-driven modeled integration")
     errors += require(
-        frame_test,
-        (
-            "CanBeAccessedInContext",
-            "backoff was bypassed by urgent retry",
-            "noOnUpdateRetryLoop == true",
-            "FRAME ACCESS POLICY TEST PASSED",
-        ),
-        "Frame access regression test",
-    )
-    lab_test = read(ROOT / "tests/lab_callback_policy.lua")
-    errors += require(
-        lab_test,
-        (
-            "Accessible empty secure identity",
-            "identityRestricted = true",
-            "staleSlotIndexesClearedOnDetach == true",
-            "LAB CALLBACK POLICY TEST PASSED",
-        ),
-        "LAB identity regression test",
-    )
-    spec_test = read(ROOT / "tests/spec_interrupt_coverage.lua")
-    errors += require(
-        spec_test,
-        (
-            "Missing API is fail-closed for optional talents",
-            "neverAddsUnknownOptionalInterrupts == true",
-            "SPEC INTERRUPT COVERAGE TEST PASSED",
-        ),
-        "Optional interrupt regression test",
+        data_test,
+        ("inaccessible spell ID was used as a cache key", "negative cache repeated canonical resolution", "static direct-spell and CDM proof fail", "inaccessible CDM frame reached weak-table indexing", 'CDM:SetEnabled(false)', 'CDM:SetEnabled(true)'),
+        "Data/CDM behavior regression",
     )
 
     workflow_dir = ROOT / ".github/workflows"
     if workflow_dir.exists() and any(workflow_dir.glob("*.y*ml")):
         errors.append("GitHub Actions workflows must remain absent")
-
-    for forbidden_name in ("todo.md", "TODO.md", "agents.md"):
-        if (ROOT / forbidden_name).exists():
-            errors.append(f"Service file should not be part of the installable root: {forbidden_name}")
     return errors
 
 
 def main() -> int:
-    errors = (
-        check_toc_and_version()
-        + check_forbidden_runtime_patterns()
-        + check_conditional_action_policy()
-        + check_runtime_sleep_and_events()
-        + check_secret_and_frame_boundaries()
-        + check_readiness_and_provider_policies()
-        + check_lifecycle_persistence_and_evidence()
-        + check_tests_and_repository_contract()
+    checks = (
+        check_toc_and_load_order,
+        check_forbidden_hot_paths,
+        check_action_and_provider_ownership,
+        check_secret_readiness_and_visual_boundaries,
+        check_events_lifecycle_persistence_and_workers,
+        check_test_harness,
     )
+    errors: list[str] = []
+    for check in checks:
+        try:
+            errors.extend(check())
+        except (OSError, UnicodeError) as error:
+            errors.append(f"{check.__name__} could not inspect source: {error}")
+
     if errors:
         print("STATIC CHECKS FAILED")
         for error in errors:

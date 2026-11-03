@@ -1,133 +1,59 @@
 # Interrupt Glow
 
-Current release: `1.1.0-beta.5`
+**1.1.0-beta.8 · WoW Retail 12.1.5 · Interface 120105**
 
-Interrupt Glow highlights the button that currently performs an interrupt when an interruptible hostile cast is active on `target` or `focus` and that ability is ready.
+Highlights your interrupt buttons when a hostile **target** or **focus** is casting and the interrupt is ready. Target highlights are cyan; focus highlights are amber. The pulse can be switched off for a steady highlight.
 
-## Runtime model
+## Settings
 
-- Native buttons use `ActionButton.OnActionChanged` with resolved-action snapshot deduplication.
-- Slot-backed buttons use `C_ActionBar.IsInterruptAction(slot)` and current action feedback.
-- LibActionButton conditional macros route through the changed slot, never a slot/frame scan.
-- Macro bodies are not parsed.
-- Target and focus use fixed-unit spellcast events.
-- Potentially secret `notInterruptible` flows directly to addon-owned `SetAlphaFromBoolean(..., 0, 255)` and is never stored, logged, compared while inaccessible, or routed through `pcall`.
-- Readiness is shared per canonical ability and evaluated only while a cast or enabled countdown can display it.
-- Action, spell and pet usability, charges, Loss of Control and restricted timing are independent gates.
-- Inaccessible usability and Loss of Control fail closed and cannot be bypassed by optimistic cooldown compatibility.
-- Cooldown Viewer uses pooled-item acquire/set/reset lifecycle hooks with deferred addon-owned reconciliation.
-- There is no automatic frame enumeration, 540-slot scan, nameplate traversal, macro-body read, or Cooldown Viewer child-tree scan.
+Type **`/iglow`** or open **Settings → AddOns → Interrupt Glow**.
 
-## Performance and lifecycle
+- Enable or disable the addon.
+- Include Blizzard Cooldown Manager icons.
+- Choose animated or steady highlights.
+- Show a countdown when the game allows access to the remaining cooldown.
+- Preview highlights on discovered interrupt buttons outside combat. Preview ends when combat starts or the addon is disabled.
+- Open troubleshooting logs and rediscover buttons after changing an action-bar addon.
 
-Retail 12.1 `SetOnUpdateMode` is used explicitly:
+The default settings are conservative. An unavailable cooldown, charge, usability or Loss of Control result is not evidence that an interrupt is ready. The optional cooldown compatibility setting can produce false positives and cannot bypass hard restrictions.
 
-```text
-dirty flush      -> RunOnce
-prewarm slice    -> RunOnce
-active deadlines -> RunAlways
-idle             -> Disabled
-```
+Settings persist across reloads. Schema 4 preserves recognized preferences, adds `animateGlow`, and removes obsolete runtime caches and unknown keys. `LoadSavedVariablesFirst` makes those preferences available before the addon's file-scope initialization.
 
-Gameplay events and provider discovery wait for `PLAYER_LOGIN`. Existing provider registries are enumerated once; LibActionButton, Dominos, ButtonForge and Cooldown Viewer integrations use verified load-order callbacks. Settings controls, report UI and overlays are created outside combat and reused.
+## Supported surfaces
 
-Global cooldown is ignored through:
+Blizzard action bars, LibActionButton consumers, Dominos, ButtonForge, pet action buttons, and Blizzard's Essential and Utility Cooldown Viewers. Single Button Assistant prediction is excluded.
 
-```lua
-C_ActionBar.GetActionCooldownDuration(slot, true)
-C_Spell.GetSpellCooldownDuration(spellID, true)
-```
-
-`isOnGCD=true` is never accepted as positive interrupt-readiness evidence because a personal cooldown can overlap the GCD.
-
-## Channel lifecycle hardening
-
-Current upstream reports show that `UnitChannelInfo` can return stale or phantom channels after a real stop. Interrupt Glow treats synchronous `UNIT_SPELLCAST_CHANNEL_STOP` and `UNIT_SPELLCAST_EMPOWER_STOP` as authoritative. Later channel snapshots are suppressed until a real channel/empower start or a target/focus identity change.
-
-Delayed stop events are matched against NeverSecret `castBarID`, so an old stop cannot clear a newer cast. The workaround tracks active issue family `WOWUI-2026-005` and remains until named-build retesting passes target-death, Lightning Lasso and Ray of Frost reproductions.
-
-## SavedVariables
-
-Schema 3 retains only typed preferences and producer metadata:
-
-```text
-schema
-producerVersion
-interface
-enabled
-cdText
-cdm
-strictNI
-optimisticRestrictedCooldown
-debug
-debugChat
-debugKeep
-```
-
-Legacy runtime caches, unknown keys, frame references and transient restricted state are discarded on load.
-
-## Runtime probe
-
-The probe is disabled until explicitly started:
-
-```text
-/iglow probe
-/iglow capture start quick-heal-mouseover
-/iglow capture mark friendly-hover
-/iglow capture mark hostile-hover
-/iglow capture stop
-/iglow capture show
-```
-
-Reports include build/interface, SavedVariables schema, provider state and versions, worker state, normalized target/focus and ability state, current `C_Secrets` policy, the conservative GCD policy, session-only counters, and native `C_AddOnProfiler` baselines/deltas through `CountTimeOver1000Ms`.
-
-## Supported button systems
-
-- Blizzard action bars
-- LibActionButton consumers
-- Dominos
-- ButtonForge
-- Pet action buttons
-- Blizzard Essential and Utility Cooldown Viewers
-
-Single Button Assistant next-action highlighting remains intentionally excluded because it uses a different polling model.
+Copies of the same interrupt share one readiness result. Provider callbacks queue work for known buttons; they do not scan all frames, nameplates or action slots, or parse macro bodies. Cooldown evaluation sleeps when there is no relevant cast and countdowns are off. The master switch detaches runtime events and provider callbacks.
 
 ## Commands
 
-```text
-/iglow test
-/iglow state
-/iglow probe
-/iglow capture start|mark|stop|show
-/iglow stats
-/iglow stats start|stop|reset
-/iglow rescan
-/iglow log show|clear
-/iglow enable
-/iglow disable
+| Command | Action |
+|---|---|
+| `/iglow` | Open settings |
+| `/iglow help` | Show commands |
+| `/iglow test` | Toggle the out-of-combat preview |
+| `/iglow enable` / `/iglow disable` | Change the master switch |
+| `/iglow state` | Print normalized runtime state |
+| `/iglow rescan` | Rediscover supported provider buttons outside combat |
+| `/iglow log show` / `/iglow log clear` | View or clear diagnostic history |
+| `/iglow probe` | Open a current runtime report |
+| `/iglow capture start <name>` | Start an explicit diagnostic capture |
+| `/iglow capture mark <step>` | Add a capture marker |
+| `/iglow capture stop` / `/iglow capture show` | Finalize outside combat or show the report |
+| `/iglow stats start` / `stop` / `reset` | Control the manual counter window |
+
+## Development and verification
+
+```sh
+python3 tools/test.py
 ```
 
-## Engineering authority
+The runner discovers the TOC and regression tests, prints the selected Lua interpreter, checks syntax, executes behavioral tests and runs static invariants. `--lua /path/to/lua` selects an interpreter explicitly.
 
-```text
-UnknownAlienHuman/wow-addon-engineering-kb@312085aa8d23dfe283b416ba0f394fef1cae22dd
-Gethe/wow-ui-source@027d26c3406d3de2cbd2b1f67d468fe033a1bcd4
-WoW 12.1.0.69497 / Interface 120100
-```
+The current source review is pinned to Blizzard UI **12.1.5.70688**, checked **2026-11-02**. See [API review](docs/API_REVIEW.md), [architecture](ARCHITECTURE.md), [interrupt data](docs/INTERRUPT_IDS.md), [performance model](docs/PERFORMANCE_MODEL.md) and [in-client validation](docs/RUNTIME_PROBE.md).
 
-`SPELL_SECRECY_CHANGED` remains unconfirmed in the pinned generated docs and implementation, so Interrupt Glow does not register it.
-
-## Validation boundary
-
-Local Lua/mock checks catch syntax and modeled state-machine regressions only. GitHub Actions workflows remain absent. Live-client evidence is still authoritative for FPS, taint, provider interactions, restricted contexts, GCD/personal-cooldown overlap, Cooldown Viewer pool reuse, and upstream channel-regression retirement.
-
-## Metadata
-
-- Interface: `120100`
-- Version: `1.1.0-beta.5`
-- Author: Neomorph
-- Saved variables: `InterruptGlowDB`
+**Live-client validation is NOT-RUN for this beta.** Offline tests do not establish rendering, taint, combat restrictions, provider compatibility or FPS in WoW. The Interface value is the selected patch-family declaration, not a captured client result.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT · Author: Neomorph · [LICENSE](LICENSE)

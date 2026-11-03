@@ -2,49 +2,48 @@ local ROOT = arg[1] or "."
 
 _G = _G or _ENV
 
-local usability = true
+local petUsability = true
 local secretUsability = {}
 local usabilityCalls = 0
-local infoCalls = 0
+local petCooldownCalls = 0
+local petInfoCalls = 0
 
 InterruptGlow = {
-    modules = {},
+    DB = { optimisticRestrictedCooldown = true },
     AbilityStates = {},
-    Cooldown = {},
+    Stats = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value) return value ~= secretUsability end
+function InterruptGlow:ReadMember(object, key)
+    if not self.CanAccess(object) or object == nil then return nil, false end
+    local value = object[key]
+    if not self.CanAccess(value) then return nil, false end
+    return value, true
+end
+function InterruptGlow:AsNumber(value) return type(value) == "number" and value or nil end
+function InterruptGlow:Now() return 100 end
+function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
+function InterruptGlow:BumpStat() end
 
 function GetPetActionSlotUsable(slot)
     assert(slot == 3)
     usabilityCalls = usabilityCalls + 1
-    return usability
+    return petUsability
 end
-
--- The eighth GetPetActionInfo return is checksRange in current Blizzard UI. It
--- is deliberately the opposite of usability so the old implementation fails.
+function GetPetActionCooldown(slot)
+    assert(slot == 3)
+    petCooldownCalls = petCooldownCalls + 1
+    return 0, 0, 1
+end
 function GetPetActionInfo(slot)
     assert(slot == 3)
-    infoCalls = infoCalls + 1
-    return "Spell Lock", nil, false, false, false, false, 19647, false, true
+    petInfoCalls = petInfoCalls + 1
+    error("pet readiness must use GetPetActionSlotUsable, not range metadata")
 end
 
-function InterruptGlow.Cooldown:RefreshAbility(ability)
-    ability.ready = true
-    ability.restricted = false
-    ability.hardRestricted = false
-    ability.needsPoll = true
-    ability.deadline = 120
-    ability.readinessPending = false
-    return false
-end
-
-local readinessLoader, readinessError = loadfile(ROOT .. "/core/ReadinessPolicy.lua")
-assert(readinessLoader, readinessError)
-readinessLoader()
-
--- Usability is the final policy layer and owns the final ability->record commit.
+local cooldownLoader, cooldownError = loadfile(ROOT .. "/core/Cooldown.lua")
+assert(cooldownLoader, cooldownError)
+cooldownLoader()
 local usabilityLoader, usabilityError = loadfile(ROOT .. "/core/Usability.lua")
 assert(usabilityLoader, usabilityError)
 usabilityLoader()
@@ -67,50 +66,33 @@ local ability = {
     records = { [record] = true },
 }
 
--- Actual usability=true must win even though GetPetActionInfo checksRange=false.
+-- Usable pet actions remain ready even though GetPetActionInfo's range flags
+-- could say out of range. Only the dedicated usability API supplies this gate.
 assert(Cooldown:RefreshAbility(ability) == true)
-assert(ability.ready == true)
-assert(ability.hardRestricted == false)
-assert(ability.needsPoll == true)
-assert(record.ready == true)
-assert(record.restrictedCooldown == false)
-assert(record.hardRestrictedCooldown == false)
-assert(record.deadline == 120)
-assert(record.readinessPending == false)
-assert(usabilityCalls == 1)
-assert(infoCalls == 0, "pet readiness incorrectly read GetPetActionInfo metadata")
+assert(ability.ready == true and ability.hardRestricted == false)
+assert(record.ready == true and record.restrictedCooldown == false)
+assert(record.hardRestrictedCooldown == false and record.readinessPending == false)
+assert(usabilityCalls == 1 and petCooldownCalls == 1 and petInfoCalls == 0)
 
--- Explicit unusable is ordinary not-ready, not a secret hard restriction, and
--- the final physical record must not retain the base ready=true result.
-usability = false
+-- An ordinary unusable result is not ready and does not become a hard restriction.
+petUsability = false
 record.ready = true
 assert(Cooldown:RefreshAbility(ability) == true)
-assert(ability.ready == false)
-assert(ability.hardRestricted == false)
-assert(ability.needsPoll == false)
-assert(record.ready == false)
-assert(record.hardRestrictedCooldown == false)
-assert(usabilityCalls == 2 and infoCalls == 0)
+assert(ability.ready == false and ability.hardRestricted == false)
+assert(record.ready == false and record.hardRestrictedCooldown == false)
+assert(usabilityCalls == 2 and petInfoCalls == 0)
 
--- Inaccessible usability hard-fails closed and is committed to every record.
-usability = secretUsability
+-- An inaccessible usability result fails closed, even with optimistic cooldown
+-- compatibility enabled, and commits the restriction to every bound record.
+petUsability = secretUsability
 record.ready = true
 record.restrictedCooldown = false
 record.hardRestrictedCooldown = false
 assert(Cooldown:RefreshAbility(ability) == true)
-assert(ability.ready == false)
-assert(ability.restricted == true)
-assert(ability.hardRestricted == true)
-assert(ability.needsPoll == false)
-assert(record.ready == false)
-assert(record.restrictedCooldown == true)
+assert(ability.ready == false and ability.restricted == true)
+assert(ability.hardRestricted == true and ability.needsPoll == false)
+assert(record.ready == false and record.restrictedCooldown == true)
 assert(record.hardRestrictedCooldown == true)
-assert(usabilityCalls == 3 and infoCalls == 0)
+assert(usabilityCalls == 3 and petInfoCalls == 0)
 
-local policy = assert(InterruptGlow.modules.ReadinessPolicy)
-assert(policy.petUsabilityGate == true)
-assert(policy.petUsabilitySource == "GetPetActionSlotUsable")
-assert(policy.batchedVisualCommit == true)
-assert(InterruptGlow.Usability.finalRecordCommit == true)
-
-print("PET USABILITY POLICY TEST PASSED")
+print("PET USABILITY FAIL-CLOSED TEST PASSED")

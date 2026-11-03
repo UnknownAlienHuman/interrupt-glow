@@ -42,21 +42,16 @@ local RUNTIME_EVENTS = {
 -- explicit runtime capture even if the feature itself is disabled.
 local PERSISTENT_EVENTS = {
     "PLAYER_REGEN_ENABLED",
+    "PLAYER_REGEN_DISABLED",
     "ADDON_RESTRICTION_STATE_CHANGED",
 }
 
 local function RuntimeActive()
-    local lifecycle = IG.RuntimeLifecycle
-    if lifecycle and type(lifecycle.IsActive) == "function" then
-        return lifecycle:IsActive()
-    end
-    return IG.DB and IG.DB.enabled == true
+    return IG.RuntimeLifecycle:IsActive()
 end
 
 local function RuntimeNeedsReadiness()
-    return RuntimeActive()
-        and IG.NeedsReadinessRuntime
-        and IG:NeedsReadinessRuntime() == true
+    return RuntimeActive() and IG:NeedsReadinessRuntime() == true
 end
 
 local function RegisterPersistentEvents()
@@ -100,19 +95,7 @@ local function InitializeRuntime()
     if IG.runtimeInitialized then return end
     IG.runtimeInitialized = true
     IG.playerLoginSeen = true
-    RegisterPersistentEvents()
-
-    if IG.RuntimeLifecycle and type(IG.RuntimeLifecycle.Initialize) == "function" then
-        IG.RuntimeLifecycle:Initialize()
-    else
-        if IG.Data then IG.Data:RefreshActiveSpec() end
-        if IG.Buttons then IG.Buttons:Attach(true) end
-        if IG.CastTracking then IG.CastTracking:Attach() end
-        if IG.CDM then IG.CDM:Attach(true) end
-        if IG.Glow then IG.Glow:CreatePendingOverlays() end
-        IG:SetRuntimeEventsEnabled(true)
-        IG:MarkCooldownDirty(false)
-    end
+    IG.RuntimeLifecycle:Initialize()
 
     if IG.DB.debug and IG.Debug then IG.Debug:Log("init", "version=" .. tostring(IG.version)) end
 end
@@ -143,12 +126,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if not IG.runtimeInitialized then return end
 
+    if event == "PLAYER_REGEN_DISABLED" then
+        if IG.testMode and IG.Glow then IG.Glow:SetTestMode(false) end
+        return
+    end
+
     if event == "PLAYER_REGEN_ENABLED" then
-        if IG.RuntimeLifecycle and type(IG.RuntimeLifecycle.OnCombatEnded) == "function" then
-            IG.RuntimeLifecycle:OnCombatEnded()
-        elseif RuntimeActive() and IG.Glow then
-            IG.Glow:CreatePendingOverlays()
-        end
+        IG.RuntimeLifecycle:OnCombatEnded()
         if IG.Options and type(IG.Options.OnCombatEnded) == "function" then
             IG.Options:OnCombatEnded()
         end
@@ -163,7 +147,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if RuntimeActive() then
             IG:BumpStat("events.restrictionChanged")
             IG:MarkCastDirty()
-            IG:MarkCooldownDirty(false)
+            IG:MarkCooldownDirty()
         end
         return
     end
@@ -179,7 +163,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         else
             IG:MarkCastDirty()
         end
-        IG:MarkCooldownDirty(false)
+        IG:MarkCooldownDirty()
         return
     end
 
@@ -219,7 +203,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "UPDATE_VEHICLE_ACTIONBAR" then
         IG:MarkAllButtonsDirty()
-        IG:MarkCooldownDirty(false)
+        IG:MarkCooldownDirty()
         return
     end
 
@@ -239,7 +223,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
             or type(spellID) ~= "number"
         then
             IG:BumpStat("events.restrictedSpellSucceeded")
-            IG:MarkCooldownDirty(false)
+            IG:MarkCooldownDirty()
             return
         end
 
@@ -249,7 +233,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
                 -- This is only an interrupt-source invalidation signal. It is
                 -- never treated as proof that a GCD started or ended.
                 IG:BumpStat("events.interruptSucceeded")
-                IG:MarkCooldownDirty(false)
+                IG:MarkCooldownDirty()
             end
         end
         return
@@ -273,7 +257,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         -- ignoreGlobalCooldown flag. `isOnGCD` is not collected as a positive
         -- readiness hint because it cannot prove absence of a personal cooldown.
         IG:BumpStat("events.spellCooldown")
-        IG:MarkCooldownDirty(false)
+        IG:MarkCooldownDirty()
         return
     end
 
@@ -289,7 +273,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
 
     if event == "SPELL_UPDATE_USABLE" then
         if RuntimeNeedsReadiness() and IG.Usability and IG.Usability:HasTrackedSpellSource() then
-            IG:MarkCooldownDirty(false)
+            IG:MarkCooldownDirty()
         end
         return
     end
@@ -300,29 +284,22 @@ frame:SetScript("OnEvent", function(_, event, ...)
     then
         if RuntimeNeedsReadiness() then
             IG:BumpStat("events.otherCooldown")
-            IG:MarkCooldownDirty(false)
+            IG:MarkCooldownDirty()
         end
         return
     end
 
     if event == "PET_BAR_UPDATE" or event == "PET_UI_UPDATE" or event == "UNIT_PET" then
         if IG.Buttons then IG.Buttons:RefreshPetButtons() end
-        IG:MarkCooldownDirty(false)
+        IG:MarkCooldownDirty()
         return
     end
 
     if event == "PET_BAR_UPDATE_COOLDOWN" or event == "PET_BAR_UPDATE_USABLE" then
-        IG:MarkCooldownDirty(false)
+        IG:MarkCooldownDirty()
         return
     end
 end)
 
 RegisterPersistentEvents()
 ScheduleInitialization()
-
-IG:RegisterModule("RuntimeEventPolicy", {
-    masterDisableUnregistersRuntimeEvents = true,
-    persistentEvents = PERSISTENT_EVENTS,
-    runtimeEvents = RUNTIME_EVENTS,
-    playerLossOfControlUsesUnitFilter = true,
-})

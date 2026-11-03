@@ -1,104 +1,51 @@
 local IG = _G.InterruptGlow
 if not IG or not IG.Cooldown then return end
 
-local Cooldown = IG.Cooldown
+local type = type
+local pairs = pairs
 local _G = _G
 local C_ActionBar = _G.C_ActionBar
 local C_Spell = _G.C_Spell
-local type = type
 local pcall = pcall
-local pairs = pairs
-
-local function NormalizeUsability(ok, usable, noMana)
-    if not ok or not IG.CanAccess(usable) or not IG.CanAccess(noMana) then
-        return nil, nil, true
-    end
-    if type(usable) ~= "boolean" or type(noMana) ~= "boolean" then
-        return nil, nil, true
-    end
-    return usable, noMana, false
-end
-
-local function ReadActionUsability(slot)
-    if not C_ActionBar or type(C_ActionBar.IsUsableAction) ~= "function" then
-        return nil, nil, true
-    end
-    return NormalizeUsability(pcall(C_ActionBar.IsUsableAction, slot))
-end
-
-local function ReadSpellUsability(spellID)
-    if not C_Spell or type(C_Spell.IsSpellUsable) ~= "function" then
-        return nil, nil, true
-    end
-    return NormalizeUsability(pcall(C_Spell.IsSpellUsable, spellID))
-end
-
-local function ReadActionOrSpellUsability(ability)
-    if ability.sourceKind == "action" then
-        return ReadActionUsability(ability.sourceID)
-    end
-    if ability.sourceKind == "spell" then
-        return ReadSpellUsability(ability.sourceID)
-    end
-    return true, false, false
-end
-
-local function ApplyUsabilityGate(ability)
-    local usable, noMana, hardRestricted = ReadActionOrSpellUsability(ability)
-    local changed = false
-
-    if hardRestricted then
-        changed = ability.ready ~= false
-            or ability.restricted ~= true
-            or ability.hardRestricted ~= true
-            or ability.needsPoll ~= false
-        ability.ready = false
-        ability.restricted = true
-        ability.hardRestricted = true
-        ability.needsPoll = false
-    elseif usable == false or noMana == true then
-        changed = ability.ready ~= false or ability.needsPoll ~= false
-        ability.ready = false
-        ability.needsPoll = false
-    end
-    return changed
-end
-
-local function CommitAbilityToRecords(ability)
-    local changed = false
-    for record in pairs(ability.records or {}) do
-        local recordChanged = record.ready ~= ability.ready
-            or record.restrictedCooldown ~= ability.restricted
-            or record.hardRestrictedCooldown ~= ability.hardRestricted
-            or record.deadline ~= ability.deadline
-            or record.readinessPending ~= ability.readinessPending
-
-        record.ready = ability.ready
-        record.restrictedCooldown = ability.restricted
-        record.hardRestrictedCooldown = ability.hardRestricted
-        record.deadline = ability.deadline
-        record.readinessPending = ability.readinessPending
-        changed = recordChanged or changed
-    end
-    return changed
-end
-
-local originalRefreshAbility = Cooldown.RefreshAbility
-function Cooldown:RefreshAbility(ability)
-    local changed = originalRefreshAbility(self, ability)
-    changed = ApplyUsabilityGate(ability) or changed
-
-    -- This is the final readiness policy layer loaded before source arbitration.
-    -- Commit the fully gated ability state once to every physical button. Glow
-    -- reads record.ready, so leaving the base cooldown value here would allow a
-    -- pet/usability hard restriction to display a stale ready glow.
-    changed = CommitAbilityToRecords(ability) or changed
-    return changed
-end
 
 local Usability = {}
 IG.Usability = Usability
-IG:RegisterModule("Usability", Usability)
+
+local function ReadUsability(ok, usable, noMana, requiresNoMana)
+    if not ok or not IG.CanAccess(usable) then return nil, nil, true end
+    if type(usable) ~= "boolean" then return nil, nil, true end
+    if requiresNoMana then
+        if not IG.CanAccess(noMana) or type(noMana) ~= "boolean" then
+            return nil, nil, true
+        end
+        return usable, noMana, false
+    end
+    return usable, false, false
+end
+
+function Usability:ReadForAbility(ability)
+    local kind, sourceID = ability and ability.sourceKind, ability and ability.sourceID
+    if kind == "action" then
+        if not C_ActionBar or type(C_ActionBar.IsUsableAction) ~= "function" then
+            return nil, nil, true
+        end
+        local ok, usable, noMana = pcall(C_ActionBar.IsUsableAction, sourceID)
+        return ReadUsability(ok, usable, noMana, true)
+    end
+    if kind == "spell" then
+        if not C_Spell or type(C_Spell.IsSpellUsable) ~= "function" then
+            return nil, nil, true
+        end
+        local ok, usable, noMana = pcall(C_Spell.IsSpellUsable, sourceID)
+        return ReadUsability(ok, usable, noMana, true)
+    end
+    if kind == "pet" then
+        if type(_G.GetPetActionSlotUsable) ~= "function" then return nil, nil, true end
+        local ok, usable = pcall(_G.GetPetActionSlotUsable, sourceID)
+        return ReadUsability(ok, usable, nil, false)
+    end
+    return nil, nil, true
+end
 
 function Usability:HasTrackedSpellSource()
     for _, ability in pairs(IG.AbilityStates) do
@@ -110,7 +57,12 @@ function Usability:HasTrackedSpellSource()
 end
 
 function Usability:OnActionUsableChanged(changes)
-    if not IG.CanAccess(changes) or type(changes) ~= "table" then return false end
+    if IG.ConditionalActions then IG.ConditionalActions:OnUsabilityChanged(changes) end
+    if not IG:NeedsReadinessRuntime() then return false end
+    if not IG.CanAccessTable(changes) then
+        IG:MarkCooldownDirty()
+        return true
+    end
 
     local matched = false
     for _, change in pairs(changes) do
@@ -130,9 +82,6 @@ function Usability:OnActionUsableChanged(changes)
         if matched then break end
     end
 
-    if matched then IG:MarkCooldownDirty(false) end
+    if matched then IG:MarkCooldownDirty() end
     return matched
 end
-
-Usability.batchedVisualCommit = true
-Usability.finalRecordCommit = true
