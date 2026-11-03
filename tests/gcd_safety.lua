@@ -8,10 +8,8 @@ local zeroReads = 0
 
 InterruptGlow = {
     DB = { optimisticRestrictedCooldown = false },
-    modules = {},
     AbilityStates = {},
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:ReadMember(object, key)
     if object == nil then return nil, false end

@@ -6,7 +6,6 @@ local openedTitle, openedReport
 local combat = false
 
 InterruptGlow = {
-    modules = {},
     name = "InterruptGlow",
     version = "test",
     DB = {
@@ -31,8 +30,6 @@ InterruptGlow = {
     Worker = { SupportsOnUpdateMode = function(_, frame) return frame ~= nil end },
     flushFrame = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:Print(message) printed[#printed + 1] = message end
 function InterruptGlow:Now() return 150 end

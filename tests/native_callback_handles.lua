@@ -7,11 +7,9 @@ local unregisterCount = 0
 
 InterruptGlow = {
     DB = { enabled = true },
-    modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     PendingButtons = setmetatable({}, { __mode = "k" }),
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow.CanAccessTable(value) return type(value) == "table" end
 function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end

@@ -10,12 +10,11 @@ local Glow = {
     prewarmScheduled = false,
     runtimeWorkerEnabled = nil,
     driverElapsed = 0,
-    restrictedPollElapsed = 0,
+    timingPollElapsed = 0,
     countdownTextElapsed = 0,
     sameTrackedUnit = false,
 }
 IG.Glow = Glow
-IG:RegisterModule("Glow", Glow)
 
 local _G = _G
 local CreateFrame = _G.CreateFrame
@@ -708,15 +707,15 @@ runtimeFrame:SetScript("OnUpdate", function(_, elapsed)
     end
 
     Glow.driverElapsed = Glow.driverElapsed + elapsed
-    Glow.restrictedPollElapsed = Glow.restrictedPollElapsed + elapsed
+    Glow.timingPollElapsed = Glow.timingPollElapsed + elapsed
     Glow.countdownTextElapsed = Glow.countdownTextElapsed + elapsed
 
     local runFast = Glow.driverElapsed >= 0.05
-    local runRestrictedPoll = Glow.restrictedPollElapsed >= 0.25
+    local runTimingPoll = Glow.timingPollElapsed >= 0.25
     local runCountdownText = Glow.countdownTextElapsed >= 0.20
-    if not runFast and not runRestrictedPoll and not runCountdownText then return end
+    if not runFast and not runTimingPoll and not runCountdownText then return end
     if runFast then Glow.driverElapsed = 0 end
-    if runRestrictedPoll then Glow.restrictedPollElapsed = 0 end
+    if runTimingPoll then Glow.timingPollElapsed = 0 end
     if runCountdownText then Glow.countdownTextElapsed = 0 end
 
     local now = IG:Now()
@@ -746,9 +745,9 @@ runtimeFrame:SetScript("OnUpdate", function(_, elapsed)
         for record in pairs(IG.InterruptRecords) do Glow:RefreshCooldownText(record, now) end
     end
 
-    if expired or (runRestrictedPoll and needsPoll) then
-        if runRestrictedPoll and needsPoll then IG:BumpStat("cooldown.restrictedPolls") end
-        IG:MarkCooldownDirty(false)
+    if expired or (runTimingPoll and needsPoll) then
+        if runTimingPoll and needsPoll then IG:BumpStat("cooldown.timingPolls") end
+        IG:MarkCooldownDirty()
     end
     if not keepRunning then Glow:SetRuntimeWorkerEnabled(false) end
 end)

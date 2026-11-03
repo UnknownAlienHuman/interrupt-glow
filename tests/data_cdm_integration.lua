@@ -50,7 +50,6 @@ local observedButtons = setmetatable({}, {
 
 InterruptGlowDB = { enabled = true, cdm = true }
 InterruptGlow = {
-    modules = {},
     DB = InterruptGlowDB,
     ObservedButtons = observedButtons,
     AbilityStates = {},
@@ -58,7 +57,6 @@ InterruptGlow = {
     Buttons = {},
 }
 local IG = InterruptGlow
-function IG:RegisterModule(name, module) self.modules[name] = module end
 function IG.CanAccess(value) return value ~= secretSpellID and value ~= secretItemFrame end
 function IG:ReadMember(object, key)
     if not self.CanAccess(object) or object == nil then return nil, false end

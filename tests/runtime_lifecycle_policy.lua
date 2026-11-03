@@ -14,7 +14,6 @@ end
 
 InterruptGlow = {
     DB = { enabled = true, cdm = true },
-    modules = {},
     PendingButtons = setmetatable({ [{}] = true }, { __mode = "k" }),
     _dirty = {
         spec = true,
@@ -36,8 +35,6 @@ InterruptGlow = {
         prewarmQueued = setmetatable({ [queuedRecord] = true }, { __mode = "k" }),
     },
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:IsInCombat() return combat end
 function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
 function InterruptGlow:BumpStat(key) stats[key] = (stats[key] or 0) + 1 end

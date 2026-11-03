@@ -10,7 +10,6 @@ local pcall = pcall
 
 local Usability = {}
 IG.Usability = Usability
-IG:RegisterModule("Usability", Usability)
 
 local function ReadUsability(ok, usable, noMana, requiresNoMana)
     if not ok or not IG.CanAccess(usable) then return nil, nil, true end
@@ -61,7 +60,7 @@ function Usability:OnActionUsableChanged(changes)
     if IG.ConditionalActions then IG.ConditionalActions:OnUsabilityChanged(changes) end
     if not IG:NeedsReadinessRuntime() then return false end
     if not IG.CanAccessTable(changes) then
-        IG:MarkCooldownDirty(false)
+        IG:MarkCooldownDirty()
         return true
     end
 
@@ -83,8 +82,6 @@ function Usability:OnActionUsableChanged(changes)
         if matched then break end
     end
 
-    if matched then IG:MarkCooldownDirty(false) end
+    if matched then IG:MarkCooldownDirty() end
     return matched
 end
-
-Usability.eventInvalidationOnly = true

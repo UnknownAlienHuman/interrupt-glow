@@ -41,11 +41,8 @@ EventUtil = {
 
 InterruptGlow = {
     DB = { enabled = false, debug = false },
-    modules = {},
     RuntimeProbe = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:BumpStat(key)
     stats[key] = (stats[key] or 0) + 1
 end

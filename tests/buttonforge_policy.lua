@@ -13,7 +13,6 @@ BFButton = { FullRefresh = function() end, ClearCommand = function() end }
 
 InterruptGlow = {
     DB = { enabled = true },
-    modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     PendingButtons = setmetatable({}, { __mode = "k" }),
     InterruptRecords = setmetatable({}, { __mode = "k" }),
@@ -21,7 +20,6 @@ InterruptGlow = {
     Data = {},
     Glow = { ClearRecord = function() end, QueueShell = function() end },
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value) return value ~= inaccessible end
 function InterruptGlow.CanAccessTable(value)
     return InterruptGlow.CanAccess(value) and type(value) == "table"

@@ -8,7 +8,6 @@ local Debug = {
     window = nil,
 }
 IG.Debug = Debug
-IG:RegisterModule("Debug", Debug)
 
 local format = string.format
 local concat = table.concat

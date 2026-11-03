@@ -22,11 +22,11 @@ Copies of one ability share readiness. A source transition is selected by Button
 |---|---|---|
 | Shared dirty flush | RunOnce | Disabled |
 | Prewarm | RunOnce per bounded slice | Disabled |
-| Accessible deadlines / restricted timing / countdowns | One shared RunAlways worker while needed | Disabled |
+| Accessible deadlines / known not-ready state without timing / countdowns | One shared RunAlways worker while needed | Disabled |
 
-The timing worker checks accessible deadlines at 0.05 s, restricted readiness during a relevant cast at 0.25 s, and integer countdown text at 0.20 s. These are configured intervals, not measured end-to-end latency guarantees. A frame budget, frame rate and client scheduling still determine actual latency.
+The timing worker checks accessible deadlines at 0.05 s, a positively known not-ready state without readable timing during a relevant cast at 0.25 s, and integer countdown text at 0.20 s. Fully unknown readiness does not start this fallback; native invalidation events request a fresh bounded pass. These are configured intervals, not measured end-to-end latency guarantees. A frame budget, frame rate and client scheduling still determine actual latency.
 
-The normal path does not enumerate frames or nameplates, scan all action slots, parse macro bodies, allocate visuals in combat or format diagnostics while logging/capture is off. When no relevant cast exists and countdowns are disabled, readiness evaluation and its timer sleep. The master switch detaches runtime traffic and stops pending visual work.
+The normal path does not enumerate frames or nameplates, scan all action slots, parse macro bodies, allocate visuals in combat or format diagnostics while logging/capture is off. LAB and conditional-action notifications share one known-button slot index. Readiness invalidation bursts coalesce before walking active abilities and deferred identities. When no relevant cast exists and countdowns are disabled, readiness evaluation and its timer sleep. The master switch detaches runtime traffic and stops pending visual work.
 
 ## Readiness correctness precedes cadence
 

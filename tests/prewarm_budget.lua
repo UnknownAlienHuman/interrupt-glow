@@ -49,7 +49,6 @@ InterruptGlow = {
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     InterruptRecords = setmetatable({}, { __mode = "k" }),
     AbilityStates = {},
-    modules = {},
     Worker = {
         RunOnce = function(_, frame) scheduleCalls = scheduleCalls + 1; frame:SetOnUpdateMode(1) end,
         Disable = function(_, frame) disableCalls = disableCalls + 1; frame:SetOnUpdateMode(0) end,
@@ -57,7 +56,6 @@ InterruptGlow = {
         SetContinuous = function(_, frame, enabled) frame:SetOnUpdateMode(enabled and 2 or 0) end,
     },
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:ReadMember(object, key)
     if object == nil then return nil, false end

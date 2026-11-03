@@ -14,12 +14,10 @@ function CreateFrame(kind)
 end
 
 InterruptGlow = {
-    modules = {},
     CastState = { target = {}, focus = {} },
     CastTracking = nil,
     Glow = {},
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:BumpStat() end
 function InterruptGlow:CanAccess(_) return true end
 function InterruptGlow.Glow:RefreshUnitRelation() end

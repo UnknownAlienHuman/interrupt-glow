@@ -7,10 +7,7 @@ local known = { [9002] = true }
 
 InterruptGlow = {
     DB = { enabled = true, cdText = false },
-    modules = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
 function InterruptGlow:BumpStat() end

@@ -10,6 +10,9 @@ local visualDirty = 0
 local cdmEnabled = nil
 local animationEnabled = nil
 local registeredPanel = nil
+local openedCategoryID = nil
+local lifecycleEnabledCalls = {}
+local printed = {}
 
 InterruptGlow = {
     DB = {
@@ -23,20 +26,27 @@ InterruptGlow = {
         debugChat = true,
         debugKeep = 999,
     },
-    modules = {},
     CDM = {},
     Glow = {},
+    RuntimeLifecycle = { active = false },
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:MarkAllButtonsDirty() allButtonsDirty = allButtonsDirty + 1 end
 function InterruptGlow:MarkCastDirty() castDirty = castDirty + 1 end
 function InterruptGlow:MarkCooldownDirty() cooldownDirty = cooldownDirty + 1 end
 function InterruptGlow:MarkVisualDirty() visualDirty = visualDirty + 1 end
+function InterruptGlow:Print(message) printed[#printed + 1] = message end
 function InterruptGlow.CDM:SetEnabled(value) cdmEnabled = value end
 function InterruptGlow.Glow:SetAnimationEnabled(value)
     animationEnabled = value
     InterruptGlow.DB.animateGlow = value
+end
+function InterruptGlow.RuntimeLifecycle:IsActive() return self.active end
+function InterruptGlow.RuntimeLifecycle:SetEnabled(value)
+    value = value == true
+    lifecycleEnabledCalls[#lifecycleEnabledCalls + 1] = value
+    InterruptGlow.DB.enabled = value
+    self.active = value
+    return true
 end
 
 UIParent = {}
@@ -52,6 +62,7 @@ Settings = {
         return { GetID = function() return 1 end }
     end,
     RegisterAddOnCategory = function() end,
+    OpenToCategory = function(categoryID) openedCategoryID = categoryID end,
 }
 
 local loader, loadError = loadfile(ROOT .. "/Options.lua")
@@ -64,6 +75,18 @@ assert(type(panel.OnRefresh) == "function")
 assert(type(panel.OnDefault) == "function")
 assert(type(panel.OnCommit) == "function")
 assert(InterruptGlow.Options.categoryID == 1)
+assert(InterruptGlow.Options:Open() == true)
+assert(openedCategoryID == 1, "Options:Open did not hand the category ID to Settings")
+
+local savedCategoryID = InterruptGlow.Options.categoryID
+InterruptGlow.Options.categoryID = nil
+assert(InterruptGlow.Options:Open() == false)
+assert(printed[#printed] == "Interrupt Glow settings are unavailable.")
+InterruptGlow.Options.categoryID = savedCategoryID
+Settings.OpenToCategory = nil
+assert(InterruptGlow.Options:Open() == false)
+assert(printed[#printed] == "Interrupt Glow settings are unavailable.")
+Settings.OpenToCategory = function(categoryID) openedCategoryID = categoryID end
 
 -- Avoid constructing controls; this test targets Settings lifecycle routing.
 function InterruptGlow.Options:Refresh()
@@ -86,6 +109,8 @@ assert(DB.debug == false)
 assert(DB.debugChat == false)
 assert(DB.debugKeep == 400)
 assert(DB.animateGlow == true and animationEnabled == true)
+assert(#lifecycleEnabledCalls == 1 and lifecycleEnabledCalls[1] == true,
+    "default reset did not route master enable through RuntimeLifecycle")
 assert(cdmEnabled == true)
 assert(allButtonsDirty == 1)
 assert(castDirty == 1)

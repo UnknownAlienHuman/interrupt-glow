@@ -35,9 +35,9 @@ The current KB spell-secrecy registry recommends `SPELL_SECRECY_CHANGED`, but th
 
 ## Offline validation
 
-The prepared beta.8 tree was checked on 2026-11-02 with `/usr/bin/texlua` reporting **Lua 5.3**:
+The revised beta.8 tree was checked on 2026-11-03 with `/usr/bin/texlua` reporting **Lua 5.3**:
 
-- `python3 tools/test.py`: **39/39** behavioral tests passed, syntax passed for **59** TOC/test files, static invariants passed. The modeled integration loads the real TOC; fixtures do not load deleted policy wrappers.
+- `python3 tools/test.py`: **44/44** behavioral tests passed, syntax passed for **64** TOC/test files, static invariants passed. The modeled integration loads the real TOC; fixtures do not load deleted policy wrappers. Coverage includes slash lifecycle, authoritative LAB identity, shared slot routing, opaque-readiness sleep, diagnostic access failures and coalesced invalidations.
 - `python3 tools/sync_interrupts.py --source <pinned TrackedCooldowns.lua> --check`: all **34** specialization entries matched the source blob above.
 - `git diff --check`: passed.
 

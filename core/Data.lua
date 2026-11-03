@@ -12,12 +12,10 @@ local Data = {
     cooldownSpellMatchCache = {},
     negativeCooldownSpellMatches = {},
     negativeCooldownSpellMatchCount = 0,
-    runtimeProofRevision = 0,
     interruptCooldownCategories = {},
     interruptStartRecoveryCategories = {},
 }
 IG.Data = Data
-IG:RegisterModule("Data", Data)
 
 -- Build-time source for ordinary player interrupts:
 -- Blizzard_CooldownBroadcaster/TrackedCooldowns.lua,
@@ -233,7 +231,6 @@ function Data:RefreshActiveSpec()
     -- pass restores families that remain valid.
     IG:WipeMap(self.runtimeInterrupts)
     ClearNegativeMatches(self)
-    self.runtimeProofRevision = self.runtimeProofRevision + 1
 
     if specID then
         AddSpecList(self, INTERRUPTS_BY_SPEC[specID])
@@ -267,7 +264,6 @@ function Data:LearnRuntimeInterrupt(spellID)
 
     if previous ~= canonicalSpellID then
         ClearNegativeMatches(self)
-        self.runtimeProofRevision = self.runtimeProofRevision + 1
         IG:BumpStat("data.runtimeInterruptFamiliesChanged")
         IG:MarkAllButtonsDirty()
     end
@@ -335,10 +331,6 @@ function Data:GetCanonicalSpellID(spellID, sourceKind)
     end
 
     return nil
-end
-
-function Data:IsInterruptSpell(spellID, sourceKind)
-    return self:GetCanonicalSpellID(spellID, sourceKind) ~= nil
 end
 
 function Data:MatchesCurrentInterrupt(spellID)

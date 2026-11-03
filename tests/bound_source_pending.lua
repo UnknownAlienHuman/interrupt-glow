@@ -5,11 +5,9 @@ _G = _G or _ENV
 local stats = {}
 InterruptGlow = {
     DB = { optimisticRestrictedCooldown = true },
-    modules = {},
     AbilityStates = {},
     Stats = stats,
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:ReadMember(object, key)
     if object == nil then return nil, false end

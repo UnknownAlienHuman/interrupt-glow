@@ -3,7 +3,6 @@ if not IG then return end
 
 local Resolver = {}
 IG.ActionResolver = Resolver
-IG:RegisterModule("ActionResolver", Resolver)
 
 local C_ActionBar = _G.C_ActionBar
 local GetActionInfo = _G.GetActionInfo
@@ -106,7 +105,36 @@ function Resolver:ResolveRecord(record)
     if record.adapter == "cdm" then return Buttons:ResolveCDM(record) end
     if record.adapter == "buttonforge" then return Buttons:ResolveButtonForge(record) end
 
-    local slot = self:GetActionSlot(record.button)
+    local slot
+    if record.adapter == "lab" then
+        -- LABAdapter snapshots secure identity after UpdateAction. Treat that
+        -- snapshot as authoritative: `button.action` can survive a state switch
+        -- and must not resurrect a prior physical action when LAB reports an
+        -- empty, restricted, or non-action state.
+        local stateType = record.labStateType
+        local stateAction = record.labStateAction
+        if record.labIdentityRestricted == true
+            or not IG.CanAccess(stateType)
+            or not IG.CanAccess(stateAction)
+        then
+            return false
+        end
+
+        if stateType == "spell" then
+            local spellID = PositiveSlot(stateAction)
+            if not spellID then return false end
+            local canonical = IG.Data:GetCanonicalSpellID(spellID, "spell")
+            if canonical then return true, "spell", canonical, spellID, canonical end
+            return false
+        end
+
+        if stateType ~= "action" then return false end
+        slot = PositiveSlot(record.labSlot)
+        if not slot then return false end
+    else
+        slot = self:GetActionSlot(record.button)
+    end
+
     if not slot then
         local spellID = ReadDirectSpellID(record.button)
         local canonical = spellID and IG.Data:GetCanonicalSpellID(spellID, "spell")

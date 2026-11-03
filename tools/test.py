@@ -18,19 +18,25 @@ NON_TEST_FILES = {"check_syntax.lua"}
 
 def probe_lua(executable: str) -> str | None:
     """Return the language version when an executable runs Lua scripts."""
-    with tempfile.TemporaryDirectory(prefix="interrupt-glow-lua-") as temp_dir:
-        probe = Path(temp_dir) / "version.lua"
-        probe.write_text('io.write(_VERSION, "\\n")\n', encoding="utf-8")
-        result = subprocess.run(
-            [executable, str(probe)],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        version = result.stdout.strip()
-        if result.returncode == 0 and version.startswith("Lua "):
-            return version
+    try:
+        with tempfile.TemporaryDirectory(prefix="interrupt-glow-lua-") as temp_dir:
+            probe = Path(temp_dir) / "version.lua"
+            probe.write_text('io.write(_VERSION, "\\n")\n', encoding="utf-8")
+            result = subprocess.run(
+                [executable, str(probe)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            version = result.stdout.strip()
+            if result.returncode == 0 and version.startswith("Lua "):
+                return version
+    except OSError:
+        # An explicit path may exist but be non-executable, or an interpreter
+        # found on PATH may disappear before it can be probed. Treat either as
+        # an unavailable runtime so the caller can report a controlled failure.
+        return None
     return None
 
 

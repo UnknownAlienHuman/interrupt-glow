@@ -72,12 +72,9 @@ InterruptGlow = {
         runtimeWorkerEnabled = false,
     },
     flushFrame = {},
-    modules = {},
     profileCountersEnabled = false,
     profileCounterOwner = nil,
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:IsInCombat() return combat end
 function InterruptGlow:IsAddOnFullyLoaded(name) return name == "Dominos" end
@@ -106,11 +103,6 @@ function InterruptGlow.Data:GetActiveInterrupts() return pairs(self.activeInterr
 InterruptGlow.Worker = {
     SupportsOnUpdateMode = function(_, frame) return frame ~= nil end,
 }
-InterruptGlow:RegisterModule("GCDSafetyPolicy", {
-    ignoresGlobalCooldownInDurationAPI = true,
-    treatsIsOnGCDAsReadinessProof = false,
-})
-
 UIParent = {}
 ChatFontNormal = {}
 function CreateFrame()

@@ -8,9 +8,7 @@ InterruptGlow = {
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     PendingButtons = setmetatable({}, { __mode = "k" }),
     Stats = {},
-    modules = {},
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
 function InterruptGlow:BumpStat(key, amount)
     self.Stats[key] = (self.Stats[key] or 0) + (amount or 1)

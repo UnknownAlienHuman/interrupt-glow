@@ -3,7 +3,6 @@ if not IG then return end
 
 local Slash = {}
 IG.Slash = Slash
-IG:RegisterModule("Slash", Slash)
 
 local lower = string.lower
 local match = string.match
@@ -113,7 +112,7 @@ local function Rescan()
     if IG.CDM then IG.CDM:ObserveExistingItems() end
     if IG.Glow then IG.Glow:CreatePendingOverlays() end
     IG:MarkCastDirty()
-    IG:MarkCooldownDirty(false)
+    IG:MarkCooldownDirty()
     IG:Print("Targeted button discovery requested.")
 end
 
@@ -201,14 +200,15 @@ function Slash:Handle(message)
             IG.Debug:Show(IG.DB.debugKeep)
         end
     elseif command == "enable" then
-        IG.DB.enabled = true
-        IG:MarkCastDirty()
-        IG:MarkCooldownDirty(false)
-        IG:MarkVisualDirty()
-        IG:Print("Enabled.")
+        local lifecycle = IG.RuntimeLifecycle
+        lifecycle:SetEnabled(true)
+        if lifecycle:IsActive() then
+            IG:Print("Enabled.")
+        else
+            IG:Print("Enable queued until after combat.")
+        end
     elseif command == "disable" then
-        IG.DB.enabled = false
-        IG:MarkVisualDirty()
+        IG.RuntimeLifecycle:SetEnabled(false)
         IG:Print("Disabled.")
     else
         PrintHelp()

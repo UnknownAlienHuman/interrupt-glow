@@ -33,8 +33,6 @@ local IG = {
     },
     Buttons = {},
 }
-
-function IG:RegisterModule() end
 function IG:CanAccess() return true end
 function IG:ReadMember(object, key)
     if object == nil then return nil, false end

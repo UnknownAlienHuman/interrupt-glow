@@ -10,11 +10,9 @@ local petInfoCalls = 0
 
 InterruptGlow = {
     DB = { optimisticRestrictedCooldown = true },
-    modules = {},
     AbilityStates = {},
     Stats = {},
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value) return value ~= secretUsability end
 function InterruptGlow:ReadMember(object, key)
     if not self.CanAccess(object) or object == nil then return nil, false end

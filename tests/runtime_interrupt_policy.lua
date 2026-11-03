@@ -14,7 +14,6 @@ Constants = { SpellCooldownConsts = { GLOBAL_RECOVERY_CATEGORY = 133 } }
 C_ActionBar = { IsInterruptAction = function() return false end }
 
 InterruptGlow = {
-    modules = {},
     DB = { enabled = true, cdm = true },
     ObservedButtons = {},
     PendingButtons = {},
@@ -22,7 +21,6 @@ InterruptGlow = {
     Stats = {},
 }
 local IG = InterruptGlow
-function IG:RegisterModule(name, module) self.modules[name] = module end
 function IG.CanAccess(_) return true end
 function IG:ReadMember(object, key)
     if object == nil then return nil, false end

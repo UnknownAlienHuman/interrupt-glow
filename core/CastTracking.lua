@@ -10,7 +10,6 @@ local CastTracking = {
     },
 }
 IG.CastTracking = CastTracking
-IG:RegisterModule("CastTracking", CastTracking)
 
 local _G = _G
 local CreateFrame = _G.CreateFrame
@@ -261,7 +260,7 @@ function CastTracking:RefreshUnit(unit, forcedNotInterruptible, forceReadinessRe
         or castIdentityChanged
         or not oldRelevant
     )
-    if needsReadinessRefresh then IG:MarkCooldownDirty(false) end
+    if needsReadinessRefresh then IG:MarkCooldownDirty() end
 
     if IG.Glow then IG.Glow:RefreshUnit(unit) end
 

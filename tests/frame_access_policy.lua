@@ -46,7 +46,6 @@ function UnitIsUnit() return false end
 
 InterruptGlow = {
     DB = { enabled = true, cdText = false, strictNI = true, animateGlow = false },
-    modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     InterruptRecords = setmetatable({}, { __mode = "k" }),
     AbilityStates = {},
@@ -56,7 +55,6 @@ InterruptGlow = {
         SetContinuous = function() end,
     },
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value)
     if value == secretValue then return false end
     if value == inaccessibleButton and not inaccessibleAllowed then return false end

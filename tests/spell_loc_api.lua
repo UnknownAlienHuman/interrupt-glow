@@ -34,13 +34,11 @@ C_Spell = {
 C_ActionBar = {}
 
 InterruptGlow = {
-    modules = {},
     DB = { optimisticRestrictedCooldown = true },
     AbilityStates = {},
     CastState = {},
     Stats = {},
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value) return value ~= "secret" end
 function InterruptGlow:ReadMember(container, key)
     if not self.CanAccess(container) or container == nil then return nil, false end

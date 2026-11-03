@@ -496,16 +496,16 @@ flush_all()
 assert(labRecord.isInterrupt == true, "LAB changed-slot feedback did not rebind")
 
 assert(IG.Data.activeSpecID == 258)
-assert(IG.Data:IsInterruptSpell(15487, "spell") == true)
-assert(IG.Data:IsInterruptSpell(6552, "spell") == false)
-assert(IG.Data:IsInterruptSpell(115781, "spell") == false, "removed Optical Blast returned")
-assert(IG.Data:IsInterruptSpell(212619, "spell") == false, "Call Felhunter leaked into Shadow Priest")
+assert(IG.Data:GetCanonicalSpellID(15487, "spell") ~= nil)
+assert(IG.Data:GetCanonicalSpellID(6552, "spell") == nil)
+assert(IG.Data:GetCanonicalSpellID(115781, "spell") == nil, "removed Optical Blast returned")
+assert(IG.Data:GetCanonicalSpellID(212619, "spell") == nil, "Call Felhunter leaked into Shadow Priest")
 currentSpecID = 257
 IG.Data:RefreshActiveSpec()
 assert(next(IG.Data.activeInterrupts) == nil, "Holy Priest inherited Shadow Silence")
 currentSpecID = 265
 IG.Data:RefreshActiveSpec()
-assert(IG.Data:IsInterruptSpell(212619, "spell") == true, "Call Felhunter PvP coverage is missing")
+assert(IG.Data:GetCanonicalSpellID(212619, "spell") ~= nil, "Call Felhunter PvP coverage is missing")
 assert(IG.Data:GetCanonicalSpellID(19647, "pet") == 119910)
 assert(IG.Data:GetCanonicalSpellID(89766, "pet") == nil)
 currentSpecID = 266
@@ -513,8 +513,8 @@ IG.Data:RefreshActiveSpec()
 assert(IG.Data:GetCanonicalSpellID(89766, "pet") == 119914)
 currentSpecID = 73
 IG.Data:RefreshActiveSpec()
-assert(IG.Data:IsInterruptSpell(6552, "spell") == true)
-assert(IG.Data:IsInterruptSpell(386071, "spell") == true)
+assert(IG.Data:GetCanonicalSpellID(6552, "spell") ~= nil)
+assert(IG.Data:GetCanonicalSpellID(386071, "spell") ~= nil)
 currentSpecID = 258
 IG.Data:RefreshActiveSpec()
 IG:MarkAllButtonsDirty()
@@ -677,28 +677,28 @@ assert(actionCooldownCalls + actionDurationCalls + actionUsableCalls == readines
 actionData[sharedActionSource].usable = true
 actionData[sharedActionSource].usableSecret = false
 actionCharges[sharedActionSource] = { current = 0, max = 2, active = true, zero = false, remaining = 6, secret = false }
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(record1.ready == false and type(record1.deadline) == "number")
 actionCharges[sharedActionSource].current = 1
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(record1.ready == true)
 actionCharges[sharedActionSource] = nil
 actionLoC.active, actionLoC.replaces = true, true
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(record1.ready == false, "Loss of Control did not block readiness")
 actionLoC.active, actionLoC.replaces = false, false
 actionLoC.secret = true
 IG.DB.optimisticRestrictedCooldown = true
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(record1.ready == false and record1.ability.hardRestricted == true, "restricted LoC failed open")
 assert(record1.ability.needsPoll == false)
 actionLoC.secret = false
 IG.DB.optimisticRestrictedCooldown = false
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 
 currentSpecID = 265
@@ -709,7 +709,7 @@ flush_all()
 local petRecord = assert(IG.ObservedButtons[PetActionBar.actionButtons[1]])
 assert(petRecord.isInterrupt and petRecord.canonicalSpellID == 119910)
 petUsable = false
-IG:MarkCooldownDirty(false)
+IG:MarkCooldownDirty()
 flush_all()
 assert(petRecord.ready == false, "unusable pet interrupt remained ready")
 petUsable = true

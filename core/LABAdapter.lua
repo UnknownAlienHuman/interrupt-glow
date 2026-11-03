@@ -4,7 +4,6 @@ if not IG or not IG.Buttons then return end
 local Buttons = IG.Buttons
 local Adapter = { attached = false }
 IG.LABAdapter = Adapter
-IG:RegisterModule("LABAdapter", Adapter)
 local _G = _G
 local CreateFrame = _G.CreateFrame
 local hooksecurefunc = _G.hooksecurefunc
@@ -16,11 +15,9 @@ local tonumber = tonumber
 -- LibActionButton fires OnButtonUpdate after every full visual Update(), which
 -- includes cooldown, usability, target and other high-frequency refreshes. LAB
 -- separately receives ACTIONBAR_SLOT_CHANGED for slot-backed action buttons.
--- Use exact UpdateAction hooks plus a targeted slot index instead of waking on
--- every visual update.
+-- Use exact UpdateAction hooks plus ConditionalActions' shared slot index
+-- instead of waking on every visual update.
 local hookedButtons = setmetatable({}, { __mode = "k" })
-local buttonSlots = setmetatable({}, { __mode = "k" })
-local buttonsBySlot = {}
 local broadUpdateDisabled = setmetatable({}, { __mode = "k" })
 
 local slotEventFrame = CreateFrame("Frame")
@@ -55,37 +52,6 @@ local function GetIdentity(button)
     return stateType, stateAction, slot, true
 end
 
-local function RemoveFromSlot(button)
-    if not IG.CanAccess(button) or button == nil then return end
-    local oldSlot = buttonSlots[button]
-    if oldSlot == nil then return end
-
-    buttonSlots[button] = nil
-    local set = buttonsBySlot[oldSlot]
-    if set then
-        set[button] = nil
-        if next(set) == nil then buttonsBySlot[oldSlot] = nil end
-    end
-end
-
-local function SetButtonSlot(button, slot)
-    if not IG.CanAccess(button) or button == nil then return end
-    if not IG.CanAccess(slot) then slot = nil end
-    local oldSlot = buttonSlots[button]
-    if oldSlot == slot then return end
-
-    RemoveFromSlot(button)
-    if type(slot) ~= "number" or slot <= 0 then return end
-
-    local set = buttonsBySlot[slot]
-    if not set then
-        set = setmetatable({}, { __mode = "k" })
-        buttonsBySlot[slot] = set
-    end
-    set[button] = true
-    buttonSlots[button] = slot
-end
-
 local function CacheIdentity(record, button)
     if not record or not IG.CanAccess(button) or button == nil then return false end
 
@@ -100,7 +66,6 @@ local function CacheIdentity(record, button)
     record.labStateType = stateType
     record.labStateAction = stateAction
     record.labSlot = slot
-    SetButtonSlot(button, slot)
     return changed
 end
 
@@ -195,8 +160,10 @@ local function DisableBroadUpdateIfFullyHooked(library)
         local record = IG.ObservedButtons[button]
             or Buttons:ObserveButton(button, "lab", { skipDirty = true })
         if record then
-            CacheIdentity(record, button)
-            if not wasObserved then IG:MarkButtonDirty(button) end
+            local identityChanged = CacheIdentity(record, button)
+            if identityChanged or not wasObserved then
+                IG:MarkButtonDirty(button)
+            end
         end
         if not HookButton(button) then allHooked = false end
     end)
@@ -276,18 +243,12 @@ slotEventFrame:SetScript("OnEvent", function(_, _event, slot)
     if type(slot) == "string" then slot = tonumber(slot) end
     if type(slot) ~= "number" then return end
 
-    if slot > 0 then
-        local set = buttonsBySlot[slot]
-        if set then
-            for button in pairs(set) do IG:MarkButtonDirty(button) end
-        end
-        return
+    if slot < 0 then return end
+    -- ConditionalActions owns the shared known-button index. Restrict this
+    -- provider event to LAB records so native action work is not widened.
+    if IG.ConditionalActions then
+        IG.ConditionalActions:InvalidateSlot(slot, "lab")
     end
-
-    if slot ~= 0 then return end
-    -- slot == 0 is Blizzard's explicit global invalidation. It is rare and still
-    -- bounded to already-indexed LAB buttons; no slot or frame scan occurs.
-    for button in pairs(buttonSlots) do IG:MarkButtonDirty(button) end
 end)
 
 function Adapter:Attach()
@@ -311,5 +272,4 @@ function Adapter:Detach()
     end
     IG:WipeMap(Buttons.labDiscoveredLibraries)
     IG:WipeMap(broadUpdateDisabled)
-    for button in pairs(buttonSlots) do RemoveFromSlot(button) end
 end

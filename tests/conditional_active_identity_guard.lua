@@ -12,7 +12,6 @@ local clearCalls = 0
 
 InterruptGlow = {
     DB = { enabled = true, cdText = false },
-    modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     PendingButtons = setmetatable({}, { __mode = "k" }),
     InterruptRecords = setmetatable({}, { __mode = "k" }),
@@ -22,7 +21,6 @@ InterruptGlow = {
     Data = {},
 }
 local IG = InterruptGlow
-function IG:RegisterModule(name, module) self.modules[name] = module end
 function IG.CanAccess(_) return true end
 function IG:ReadMember(object, key)
     if object == nil then return nil, false end

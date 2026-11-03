@@ -8,11 +8,8 @@ local spellLoC = secretLoC
 
 InterruptGlow = {
     DB = { optimisticRestrictedCooldown = true },
-    modules = {},
     AbilityStates = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value) return value ~= secretLoC end
 function InterruptGlow:ReadMember(container, key)
     if not self.CanAccess(container) or container == nil then return nil, false end

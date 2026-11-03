@@ -16,10 +16,8 @@ local runtimeInterrupts = setmetatable({}, {
 })
 
 InterruptGlow = {
-    modules = {},
     Data = nil,
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value) return value ~= secretSpellID end
 function InterruptGlow:WipeMap(map) for key in pairs(map) do map[key] = nil end end
 function InterruptGlow:BumpStat() end

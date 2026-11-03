@@ -24,15 +24,12 @@ end
 
 InterruptGlow = {
     ObservedButtons = setmetatable({}, { __mode = "k" }),
-    modules = {},
     Buttons = {
         attached = true,
         labLibraries = setmetatable({}, { __mode = "k" }),
         labDiscoveredLibraries = setmetatable({}, { __mode = "k" }),
     },
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:ReadMember(object, key)
     if identityRestricted and object == restrictedButton
         and (key == "_state_type" or key == "_state_action")

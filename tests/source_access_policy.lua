@@ -18,13 +18,11 @@ local observed = setmetatable({}, {
 })
 InterruptGlow = {
     DB = { enabled = true, cdm = true },
-    modules = {},
     ObservedButtons = observed,
     PendingButtons = setmetatable({}, { __mode = "k" }),
     AbilityStates = {},
     Data = {},
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value) return value ~= secretFrame and value ~= secretSpell end
 function InterruptGlow.CanAccessTable(value)
     return InterruptGlow.CanAccess(value) and type(value) == "table"

@@ -19,7 +19,6 @@ local Buttons = {
     buttonForgeDiscovered = false,
 }
 IG.Buttons = Buttons
-IG:RegisterModule("Buttons", Buttons)
 
 local _G = _G
 local GetPetActionInfo = _G.GetPetActionInfo
@@ -59,13 +58,13 @@ local function GetLibrary(name)
         or nil
     if type(getLibrary) == "function" then
         local ok, library = pcall(getLibrary, LibStub, name, true)
-        if ok and IG.CanAccess(library) then return library end
+        if ok and IG.CanAccessTable(library) then return library end
         return nil
     end
 
     if type(LibStub) == "function" then
         local ok, library = pcall(LibStub, name, true)
-        if ok and IG.CanAccess(library) then return library end
+        if ok and IG.CanAccessTable(library) then return library end
     end
     return nil
 end
@@ -203,7 +202,7 @@ function Buttons:RebuildAbilitySource(ability)
         end
         if changed then
             IG:BumpStat("cooldown.boundAbilityMissingSource")
-            IG:MarkCooldownDirty(false)
+            IG:MarkCooldownDirty()
         end
         return false
     end
@@ -230,7 +229,7 @@ function Buttons:RebuildAbilitySource(ability)
             record.hardRestrictedCooldown = false
             record.readinessPending = true
         end
-        IG:MarkCooldownDirty(false)
+        IG:MarkCooldownDirty()
         return true
     end
     return false
@@ -471,7 +470,7 @@ function Buttons:ReconcileRecord(record)
             and ability.sourceChanged ~= true
             and ability.needsPoll ~= true
             and not deadlineExpired
-        if not cooldownStateCurrent then IG:MarkCooldownDirty(false) end
+        if not cooldownStateCurrent then IG:MarkCooldownDirty() end
 
         local storedNIComplete = true
         if IG.Glow then
@@ -512,7 +511,12 @@ function Buttons:ReconcileAll()
     local function HasActionSlot(record)
         if not record or record.adapter == "pet" or record.adapter == "cdm"
             or record.adapter == "buttonforge" then return false end
-        if type(record.labSlot) == "number" and record.labSlot > 0 then return true end
+        if record.adapter == "lab" then
+            return record.labIdentityRestricted ~= true
+                and record.labStateType == "action"
+                and type(record.labSlot) == "number"
+                and record.labSlot > 0
+        end
         if type(record.dominosSlot) == "number" and record.dominosSlot > 0 then return true end
         local slot = IG.ActionResolver:GetActionSlot(record.button)
         return type(slot) == "number" and slot > 0
@@ -710,9 +714,11 @@ end
 
 function Buttons:AttachDominosNow(discoverExisting)
     local AceAddon = GetLibrary("AceAddon-3.0")
-    if not AceAddon or type(AceAddon.GetAddon) ~= "function" then return end
+    if not IG.CanAccessTable(AceAddon) then return end
+    local getAddon, methodKnown = IG:ReadMember(AceAddon, "GetAddon")
+    if not methodKnown or type(getAddon) ~= "function" then return end
 
-    local ok, addon = pcall(AceAddon.GetAddon, AceAddon, "Dominos", true)
+    local ok, addon = pcall(getAddon, AceAddon, "Dominos", true)
     if not ok or not IG.CanAccessTable(addon) then return end
 
     local controller, controllerKnown = IG:ReadMember(addon, "ActionButtons")
@@ -941,11 +947,28 @@ end
 
 function Buttons:RefreshPetButtons()
     local petBar = _G.PetActionBar
-    local actionButtons = petBar and petBar.actionButtons
+    local actionButtons
+    if IG.CanAccess(petBar) and petBar ~= nil then
+        local known
+        actionButtons, known = IG:ReadMember(petBar, "actionButtons")
+        if not known or not IG.CanAccessTable(actionButtons) then
+            actionButtons = nil
+        end
+    end
 
     for slot = 1, 10 do
-        local button = actionButtons and actionButtons[slot] or _G["PetActionButton" .. slot]
-        if button then self:ObserveButton(button, "pet", { petSlot = slot }) end
+        local button
+        if actionButtons then
+            local known
+            button, known = IG:ReadMember(actionButtons, slot)
+            if not known then button = nil end
+        end
+        if not IG.CanAccess(button) or button == nil then
+            button = _G["PetActionButton" .. slot]
+        end
+        if IG.CanAccess(button) and button ~= nil then
+            self:ObserveButton(button, "pet", { petSlot = slot })
+        end
     end
 end
 

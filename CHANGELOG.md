@@ -5,7 +5,10 @@
 - Target Retail 12.1.5 / Interface 120105; review current Blizzard source 12.1.5.70688 and verify the unchanged 34-specialization interrupt snapshot.
 - Fix file-scope settings initialization with `LoadSavedVariablesFirst`; preserve typed preferences in schema 4 and add the animation preference.
 - Consolidate policy overrides into their implementation owners. Source selection, readiness commits, conditional action queues, visual creation and provider lifecycle no longer depend on a chain of replacement methods.
+- Route slash enable/disable, Settings and login through the same lifecycle; remove unreachable fallback initialization paths and the unused module registry/helpers.
 - Gate foreign frames/tables before indexing, deduplicate late provider loading, and preserve pending identity guards through successful reconciliation.
+- Use one shared slot index for LAB and conditional actions. Empty or restricted LAB identity cannot resolve through a stale physical action field; gate pet-bar and AceAddon discovery before reading their tables.
+- Coalesce readiness invalidations before visiting active abilities. Stop periodic retries for wholly unknown readiness; retain the fallback for positively known not-ready states without a readable deadline.
 - Reuse target/focus watcher frames across enable cycles; stop repeated ButtonForge invalidations and rejected countdown-text creation attempts.
 - Remove unused GCD hints, obsolete runtime policy files and duplicated architecture documents.
 - Add cyan target / amber focus highlights, optional animation, out-of-combat preview with combat/disable cleanup, and direct `/iglow` settings access.

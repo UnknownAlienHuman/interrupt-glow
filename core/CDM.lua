@@ -6,7 +6,6 @@ local CDM = {
     hooksInstalled = false,
 }
 IG.CDM = CDM
-IG:RegisterModule("CDM", CDM)
 
 local _G = _G
 local EventUtil = _G.EventUtil

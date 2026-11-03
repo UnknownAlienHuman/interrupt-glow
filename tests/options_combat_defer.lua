@@ -18,10 +18,7 @@ InterruptGlow = {
         debug = false,
         debugKeep = 400,
     },
-    modules = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:IsInCombat() return combat end
 function InterruptGlow:BumpStat(key)
     assert(key == "ui.optionsBuilt")

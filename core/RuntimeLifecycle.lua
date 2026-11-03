@@ -7,7 +7,6 @@ local Lifecycle = {
     enablePending = false,
 }
 IG.RuntimeLifecycle = Lifecycle
-IG:RegisterModule("RuntimeLifecycle", Lifecycle)
 
 local type = type
 
@@ -139,7 +138,7 @@ function Lifecycle:Activate()
 
     IG:MarkAllButtonsDirty()
     IG:MarkCastDirty()
-    IG:MarkCooldownDirty(false)
+    IG:MarkCooldownDirty()
     IG:MarkVisualDirty()
     IG:BumpStat("lifecycle.enabled")
     return true

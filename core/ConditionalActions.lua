@@ -24,7 +24,6 @@ local ACTION_ADAPTER = {
 
 local Actions = {}
 IG.ConditionalActions = Actions
-IG:RegisterModule("ConditionalActions", Actions)
 
 local function ReadinessAwake()
     return type(IG.NeedsReadinessRuntime) == "function"
@@ -61,7 +60,11 @@ local function ReadPhysicalSlot(button, record)
     end
 
     if adapter == "lab" then
-        return NormalizeSlot(record.labSlot) or IG.ActionResolver:GetActionSlot(button)
+        -- LAB's cached secure identity is authoritative. Falling through to
+        -- button.action after an accessible empty or restricted UpdateAction
+        -- can preserve the frame's previous slot in the invalidation index.
+        if record.labIdentityRestricted == true then return nil end
+        return NormalizeSlot(record.labSlot)
     end
 
     if adapter == "dominos" then
@@ -97,24 +100,27 @@ local function RefreshButtonSlot(button, record)
     return slot
 end
 
-local function VisitSlot(slot, visitor)
+local function VisitSlot(slot, visitor, adapter)
     if not Buttons.attached or not IG.CanAccess(slot) then return 0 end
     if type(slot) == "string" then slot = tonumber(slot) end
     if type(slot) ~= "number" then return 0 end
 
-    local count = 0
+    local set
     if slot > 0 then
-        local set = buttonsBySlot[slot]
-        if set then
-            for button in pairs(set) do
+        set = buttonsBySlot[slot]
+    elseif slot == 0 then
+        set = slotByButton
+    end
+    if not set then return 0 end
+
+    local count = 0
+    for button in pairs(set) do
+        if IG.CanAccess(button) then
+            local record = IG.ObservedButtons[button]
+            if adapter == nil or (record and record.adapter == adapter) then
                 count = count + 1
                 visitor(button)
             end
-        end
-    elseif slot == 0 then
-        for button in pairs(slotByButton) do
-            count = count + 1
-            visitor(button)
         end
     end
     return count
@@ -157,11 +163,18 @@ local function MarkIdentityPending(button, deferQueue)
     return true
 end
 
-local function InvalidateSlot(slot)
-    local count = VisitSlot(slot, function(button)
-        IG:MarkButtonDirty(button)
-    end)
-    if count > 0 then IG:BumpStat("events.conditionalMacroSlots", count) end
+local function InvalidateButton(button)
+    IG:MarkButtonDirty(button)
+end
+
+local function InvalidateSlot(slot, adapter)
+    local count = VisitSlot(slot, InvalidateButton, adapter)
+    if count > 0 then
+        local stat = adapter == "lab"
+            and "events.labSlotInvalidations"
+            or "events.conditionalMacroSlots"
+        IG:BumpStat(stat, count)
+    end
     return count
 end
 
@@ -224,9 +237,6 @@ end
 -- separate without replacing methods after another module defines them.
 function Actions:Observe(button, record)
     RefreshButtonSlot(button, record)
-    if record and Glow:AllowOverlayAccessRetry(record) and not record.overlay then
-        Glow:QueueShell(record, false)
-    end
 end
 
 function Actions:QueueButton(button)
@@ -244,8 +254,8 @@ function Actions:Reconciled(record)
     ClearPendingIdentity(record)
 end
 
-function Actions:InvalidateSlot(slot)
-    return InvalidateSlot(slot)
+function Actions:InvalidateSlot(slot, adapter)
+    return InvalidateSlot(slot, adapter)
 end
 
 function Actions:OnUsabilityChanged(changes)

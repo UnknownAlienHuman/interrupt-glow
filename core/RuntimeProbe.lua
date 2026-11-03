@@ -18,7 +18,6 @@ local RuntimeProbe = {
     markerLimitReported = false,
 }
 IG.RuntimeProbe = RuntimeProbe
-IG:RegisterModule("RuntimeProbe", RuntimeProbe)
 
 local _G = _G
 local C_Secrets = _G.C_Secrets

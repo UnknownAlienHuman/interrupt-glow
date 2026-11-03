@@ -10,11 +10,8 @@ local spellChargeInfo = secretChargeInfo
 
 InterruptGlow = {
     DB = { optimisticRestrictedCooldown = true },
-    modules = {},
     AbilityStates = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value)
     return value ~= secretChargeInfo
         and value ~= secretCurrentCharges

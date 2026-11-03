@@ -8,7 +8,6 @@ local Options = {
     controls = {},
 }
 IG.Options = Options
-IG:RegisterModule("Options", Options)
 
 -- Register a bare canvas at load. Build its controls only when first opened
 -- outside combat; Settings can be opened while combat restrictions are active.
@@ -27,31 +26,18 @@ local function GetPanelWidth()
 end
 
 local function RuntimeActive()
-    local lifecycle = IG.RuntimeLifecycle
-    if lifecycle and type(lifecycle.IsActive) == "function" then
-        return lifecycle:IsActive()
-    end
-    return DB.enabled == true
+    return IG.RuntimeLifecycle:IsActive()
 end
 
 local function SetMasterEnabled(value)
-    value = value == true
-    local lifecycle = IG.RuntimeLifecycle
-    if lifecycle and type(lifecycle.SetEnabled) == "function" then
-        return lifecycle:SetEnabled(value)
-    end
-
-    DB.enabled = value
-    if value then IG:MarkCooldownDirty(false) end
-    IG:MarkVisualDirty()
-    return true
+    return IG.RuntimeLifecycle:SetEnabled(value)
 end
 
 local function ApplyDefaultsOrFullRefresh()
     if not RuntimeActive() then return end
     IG:MarkAllButtonsDirty()
     IG:MarkCastDirty()
-    IG:MarkCooldownDirty(false)
+    IG:MarkCooldownDirty()
     IG:MarkVisualDirty()
 end
 
@@ -179,7 +165,7 @@ function Options:Build()
             if RuntimeActive() then
                 if value then
                     -- Queue a fresh reading before immediately refreshing the UI.
-                    IG:MarkCooldownDirty(false)
+                    IG:MarkCooldownDirty()
                     if IG.Glow then IG.Glow:EnsureCooldownTexts() end
                 end
                 IG:MarkVisualDirty()
@@ -242,7 +228,7 @@ function Options:Build()
             DB.strictNI = value
             if not RuntimeActive() then return end
             IG:MarkCastDirty()
-            IG:MarkCooldownDirty(false)
+            IG:MarkCooldownDirty()
             IG:MarkVisualDirty()
         end
     )
@@ -253,7 +239,7 @@ function Options:Build()
         function() return DB.optimisticRestrictedCooldown end,
         function(value)
             DB.optimisticRestrictedCooldown = value
-            if RuntimeActive() then IG:MarkCooldownDirty(false) end
+            if RuntimeActive() then IG:MarkCooldownDirty() end
         end
     )
 

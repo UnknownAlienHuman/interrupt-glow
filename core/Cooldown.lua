@@ -10,7 +10,6 @@ local Cooldown = {
     },
 }
 IG.Cooldown = Cooldown
-IG:RegisterModule("Cooldown", Cooldown)
 
 local _G = _G
 local C_ActionBar = _G.C_ActionBar
@@ -229,12 +228,12 @@ local function GetActionReadiness(slot)
                 return ready, nil, false, timingRestricted, timingRestricted, false
             end
             if readinessRestricted then
-                return nil, nil, true, durationTimingRestricted, true, false
+                return nil, nil, true, durationTimingRestricted, false, false
             end
         end
     end
 
-    return nil, nil, true, durationTimingRestricted, true, false
+    return nil, nil, true, durationTimingRestricted, false, false
 end
 
 local function GetSpellReadiness(spellID)
@@ -292,12 +291,12 @@ local function GetSpellReadiness(spellID)
                 return ready, nil, false, timingRestricted, timingRestricted, false
             end
             if readinessRestricted then
-                return nil, nil, true, durationTimingRestricted, true, false
+                return nil, nil, true, durationTimingRestricted, false, false
             end
         end
     end
 
-    return nil, nil, true, durationTimingRestricted, true, false
+    return nil, nil, true, durationTimingRestricted, false, false
 end
 
 local function GetPetReadiness(slot)
@@ -463,7 +462,10 @@ function Cooldown:RefreshAbility(ability)
     if not finalReady and type(remaining) == "number" and remaining > 0 then
         finalDeadline = IG:Now() + remaining
     end
-    local finalNeedsPoll = needsPoll == true and finalDeadline == nil
+    -- Only recheck on the timing worker when the API positively established
+    -- that the source is not ready. Opaque/unknown readiness is event-driven;
+    -- periodically querying it would wait for access/secrecy to change.
+    local finalNeedsPoll = rawReady == false and needsPoll == true and finalDeadline == nil
 
     -- Apply every independent usability gate before the one record commit.
     -- Inaccessible answers are hard restrictions; ordinary false/noMana answers

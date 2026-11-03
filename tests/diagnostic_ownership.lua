@@ -4,10 +4,7 @@ _G = _G or _ENV
 InterruptGlow = {
     DB = { debug = false, debugKeep = 400 },
     Stats = { old = 9 },
-    modules = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 
 function CreateFrame()

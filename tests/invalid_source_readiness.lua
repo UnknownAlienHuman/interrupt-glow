@@ -4,11 +4,8 @@ _G = _G or _ENV
 
 InterruptGlow = {
     DB = { optimisticRestrictedCooldown = true },
-    modules = {},
     AbilityStates = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(_) return true end
 function InterruptGlow:ReadMember(container, key) return container and container[key], container ~= nil end
 function InterruptGlow:AsNumber(value) return type(value) == "number" and value or nil end

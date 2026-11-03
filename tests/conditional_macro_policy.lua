@@ -15,7 +15,6 @@ local opaqueChanges = setmetatable({}, {
 
 InterruptGlow = {
     DB = { enabled = true, cdText = false },
-    modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     PendingButtons = setmetatable({}, { __mode = "k" }),
     AbilityStates = {},
@@ -24,7 +23,6 @@ InterruptGlow = {
     Glow = {},
 }
 local IG = InterruptGlow
-function IG:RegisterModule(name, module) self.modules[name] = module end
 function IG.CanAccess(_) return true end
 function IG.CanAccessTable(value)
     return value ~= opaqueChanges and type(value) == "table"
@@ -103,7 +101,7 @@ assert(record.conditionalIdentityPending == true)
 -- When readiness wakes, the deferred button enters the ordinary reconcile
 -- queue exactly once. The dirty reconciliation owns the pending-state cleanup.
 readinessAwake = true
-assert(IG:MarkCooldownDirty(false) == true)
+assert(IG:MarkCooldownDirty() == true)
 assert(cooldownCalls == 1 and dirtyCalls == 1)
 assert(IG.PendingButtons[button] == true)
 for pendingButton in pairs(IG.PendingButtons) do

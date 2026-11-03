@@ -14,11 +14,8 @@ InterruptGlow = {
         focus = { active = false, hostile = false, niState = "none" },
     },
     Stats = {},
-    modules = {},
     Glow = {},
 }
-
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow.CanAccess(value) return value ~= secretDead end
 function InterruptGlow:BumpStat(key, amount)
     self.Stats[key] = (self.Stats[key] or 0) + (amount or 1)

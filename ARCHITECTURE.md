@@ -6,14 +6,14 @@ Each behavior has one implementation owner. Modules call explicit integration me
 
 | File | Responsibility |
 |---|---|
-| `Core.lua` | Addon namespace, version from TOC, module registry |
+| `Core.lua` | Addon namespace and version from TOC |
 | `core/Worker.lua` | Disabled / RunOnce / RunAlways worker modes |
 | `core/Shared.lua` | Typed preferences, access helpers, diagnostic-counter ownership and dirty flush |
 | `core/Data.lua` | Pinned interrupt snapshot, exact-known extras, runtime families and bounded match caches |
 | `core/Buttons.lua` | Provider orchestration, physical records, canonical binding and source selection |
-| `core/LABAdapter.lua` | LAB callback ownership, exact action hooks and indexed slot events |
+| `core/LABAdapter.lua` | LAB callback ownership and exact action hooks; routes slot events through ConditionalActions |
 | `core/ActionResolver.lua` | Current action/direct-spell classification; no macro-body parsing |
-| `core/ConditionalActions.lua` | Known-button slot index, deferred identity and stale-visual guard |
+| `core/ConditionalActions.lua` | Shared known-button slot index, deferred identity and stale-visual guard |
 | `core/Cooldown.lua` | Duration, charges, Loss of Control, final readiness and one record commit |
 | `core/Usability.lua` | Access-gated usability queries and targeted usability invalidation |
 | `core/CastTracking.lua` | Fixed target/focus watchers, cast sequence and raw interruptibility bridge |
@@ -28,7 +28,7 @@ Each behavior has one implementation owner. Modules call explicit integration me
 
 The TOC opts into `LoadSavedVariablesFirst`. Shared validates the loaded table once before consumers capture `IG.DB`. Schema 4 contains typed preferences plus schema, producer version and declared Interface; runtime state is never persisted. Gameplay discovery waits for `PLAYER_LOGIN`.
 
-The master lifecycle owns attachment. Disabling unregisters runtime events, detaches provider and fixed-unit callbacks, clears pending work, stops preview and visual workers, and hides existing highlights. The two fixed-unit watcher frames are reused across enable cycles. Regen lifecycle and optional restriction telemetry remain available. Enabling in combat records one pending activation; out-of-combat activation discovers current state once. Optional-provider continuations are deduplicated and recheck current attachment.
+The master lifecycle owns attachment through login, slash commands and Settings. Disabling unregisters runtime events, detaches provider and fixed-unit callbacks, clears pending work, stops preview and visual workers, and hides existing highlights. The two fixed-unit watcher frames are reused across enable cycles. Regen lifecycle and optional restriction telemetry remain available. Enabling in combat records one pending activation; out-of-combat activation discovers current state once. Optional-provider continuations are deduplicated and recheck current attachment.
 
 ## Update transaction
 
@@ -41,6 +41,8 @@ The master lifecycle owns attachment. Disabling unregisters runtime events, deta
 
 A full rebuild seeds runtime interrupt families from action slots before refreshing active CDM pools and secondary spell copies. The current specialization/configuration owns runtime proof; a registry rebuild clears it before reseeding. Negative spell matches are capped at 128 and invalidated when proof changes.
 
+LAB's gated identity snapshot is authoritative for both binding and the shared slot index. Empty, restricted and non-action states cannot fall back to a frame's old `action` field. Its slot events visit only LAB records in the shared index. Equivalent readiness invalidations coalesce before walking active abilities or deferred identities.
+
 ## Secret and foreign-object boundaries
 
 Gate values before comparison, formatting, iteration or map keys. Gate foreign tables with `canaccesstable` when available and check each consumed field. Current object access is not a permission cached across contexts.
@@ -52,6 +54,8 @@ Addon visuals are created outside combat and reused. Prewarm counts every inspec
 ## Readiness and cast lifecycle
 
 The duration getters receive `ignoreGCD=true`. `isOnGCD` and successful-cast events never prove readiness. Inaccessible usability, charges or Loss of Control are hard fail-closed gates, including when cooldown compatibility is enabled.
+
+Unknown cooldown readiness waits for native invalidation events; it does not keep a periodic access retry alive. A positively known not-ready state without an accessible deadline retains the limited timing fallback while a relevant cast is active.
 
 Synchronous channel/empower stop is authoritative over subsequent channel snapshots. Only a real start or unit identity reset clears suppression. Accessible NeverSecret `castBarID` rejects delayed stops for a different cast. The upstream phantom-channel workaround remains active until its named-client retirement tests pass.
 

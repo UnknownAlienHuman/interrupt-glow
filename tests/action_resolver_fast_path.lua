@@ -15,7 +15,6 @@ local currentSpellID = 1766
 InterruptGlowDB = { enabled = true, cdText = false }
 InterruptGlow = {
     DB = InterruptGlowDB,
-    modules = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     PendingButtons = setmetatable({}, { __mode = "k" }),
     InterruptRecords = setmetatable({}, { __mode = "k" }),
@@ -24,7 +23,6 @@ InterruptGlow = {
     Data = {},
 }
 local IG = InterruptGlow
-function IG:RegisterModule(name, module) self.modules[name] = module end
 function IG.CanAccess(_) return true end
 function IG:ReadMember(object, key)
     memberReads = memberReads + 1

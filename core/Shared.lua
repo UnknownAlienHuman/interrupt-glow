@@ -102,13 +102,6 @@ function IG:AsNumber(value)
     return nil
 end
 
-function IG:AsBoolean(value)
-    if not CanAccess(value) then return nil end
-    if value == true then return true end
-    if value == false then return false end
-    return nil
-end
-
 function IG:Now()
     if type(GetTime) ~= "function" then return 0 end
     local value = GetTime()
@@ -292,11 +285,12 @@ function IG:MarkCastDirty()
     self:RequestFlush()
 end
 
-function IG:MarkCooldownDirty(fromSpellCooldownEvent)
+function IG:MarkCooldownDirty()
     if not self:NeedsReadinessRuntime() then
         self._dirty.cooldown = false
         return false
     end
+    if self._dirty.cooldown then return true end
 
     if self.ConditionalActions then self.ConditionalActions:FlushDeferred() end
     self._dirty.cooldown = true

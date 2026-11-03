@@ -9,22 +9,10 @@ end
 _G.InterruptGlow = addon
 
 addon.name = addonName or "InterruptGlow"
-addon.modules = addon.modules or {}
 
 local C_AddOns = _G.C_AddOns
 if C_AddOns and C_AddOns.GetAddOnMetadata then
     addon.version = C_AddOns.GetAddOnMetadata(addon.name, "Version") or "unknown"
 else
     addon.version = "unknown"
-end
-
-function addon:RegisterModule(name, module)
-    if type(name) ~= "string" or type(module) ~= "table" then
-        return
-    end
-    self.modules[name] = module
-end
-
-function addon:GetModule(name)
-    return self.modules[name]
 end

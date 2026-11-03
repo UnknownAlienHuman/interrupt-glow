@@ -6,13 +6,11 @@ local cooldownDirtyCalls = 0
 local stats = {}
 InterruptGlow = {
     DB = { enabled = true },
-    modules = {},
     Stats = stats,
     AbilityStates = {},
     ObservedButtons = setmetatable({}, { __mode = "k" }),
     PendingButtons = setmetatable({}, { __mode = "k" }),
 }
-function InterruptGlow:RegisterModule(name, module) self.modules[name] = module end
 function InterruptGlow:BumpStat(key, amount) stats[key] = (stats[key] or 0) + (amount or 1) end
 function InterruptGlow:MarkCooldownDirty() cooldownDirtyCalls = cooldownDirtyCalls + 1 end
 
