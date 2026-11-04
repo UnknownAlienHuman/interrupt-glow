@@ -10,6 +10,13 @@ local type = type
 local pcall = pcall
 local SPELL_METHODS = { "GetSpellId", "GetSpellID" }
 
+local function ReadObjectMember(object, key)
+    if type(IG.ReadObjectMember) == "function" then
+        return IG:ReadObjectMember(object, key)
+    end
+    return IG:ReadMember(object, key)
+end
+
 local function PositiveSlot(value)
     local slot = IG:AsNumber(value)
     if type(slot) == "number" and slot > 0 and slot % 1 == 0 then return slot end
@@ -17,15 +24,15 @@ local function PositiveSlot(value)
 end
 
 function Resolver:GetActionSlot(button)
-    local stateType, stateTypeKnown = IG:ReadMember(button, "_state_type")
+    local stateType, stateTypeKnown = ReadObjectMember(button, "_state_type")
     if stateTypeKnown and stateType == "action" then
-        local stateAction, stateActionKnown = IG:ReadMember(button, "_state_action")
+        local stateAction, stateActionKnown = ReadObjectMember(button, "_state_action")
         if stateActionKnown then
             local slot = PositiveSlot(stateAction)
             if slot then return slot end
         end
     end
-    local action, actionKnown = IG:ReadMember(button, "action")
+    local action, actionKnown = ReadObjectMember(button, "action")
     if actionKnown then return PositiveSlot(action) end
     return nil
 end
@@ -83,16 +90,16 @@ end
 local function ReadDirectSpellID(button)
     for index = 1, #SPELL_METHODS do
         local methodName = SPELL_METHODS[index]
-        local method, readable = IG:ReadMember(button, methodName)
+        local method, readable = ReadObjectMember(button, methodName)
         if readable and type(method) == "function" then
             local ok, value = pcall(method, button)
             if ok and IG.CanAccess(value) and type(value) == "number" then return value end
             return nil
         end
     end
-    local stateType, typeKnown = IG:ReadMember(button, "_state_type")
+    local stateType, typeKnown = ReadObjectMember(button, "_state_type")
     if typeKnown and stateType == "spell" then
-        local value, known = IG:ReadMember(button, "_state_action")
+        local value, known = ReadObjectMember(button, "_state_action")
         if known then return PositiveSlot(value) end
     end
     return nil
@@ -130,6 +137,11 @@ function Resolver:ResolveRecord(record)
 
         if stateType ~= "action" then return false end
         slot = PositiveSlot(record.labSlot)
+        if not slot then return false end
+    elseif record.adapter == "dominos" then
+        -- The Dominos controller owns the current secure action mapping. Do not
+        -- create a second identity path from the button's generic action field.
+        slot = PositiveSlot(record.dominosSlot)
         if not slot then return false end
     else
         slot = self:GetActionSlot(record.button)
