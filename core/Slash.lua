@@ -98,11 +98,18 @@ end
 
 local function SetTestMode()
     if not IG.Glow then return end
-    IG.Glow:SetTestMode(not IG.testMode)
+    local before = IG.testMode == true
+    local changed = IG.Glow:SetTestMode(not before)
+    if changed == false then return end
     IG:Print("Test mode " .. (IG.testMode and "enabled" or "disabled") .. ".")
 end
 
 local function Rescan()
+    local lifecycle = IG.RuntimeLifecycle
+    if not lifecycle or not lifecycle:IsActive() then
+        IG:Print("Enable Interrupt Glow before discovering buttons.")
+        return
+    end
     if IG:IsInCombat() then
         IG:Print("Manual discovery is unavailable during combat.")
         return
