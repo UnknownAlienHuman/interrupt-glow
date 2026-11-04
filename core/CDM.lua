@@ -14,16 +14,18 @@ local type = type
 local pcall = pcall
 local pairs = pairs
 
-local function SafeMethod(object, methodName)
-    if not IG.CanAccess(object) or object == nil then return nil end
-    local method, known = IG:ReadMember(object, methodName)
-    if not known or type(method) ~= "function" then return nil end
-    return method
-end
-
-local function ReadMember(object, memberName)
+local function ReadObjectMember(object, memberName)
+    if type(IG.ReadObjectMember) == "function" then
+        return IG:ReadObjectMember(object, memberName)
+    end
     if not IG.CanAccess(object) or object == nil then return nil, false end
     return IG:ReadMember(object, memberName)
+end
+
+local function SafeMethod(object, methodName)
+    local method, known = ReadObjectMember(object, methodName)
+    if not known or type(method) ~= "function" then return nil end
+    return method
 end
 
 local function SafeMethodCall(object, methodName, ...)
@@ -37,15 +39,13 @@ end
 local function GetInterruptIdentity(itemFrame)
     if not IG.CanAccess(itemFrame) or itemFrame == nil or not IG.Data then return nil end
     local ok, spellID = SafeMethodCall(itemFrame, "GetBaseSpellID")
-    if not ok or not IG.CanAccess(spellID) or type(spellID) ~= "number" then
-        return nil
-    end
+    if not ok or type(spellID) ~= "number" then return nil end
     return IG.Data:GetCanonicalSpellID(spellID, "spell")
 end
 
 local function QueueIdentityChange(itemFrame, canonicalSpellID)
     if not IG.CanAccess(itemFrame) or itemFrame == nil then return false end
-    local record = itemFrame and IG.ObservedButtons[itemFrame]
+    local record = IG.ObservedButtons[itemFrame]
     if not record or record.adapter ~= "cdm" then return false end
     if record.cdmCanonicalSpellID == canonicalSpellID then return false end
 
@@ -61,15 +61,10 @@ function CDM:ObserveItem(itemFrame)
         return
     end
 
-    -- Pool hooks may run inside Blizzard layout/reset stacks. They update only
-    -- ordinary identity and queue one record; visual/canonical reconciliation is
-    -- performed by the addon-owned next-frame dirty worker.
     local canonicalSpellID = GetInterruptIdentity(itemFrame)
     local record = IG.ObservedButtons[itemFrame]
     if not canonicalSpellID then
-        if QueueIdentityChange(itemFrame, nil) then
-            IG:BumpStat("cdm.identityCleared")
-        end
+        if QueueIdentityChange(itemFrame, nil) then IG:BumpStat("cdm.identityCleared") end
         return
     end
 
@@ -90,9 +85,7 @@ end
 
 function CDM:ResetItem(itemFrame)
     if not IG.CanAccess(itemFrame) or itemFrame == nil then return end
-    if QueueIdentityChange(itemFrame, nil) then
-        IG:BumpStat("cdm.itemsReset")
-    end
+    if QueueIdentityChange(itemFrame, nil) then IG:BumpStat("cdm.itemsReset") end
 end
 
 local function OnAcquireItemFrame(_viewer, itemFrame)
@@ -108,22 +101,19 @@ local function OnCooldownDataReset(itemFrame)
 end
 
 local function ObserveViewer(viewer)
-    if not IG.CanAccess(viewer) or viewer == nil then return end
-    local pool, poolKnown = ReadMember(viewer, "itemFramePool")
+    local pool, poolKnown = ReadObjectMember(viewer, "itemFramePool")
     if not poolKnown or not IG.CanAccess(pool) or pool == nil then return end
     local enumerateActive = SafeMethod(pool, "EnumerateActive")
     if not enumerateActive then return end
 
     local ok, iterator, state, initial = pcall(enumerateActive, pool)
-    if not ok or not IG.CanAccess(iterator) or not IG.CanAccess(state) or not IG.CanAccess(initial)
-        or type(iterator) ~= "function"
+    if not ok or not IG.CanAccess(iterator) or not IG.CanAccess(state)
+        or not IG.CanAccess(initial) or type(iterator) ~= "function"
     then
         return
     end
 
-    for itemFrame in iterator, state, initial do
-        CDM:ObserveItem(itemFrame)
-    end
+    for itemFrame in iterator, state, initial do CDM:ObserveItem(itemFrame) end
 end
 
 function CDM:ObserveExistingItems()
