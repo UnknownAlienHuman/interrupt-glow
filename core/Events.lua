@@ -144,11 +144,11 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if IG.RuntimeProbe then
             IG.RuntimeProbe:OnRestrictionStateChanged(restrictionType, state)
         end
-        if IG.Glow then IG.Glow:RetryDeferredVisuals() end
         if RuntimeActive() then
             IG:BumpStat("events.restrictionChanged")
-            IG:MarkCastDirty()
-            IG:MarkCooldownDirty()
+            -- Keep the event callback queue-only. Provider re-resolution, visual
+            -- access recovery, cast snapshots and readiness execute in Flush.
+            IG:MarkRestrictionDirty()
         end
         return
     end
