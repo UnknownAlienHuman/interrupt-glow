@@ -68,7 +68,7 @@ local function ReadPhysicalSlot(button, record)
     end
 
     if adapter == "dominos" then
-        return NormalizeSlot(record.dominosSlot) or IG.ActionResolver:GetActionSlot(button)
+        return NormalizeSlot(record.dominosSlot)
     end
 
     if adapter == "pet" or adapter == "cdm" or adapter == "buttonforge" then
@@ -241,7 +241,6 @@ end
 
 function Actions:QueueButton(button)
     local record = IG.ObservedButtons[button]
-    if record then RefreshButtonSlot(button, record) end
     if record and ACTION_ADAPTER[record.adapter] then
         local awake = ReadinessAwake()
         MarkIdentityPending(button, not awake)
@@ -251,6 +250,7 @@ function Actions:QueueButton(button)
 end
 
 function Actions:Reconciled(record)
+    if record and record.button then RefreshButtonSlot(record.button, record) end
     ClearPendingIdentity(record)
 end
 
