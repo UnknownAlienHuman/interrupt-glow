@@ -21,6 +21,7 @@ local function ClearDirtyState()
 
     local dirty = IG._dirty
     if dirty then
+        dirty.restriction = false
         dirty.spec = false
         dirty.allButtons = false
         dirty.cast = false
