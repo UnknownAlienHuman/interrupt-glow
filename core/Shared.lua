@@ -94,6 +94,61 @@ function IG:ReadMember(container, key)
     return value, true
 end
 
+local OBJECT_ACCESS_ALLOWED = 1
+local OBJECT_ACCESS_DEFERRED = 2
+local OBJECT_ACCESS_FORBIDDEN = 3
+IG.ObjectAccess = {
+    Allowed = OBJECT_ACCESS_ALLOWED,
+    Deferred = OBJECT_ACCESS_DEFERRED,
+    Forbidden = OBJECT_ACCESS_FORBIDDEN,
+}
+
+local function ReadObjectBoolean(object, methodName)
+    local method, known = IG:ReadMember(object, methodName)
+    if not known then return nil, false, false end
+    if method == nil then return nil, true, false end
+    if type(method) ~= "function" then return nil, false, true end
+
+    local ok, value = pcall(method, object)
+    if not ok or not CanAccess(value) or type(value) ~= "boolean" then
+        return nil, false, false
+    end
+    return value, true, false
+end
+
+function IG:InspectObjectAccess(object)
+    if not CanAccess(object) or object == nil then return OBJECT_ACCESS_DEFERRED end
+
+    -- Explicitly forbidden is permanent and must be classified before a
+    -- context predicate that commonly also denies the same object.
+    local forbidden, forbiddenKnown, forbiddenMalformed =
+        ReadObjectBoolean(object, "IsForbidden")
+    if forbiddenMalformed then return OBJECT_ACCESS_FORBIDDEN end
+    if not forbiddenKnown then return OBJECT_ACCESS_DEFERRED end
+    if forbidden == true then return OBJECT_ACCESS_FORBIDDEN end
+
+    local constrained, constraintsKnown, constraintsMalformed =
+        ReadObjectBoolean(object, "HasAccessConstraints")
+    if constraintsMalformed then return OBJECT_ACCESS_FORBIDDEN end
+    if not constraintsKnown then return OBJECT_ACCESS_DEFERRED end
+
+    if constrained == true then
+        local accessible, contextKnown, contextMalformed =
+            ReadObjectBoolean(object, "CanBeAccessedInContext")
+        if contextMalformed then return OBJECT_ACCESS_FORBIDDEN end
+        if not contextKnown or accessible ~= true then return OBJECT_ACCESS_DEFERRED end
+    end
+
+    return OBJECT_ACCESS_ALLOWED
+end
+
+function IG:ReadObjectMember(object, key)
+    local access = self:InspectObjectAccess(object)
+    if access ~= OBJECT_ACCESS_ALLOWED then return nil, false, access end
+    local value, known = self:ReadMember(object, key)
+    return value, known, access
+end
+
 function IG:AsNumber(value)
     if not CanAccess(value) then return nil end
     local valueType = type(value)
@@ -218,6 +273,7 @@ local function MarkActiveAbilitiesReadinessPending()
 end
 
 IG._dirty = IG._dirty or {
+    restriction = false,
     spec = false,
     allButtons = false,
     cast = false,
@@ -270,6 +326,11 @@ function IG:MarkButtonDirty(button)
     self:QueueButtonForReconcile(button)
 end
 
+function IG:MarkRestrictionDirty()
+    self._dirty.restriction = true
+    self:RequestFlush()
+end
+
 function IG:MarkSpecDirty()
     self._dirty.spec = true
     self:RequestFlush()
@@ -306,7 +367,8 @@ end
 
 function IG:HasDirtyWork()
     local dirty = self._dirty
-    return dirty.spec
+    return dirty.restriction
+        or dirty.spec
         or dirty.allButtons
         or dirty.cast
         or dirty.cooldown
@@ -321,6 +383,21 @@ function IG:Flush()
     local CastTracking = self.CastTracking
     local Cooldown = self.Cooldown
     local Glow = self.Glow
+
+    if dirty.restriction then
+        dirty.restriction = false
+        if Glow and type(Glow.RetryDeferredVisuals) == "function" then
+            Glow:RetryDeferredVisuals()
+        end
+        if Buttons and type(Buttons.RevalidateRestrictedState) == "function" then
+            Buttons:RevalidateRestrictedState()
+        end
+        dirty.allButtons = true
+        dirty.cast = true
+        dirty.cooldown = self:NeedsReadinessRuntime()
+        dirty.visual = true
+        if dirty.cooldown then MarkActiveAbilitiesReadinessPending() end
+    end
 
     if dirty.spec then
         dirty.spec = false
