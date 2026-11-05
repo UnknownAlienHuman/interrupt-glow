@@ -22,7 +22,12 @@ local next = next
 local math_abs = math.abs
 
 local function SafeMethodCall(object, methodName, ...)
-    local method, readable = IG:ReadMember(object, methodName)
+    local method, readable
+    if type(IG.ReadObjectMember) == "function" then
+        method, readable = IG:ReadObjectMember(object, methodName)
+    else
+        method, readable = IG:ReadMember(object, methodName)
+    end
     if not readable or type(method) ~= "function" then return false, nil end
     local ok, value = pcall(method, object, ...)
     if not ok or not IG.CanAccess(value) then
@@ -40,17 +45,13 @@ local function ReadDuration(duration)
     end
 
     local zeroKnown, isZero = SafeMethodCall(duration, "IsZero")
-    if zeroKnown and type(isZero) == "boolean" then
-        if isZero then
-            return true, 0, false, true
-        end
-
-        local remainingKnown, remaining = SafeMethodCall(duration, "GetRemainingDuration")
-        if remainingKnown and type(remaining) == "number" then
-            if remaining <= 0 then return true, 0, false, true end
-            return false, remaining, false, true
-        end
-        return false, nil, true, true
+    if not zeroKnown or type(isZero) ~= "boolean" then
+        -- A denied/erroring semantic probe does not authorize trying another
+        -- method on the same duration object. Wait for a native invalidation.
+        return nil, nil, true, true
+    end
+    if isZero then
+        return true, 0, false, true
     end
 
     local remainingKnown, remaining = SafeMethodCall(duration, "GetRemainingDuration")
@@ -58,7 +59,7 @@ local function ReadDuration(duration)
         if remaining <= 0 then return true, 0, false, true end
         return false, remaining, false, true
     end
-    return nil, nil, true, true
+    return false, nil, true, true
 end
 
 local function ReadCooldownStatus(info)
@@ -152,12 +153,16 @@ local function ReadLossOfControlState(info)
 end
 
 local function GetActionLossOfControlState(slot)
-    if C_ActionBar and type(C_ActionBar.GetActionLossOfControlCooldownInfo) == "function" then
-        local ok, info = pcall(C_ActionBar.GetActionLossOfControlCooldownInfo, slot)
+    local getter = C_ActionBar and C_ActionBar.GetActionLossOfControlCooldownInfo
+    if type(getter) == "function" then
+        local ok, info = pcall(getter, slot)
         if ok then return ReadLossOfControlState(info) end
         return "restricted"
     end
-    return "clear"
+
+    -- The selected Retail contract exposes this C_ActionBar API. Missing it is
+    -- API drift or an incomplete surface, never evidence that LoC is clear.
+    return "restricted"
 end
 
 local function GetSpellLossOfControlState(spellID)
